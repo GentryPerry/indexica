@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { bbox, bounds, ends, fitText, setMeasurer, wrap } from '../src/geometry';
+import { bbox, bounds, ends, fitText, handleAngle, resizeBox, rotatedBox, setMeasurer, wrap } from '../src/geometry';
 import type { El } from '../src/types';
 
 const el = (p: Partial<El>): El => ({ id: 'x', type: 'rect', z: 1, x: 0, y: 0, w: 100, h: 100, ...p });
@@ -58,5 +58,59 @@ describe('fitText', () => {
     const box = el({ h: 200, text: 'hi' });
     fitText(box);
     expect(box.h).toBe(200);
+  });
+});
+
+describe('rotation', () => {
+  it('a 90 degree turn swaps the outer width and height', () => {
+    const b = rotatedBox({ x: 0, y: 0, w: 100, h: 40 }, 90);
+    expect(b.w).toBeCloseTo(40); expect(b.h).toBeCloseTo(100);
+    expect(b.x).toBeCloseTo(30); expect(b.y).toBeCloseTo(-30);
+  });
+  it('bbox of a rotated element contains its corners', () => {
+    const b = bbox(el({ w: 100, h: 100, rot: 45 }), lookup([]));
+    expect(b.w).toBeCloseTo(Math.SQRT2 * 100);
+  });
+  it('connectors clip to the rotated shape', () => {
+    const tall = el({ id: 'a', x: 0, y: 0, w: 40, h: 200, rot: 90 }), far = el({ id: 'b', x: 500, y: 50 });
+    const c = el({ id: 'c', type: 'conn', a: 'a', b: 'b' });
+    const [p] = ends(c, lookup([tall, far]));
+    // Turned on its side, the shape reaches 100 (+5 gap) to the right of its center at x = 20.
+    expect(p.x).toBeCloseTo(125); expect(p.y).toBeCloseTo(100);
+  });
+  it('handleAngle points straight up at 0 and snaps near 45s', () => {
+    expect(handleAngle(0, 0, 0, -50, false)).toBe(0);
+    expect(handleAngle(0, 0, 50, 1, false)).toBe(90);
+    expect(handleAngle(0, 0, 0, 50, false)).toBe(180);
+    expect(handleAngle(0, 0, -50, 0, false)).toBe(-90);
+  });
+  it('handleAngle steps by 15 when asked', () => {
+    expect(handleAngle(0, 0, 20, -50, true)).toBe(15);
+  });
+});
+
+describe('resizeBox', () => {
+  const box = { x: 0, y: 0, w: 100, h: 60 };
+  it('dragging the east handle only changes width', () => {
+    expect(resizeBox(box, 'e', 25, 40, 30)).toEqual({ x: 0, y: 0, w: 125, h: 60 });
+  });
+  it('dragging the north-west corner keeps the opposite corner fixed', () => {
+    const r = resizeBox(box, 'nw', 10, 20, 30);
+    expect(r).toEqual({ x: 10, y: 20, w: 90, h: 40 });
+  });
+  it('never goes below the minimum size', () => {
+    expect(resizeBox(box, 'w', 500, 0, 30).w).toBe(30);
+  });
+  it('keeps the opposite corner fixed on a rotated box', () => {
+    const o = { ...box, rot: 30 }, rad = 30 * Math.PI / 180;
+    // World position of a local corner (lx, ly measured from the box center).
+    const corner = (b: typeof box, lx: number, ly: number) => ({
+      x: b.x + b.w / 2 + lx * Math.cos(rad) - ly * Math.sin(rad),
+      y: b.y + b.h / 2 + lx * Math.sin(rad) + ly * Math.cos(rad),
+    });
+    const before = corner(o, -o.w / 2, -o.h / 2);
+    const r = resizeBox(o, 'se', 37, 11, 30);
+    const after = corner(r, -r.w / 2, -r.h / 2);
+    expect(after.x).toBeCloseTo(before.x); expect(after.y).toBeCloseTo(before.y);
   });
 });

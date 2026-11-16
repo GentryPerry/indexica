@@ -10,6 +10,8 @@ export interface El {
   y: number;
   w: number;
   h: number;
+  /** Rotation in degrees around the element's center. */
+  rot?: number;
   text?: string;
   fill?: string;
   stroke?: string;
