@@ -9,6 +9,8 @@ import { kick, step, still, atRest } from './cable';
 import { renderEl } from './render';
 import { STICKERS, TAPES } from './stickers';
 import { monthGrid, shiftMonth, monthPrefix } from './calendar';
+import { barPosition, miniFit, miniToWorld, union } from './layout';
+import { groupTasks } from './tasks';
 import * as G from './geometry';
 import { Store } from './store';
 import { History } from './history';
@@ -133,6 +135,7 @@ let mode = null, spaceDown = false, lastDown = { t: 0, x: 0, y: 0 }, saveT = 0;
 let tasksOpen = true, taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
 let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight';
+let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = null;
 let cv, vp, ov, C = {};
 const E = id => board.els[id];
 const all = () => Object.values(board.els);
@@ -185,6 +188,28 @@ function draw() {
   const rc = rctx(false); vp.replaceChildren(...sorted().map(e => renderEl(e, rc)));
   drawOverlay();
   const zv = $('#zoomv'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
+  drawMini(); placeCtx();
+}
+function centerOn(e) { const r = cv.getBoundingClientRect(), b = bbox(e); cam.x = r.width / 2 - (b.x + b.w / 2) * cam.z; cam.y = r.height / 2 - (b.y + b.h / 2) * cam.z; }
+function drawMini() {
+  const el = $('#mini'); if (!el || !mini) return; el.hidden = !miniOn || kanban; if (el.hidden) return;
+  const r = cv.getBoundingClientRect(), view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z }, content = bounds(all());
+  // While the map is being dragged the scale is frozen, so the board does not slide under the pointer.
+  if (!miniDrag || !miniState) miniState = miniFit(content ? union(content, view) : view, 180, 120);
+  const m = miniState, box = b => ({ x: b.x * m.k + m.ox, y: b.y * m.k + m.oy, width: Math.max(b.w * m.k, 1.5), height: Math.max(b.h * m.k, 1.5) });
+  mini.replaceChildren(
+    ...sorted().filter(e => e.type !== 'conn' && e.type !== 'pen').map(e => s('rect', { ...box(bbox(e)), rx: 1,
+      fill: e.type === 'frame' ? 'none' : e.type === 'card' ? STATUS[e.status][1] : e.fill || C.muted, 'fill-opacity': e.type === 'text' ? 0.5 : 1, stroke: e.type === 'frame' ? C.frameLine : 'rgba(0,0,0,.15)', 'stroke-width': 0.75 })),
+    s('rect', { ...box(view), rx: 2, fill: C.accent, 'fill-opacity': 0.1, stroke: C.accent, 'stroke-width': 1.5 }));
+}
+function miniGo(ev) {
+  const r = mini.getBoundingClientRect(), w = miniToWorld(miniState, ev.clientX - r.left, ev.clientY - r.top), st = cv.getBoundingClientRect();
+  cam.x = st.width / 2 - w.x * cam.z; cam.y = st.height / 2 - w.y * cam.z; draw(); placeEditor();
+}
+function placeCtx() {
+  const el = $('#ctx'); if (!el || el.hidden) return; const b = bounds(selEls()); if (!b) return;
+  const r = cv.getBoundingClientRect(), pos = barPosition({ x: cam.x + b.x * cam.z, y: cam.y + b.y * cam.z, w: b.w * cam.z, h: b.h * cam.z }, { w: el.offsetWidth, h: el.offsetHeight }, { w: r.width, h: r.height });
+  el.style.left = pos.left + 'px'; el.style.top = pos.top + 'px';
 }
 function rotateHandle(mx, top, col, k) {
   return [s('line', { x1: mx, y1: top, x2: mx, y2: top - 23 * k, stroke: col, 'stroke-width': k, 'pointer-events': 'none' }),
@@ -233,7 +258,7 @@ function guideMarks(guides) {
   return s('g', { 'pointer-events': 'none' }, guides.map(g => s('line', { ...(g.axis === 'x' ? { x1: g.pos, x2: g.pos, y1: g.from, y2: g.to } : { y1: g.pos, y2: g.pos, x1: g.from, x2: g.to }), stroke: '#e0409a', 'stroke-width': k })));
 }
 function refresh() {
-  draw(); renderCtx(); renderTasks(); renderFly();
+  draw(); renderCtx(); renderTasks(); renderFly(); renderKanban(); renderFrames();
   const u = $('#undo'), r = $('#redo'); if (u) { u.disabled = !hist.undo.length; r.disabled = !hist.redo.length; }
   document.querySelectorAll('.tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === tool));
 }
@@ -244,19 +269,40 @@ function removeSel() {
   for (const e of all()) if (ids.has(e.id) || (e.type === 'conn' && (ids.has(e.a) || ids.has(e.b)))) delete board.els[e.id];
   sel.clear(); commit();
 }
-function pasteEls(src, dx) {
+function pasteEls(src, dx, dy = dx, quiet = false) {
   const map = {}, gmap = {}; let z = topZ(); sel.clear();
   for (const o of src) map[o.id] = uid('e');
   for (const o of src) {
     const e = clone(o); e.id = map[o.id]; e.z = ++z; delete e.locked;
     if (e.g) e.g = gmap[e.g] || (gmap[e.g] = uid('g'));
-    if (e.type === 'conn') { e.a = map[e.a] || null; e.b = map[e.b] || null; e.ax += dx; e.ay += dx; e.bx += dx; e.by += dx; } else { e.x += dx; e.y += dx; }
+    if (e.type === 'conn') { e.a = map[e.a] || null; e.b = map[e.b] || null; e.ax += dx; e.ay += dy; e.bx += dx; e.by += dy; } else { e.x += dx; e.y += dy; }
     board.els[e.id] = e; sel.add(e.id);
   }
-  commit();
+  if (!quiet) commit();
 }
-function copySel() {
-  clip = selEls().map(e => { const c = clone(e); if (c.type === 'conn') { const [p, q] = ends(e); c.ax = p.x; c.ay = p.y; c.bx = q.x; c.by = q.y; } return c; });
+// Copies of the selection that stand on their own: connector ends are stored as points in case their piece is not copied.
+function snapSel() {
+  return selEls().map(e => { const c = clone(e); if (c.type === 'conn') { const [p, q] = ends(e); c.ax = p.x; c.ay = p.y; c.bx = q.x; c.by = q.y; } return c; });
+}
+function copySel() { clip = snapSel(); }
+function pasteAt(p) {
+  const b = G.bounds(clip, id => clip.find(e => e.id === id)); if (!b) return;
+  pasteEls(clip, Math.round(p.x - b.x - b.w / 2), Math.round(p.y - b.y - b.h / 2));
+}
+function nextSticky(id) {
+  const o = E(id); if (!o || o.type !== 'sticky') return;
+  const e = { ...clone(o), id: uid('e'), z: topZ() + 1, x: o.x + o.w + 20, text: '' }; delete e.g; delete e.locked;
+  // Keep stepping right until the new note is not sitting on top of another piece.
+  const hits = () => all().some(x => x.type !== 'frame' && x.type !== 'conn' && x.x < e.x + e.w && x.x + x.w > e.x && x.y < e.y + e.h && x.y + x.h > e.y);
+  for (let i = 0; i < 40 && hits(); i++) e.x += 20;
+  board.els[e.id] = e; sel = new Set([e.id]); commit(); startEdit(e.id);
+}
+function addTask(status) {
+  const cards = all().filter(e => e.type === 'card'), r = cv.getBoundingClientRect();
+  const x = cards.length ? Math.min(...cards.map(c => c.x)) : Math.round((r.width / 2 - cam.x) / cam.z - 120), y = cards.length ? Math.max(...cards.map(c => c.y + c.h)) + 20 : Math.round((r.height / 2 - cam.y) / cam.z - 50);
+  const e = { id: uid('e'), type: 'card', z: topZ() + 1, x, y, w: 240, h: 100, text: 'New task', status, due: '', notes: '' };
+  board.els[e.id] = e; sel = new Set([e.id]); tasksOpen = true; edFor = null; commit();
+  const title = $('#task-title'); if (title) { title.focus(); title.select(); }
 }
 function align(kind) {
   const list = selEls().filter(e => !e.locked && e.type !== 'conn'), b = bounds(list); if (!b || list.length < 2) return;
@@ -335,7 +381,7 @@ function endEdit() {
 function pt(ev) { const r = cv.getBoundingClientRect(), sx = ev.clientX - r.left, sy = ev.clientY - r.top; return { sx, sy, x: (sx - cam.x) / cam.z, y: (sy - cam.y) / cam.z }; }
 function idAt(target) { const g = target && target.closest && target.closest('[data-id]'); return g ? g.getAttribute('data-id') : null; }
 function onDown(ev) {
-  if (ev.button === 2) return;
+  closeMenu(); if (ev.button === 2) return;
   const act = document.activeElement; if (act && act !== document.body && act.blur) act.blur();
   if (editing) endEdit();
   const p = pt(ev), id = idAt(ev.target), now = Date.now();
@@ -356,8 +402,10 @@ function onDown(ev) {
       const had = sel.has(id);
       if (ev.shiftKey) { group(id).forEach(i => had ? sel.delete(i) : sel.add(i)); refresh(); return; }
       if (!had) sel = new Set(group(id));
+      // Alt-drag pulls a copy off the selection and leaves the original in place.
+      if (ev.altKey) pasteEls(snapSel(), 0, 0, true);
       const move = moveSet();
-      mode = { k: 'drag', p, id, had, moved: false, start: [...move].map(i => clone(E(i))), box0: bounds([...move].map(E)), others: otherBoxes(move) }; refresh(); return;
+      mode = { k: 'drag', p, id, had, dup: ev.altKey, moved: false, start: [...move].map(i => clone(E(i))), box0: bounds([...move].map(E)), others: otherBoxes(move) }; refresh(); return;
     }
     if (!ev.shiftKey) sel.clear(); mode = { k: 'marquee', p, keep: new Set(sel) }; refresh(); return;
   }
@@ -370,6 +418,7 @@ function onMove(ev) {
   if (mode.k === 'pan') { cam.x = mode.cx + ev.clientX - mode.sx; cam.y = mode.cy + ev.clientY - mode.sy; draw(); }
   else if (mode.k === 'drag') {
     let dx = p.x - mode.p.x, dy = p.y - mode.p.y, guides = []; if (!mode.moved && Math.hypot(dx, dy) * cam.z < 3) return; mode.moved = true;
+    if (ev.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
     if (mode.box0 && !ev.ctrlKey && !ev.metaKey) { const r = snapMove({ x: mode.box0.x + dx, y: mode.box0.y + dy, w: mode.box0.w, h: mode.box0.h }, mode.others, 6 / cam.z); dx += r.dx; dy += r.dy; guides = r.guides; }
     for (const o of mode.start) { const e = E(o.id); if (e.type === 'conn') { e.ax = o.ax + dx; e.ay = o.ay + dy; e.bx = o.bx + dx; e.by = o.by + dy; } else { e.x = Math.round(o.x + dx); e.y = Math.round(o.y + dy); } }
     draw(); drawOverlay(guideMarks(guides));
@@ -404,7 +453,7 @@ function onMove(ev) {
 }
 function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
-  if (m.k === 'drag') { if (m.moved) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } }
+  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } }
   else if (m.k === 'resize' || m.k === 'grotate') commit();
   else if (m.k === 'connEnd') {
     const other = m.end === 'a' ? m.e.b : m.e.a;
@@ -423,12 +472,16 @@ function onUp(ev) {
     let b = idAt(document.elementFromPoint(ev.clientX, ev.clientY)); if (b && (E(b).type === 'conn' || b === m.a)) b = null;
     if ((m.a && b) || Math.hypot(p.x - m.p.x, p.y - m.p.y) > 12) { const e = { id: uid('e'), type: 'conn', z: topZ() + 1, a: m.a, b, ax: m.p.x, ay: m.p.y, bx: p.x, by: p.y, ...(connStyle !== 'straight' ? { style: connStyle } : {}) }; board.els[e.id] = e; sel = new Set([e.id]); }
     tool = 'select'; commit();
-  } else if (m.k === 'create') makeBox(tool === 'stamp' ? stamp.type : tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), Math.abs(p.x - m.p.x), Math.abs(p.y - m.p.y));
+  } else if (m.k === 'create') {
+    let w = Math.abs(p.x - m.p.x), ht = Math.abs(p.y - m.p.y); if (ev.shiftKey) w = ht = Math.max(w, ht);
+    makeBox(tool === 'stamp' ? stamp.type : tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), w, ht);
+  }
 }
 function onKey(ev) {
   if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT');
   if (typing || (tgt && tgt.tagName === 'BUTTON' && (ev.key === 'Enter' || ev.key === ' '))) return;
   const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let done = true;
+  if (kanban && !mod && !['delete', 'backspace', 'escape', '?'].includes(k)) return;
   if (k === ' ') { spaceDown = true; cv.classList.add('pan'); }
   else if (mod && k === 'z') ev.shiftKey ? travel('redo') : travel('undo');
   else if (mod && k === 'y') travel('redo');
@@ -440,11 +493,14 @@ function onKey(ev) {
   else if (mod && ev.shiftKey && k === 'l') arrange(selEls().some(e => !e.locked) ? 'lock' : 'unlock');
   else if (mod) done = false;
   else if (k === 'delete' || k === 'backspace') removeSel();
-  else if (k === 'escape') { sel.clear(); tool = 'select'; refresh(); }
+  else if (k === 'escape') { closeMenu(); const hp = $('#help'); if (hp) hp.remove(); else if (kanban) kanban = false; else { sel.clear(); tool = 'select'; } refresh(); }
   else if (k.startsWith('arrow')) {
     const d = ev.shiftKey ? 10 : 1, dx = k === 'arrowleft' ? -d : k === 'arrowright' ? d : 0, dy = k === 'arrowup' ? -d : k === 'arrowdown' ? d : 0;
     for (const e of selEls()) if (!e.locked) { if (e.type === 'conn') { e.ax += dx; e.bx += dx; e.ay += dy; e.by += dy; } else { e.x += dx; e.y += dy; } } commit();
   }
+  else if (k === '?') toggleHelp();
+  else if (k === 'tab' && sel.size === 1 && E([...sel][0]).type === 'sticky') nextSticky([...sel][0]);
+  else if (k === 'm') { miniOn = !miniOn; draw(); }
   else if (k === ']') arrange('front'); else if (k === '[') arrange('back');
   else if (k === '=' || k === '+') zoomAt(1.2); else if (k === '-') zoomAt(1 / 1.2); else if (k === '1' && ev.shiftKey || k === '!') fit();
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
@@ -460,7 +516,7 @@ async function openBoard(id) {
   const m = meta(id); if (!m) return;
   $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
   const data = await Store.get('b_' + id) || { els: {} };
-  board = { id, els: data.els || {} }; hist.reset(board.els); mids.clear(); sways.clear();
+  board = { id, els: data.els || {} }; hist.reset(board.els); mids.clear(); sways.clear(); kanban = false; miniState = null;
   sel = new Set(); tool = 'select'; editing = null; edFor = null; taskFilter = 'all'; tasksOpen = window.innerWidth > 800;
   const [sc, st] = statParts();
   const menu = (id2, label, opts, fn) => h('select', { id: id2, 'aria-label': label, onchange: e => { const v = e.target.value; e.target.value = ''; if (v) fn(v); } }, h('option', { value: '' }, label), opts.map(o => h('option', { value: o[0] }, o[1])));
@@ -475,12 +531,15 @@ async function openBoard(id) {
       h('button', { class: 'zoomv', id: 'zoomv', title: 'Reset to 100%', onclick: () => zoomAt(1 / cam.z) }, '100%'),
       h('button', { title: 'Zoom in', 'aria-label': 'Zoom in', onclick: () => zoomAt(1.2) }, '+'),
       h('button', { title: 'Fit everything (Shift+1)', onclick: () => fit() }, 'Fit'),
+      h('select', { id: 'frames', 'aria-label': 'Jump to frame', hidden: true, onchange: e => { const f = E(e.target.value); e.target.value = ''; if (f) { kanban = false; fit([f]); refresh(); } } }),
       menu('export', 'Export', [['png', 'PNG image'], ['svg', 'SVG vector']], exportAs),
-      h('button', { id: 'tasks-toggle', onclick: () => { tasksOpen = !tasksOpen; edFor = null; renderTasks(); } }, 'Tasks')),
+      h('button', { id: 'tasks-toggle', onclick: () => { tasksOpen = !tasksOpen; edFor = null; renderTasks(); } }, 'Tasks'),
+      h('button', { id: 'kanban-toggle', title: 'Show tasks as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
+      h('button', { title: 'Keyboard shortcuts (?)', onclick: toggleHelp }, 'Keys')),
     h('div', { class: 'work' },
       h('nav', { class: 'tools', 'aria-label': 'Tools' }, TOOLS.map(([t, label]) => h('button', { 'data-tool': t, title: label, 'aria-label': label, onclick: () => { tool = t; refresh(); } }, s('svg', { viewBox: '0 0 20 20' }, s('path', { d: ICON[t] }))))),
-      h('div', { class: 'stage' }, h('div', { class: 'ctx', id: 'ctx', hidden: true }), h('div', { class: 'fly', id: 'fly', hidden: true }),
-        h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
+      h('div', { class: 'stage' }, h('div', { class: 'ctx', id: 'ctx', hidden: true }), h('div', { class: 'fly', id: 'fly', hidden: true }), h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }), h('div', { class: 'kan', id: 'kan', hidden: true }),
+        h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
       h('aside', { class: 'tasks', id: 'tasks', 'aria-label': 'Tasks' }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
   cv = s('svg', { id: 'cv', role: 'application', 'aria-label': 'Board canvas' },
     s('defs', null,
@@ -488,6 +547,11 @@ async function openBoard(id) {
       s('filter', { id: 'sh', x: '-10%', y: '-10%', width: '120%', height: '130%' }, s('feDropShadow', { dx: 0, dy: 2, stdDeviation: 3, 'flood-color': '#0a1428', 'flood-opacity': 0.16 }))),
     s('rect', { width: '100%', height: '100%', fill: 'url(#dots)' }));
   vp = s('g'); ov = s('g'); cv.append(vp, ov); $('.stage').prepend(cv);
+  mini = s('svg', { width: 180, height: 120, 'aria-hidden': 'true' }); $('#mini').append(mini);
+  mini.addEventListener('pointerdown', ev => { miniDrag = true; mini.setPointerCapture(ev.pointerId); miniGo(ev); });
+  mini.addEventListener('pointermove', ev => { if (miniDrag) miniGo(ev); });
+  const miniEnd = () => { miniDrag = false; draw(); }; mini.addEventListener('pointerup', miniEnd); mini.addEventListener('pointercancel', miniEnd);
+  cv.addEventListener('contextmenu', openMenu);
   cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; draw(); placeEditor(); } }, { passive: false });
   fit(); refresh();
@@ -517,6 +581,7 @@ function renderCtx() {
     menu('arrange', 'Arrange', [['front', 'Bring to front'], ['back', 'Send to back'], ['group', 'Group'], ['ungroup', 'Ungroup'], ['lock', 'Lock'], ['unlock', 'Unlock']], arrange),
     h('button', { onclick: () => { copySel(); pasteEls(clip, 24); } }, 'Duplicate'),
     h('button', { class: 'danger', onclick: removeSel }, 'Delete')].flat().filter(Boolean));
+  placeCtx();
 }
 function renderFly() {
   const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp'; if (el.hidden) return;
@@ -568,9 +633,63 @@ function renderTasks() {
   const none = taskView === 'cal' ? (calDay ? 'Nothing is due on this day.' : 'Nothing is due this month.') : cards.length ? 'No tasks with this status.' : 'No tasks yet. Press C and click the board to add a task card.';
   $('#tlist').replaceChildren(...(show.length ? show.map(c => {
     const late = c.due && c.due < today() && c.status !== 'done';
-    return h('button', { class: 'trow' + (cur === c ? ' on' : ''), onclick: () => { sel = new Set([c.id]); const r = cv.getBoundingClientRect(); cam.x = r.width / 2 - (c.x + c.w / 2) * cam.z; cam.y = r.height / 2 - (c.y + c.h / 2) * cam.z; refresh(); } },
+    return h('button', { class: 'trow' + (cur === c ? ' on' : ''), onclick: () => { sel = new Set([c.id]); centerOn(c); refresh(); } },
       h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, c.text), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : ''))));
   }) : [h('p', { class: 'note' }, none)]));
+}
+
+function renderFrames() {
+  const el = $('#frames'); if (!el) return; const fs = all().filter(e => e.type === 'frame').sort((a, b) => a.y - b.y || a.x - b.x);
+  el.hidden = !fs.length; el.replaceChildren(h('option', { value: '' }, 'Frames'), ...fs.map(f => h('option', { value: f.id }, f.text || 'Frame')));
+}
+function renderKanban() {
+  const el = $('#kan'), btn = $('#kanban-toggle'); if (!el) return; el.hidden = !kanban; btn.classList.toggle('fav-on', kanban); if (!kanban) return;
+  const groups = groupTasks(all());
+  el.replaceChildren(...Object.entries(STATUS).map(([k, [label, col]]) => h('section', { class: 'kcol', 'aria-label': label,
+    ondragover: e => { e.preventDefault(); e.currentTarget.classList.add('over'); }, ondragleave: e => e.currentTarget.classList.remove('over'),
+    ondrop: e => { e.preventDefault(); e.currentTarget.classList.remove('over'); const c = E(e.dataTransfer.getData('text/plain')); if (c && c.type === 'card' && c.status !== k) { c.status = k; edFor = null; commit(); } } },
+    h('header', null, h('b', { style: 'background:' + col }), label, h('span', null, String(groups[k].length))),
+    h('div', { class: 'klist' }, groups[k].map(c => {
+      const late = c.due && c.due < today() && c.status !== 'done';
+      return h('article', { class: 'kcard' + (sel.has(c.id) ? ' on' : ''), draggable: 'true', tabindex: '0', style: 'border-left-color:' + col,
+        ondragstart: e => e.dataTransfer.setData('text/plain', c.id), onclick: () => { sel = new Set([c.id]); tasksOpen = true; refresh(); },
+        onkeydown: e => { if (e.key === 'Enter') { sel = new Set([c.id]); tasksOpen = true; refresh(); } },
+        ondblclick: () => { kanban = false; sel = new Set([c.id]); centerOn(c); refresh(); } },
+        h('strong', null, c.text), c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
+    })),
+    h('button', { class: 'kadd', onclick: () => addTask(k) }, 'Add task'))));
+}
+function closeMenu() { const m = $('#menu'); if (m) m.remove(); }
+function openMenu(ev) {
+  ev.preventDefault(); if (editing) endEdit(); closeMenu();
+  const p = pt(ev), id = idAt(ev.target);
+  if (id && !sel.has(id)) { sel = new Set(group(id)); refresh(); } else if (!id && sel.size) { sel.clear(); refresh(); }
+  const list = selEls(), item = (label, fn, cls) => h('button', { class: cls, role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, label);
+  const items = id ? [
+    list.length === 1 && TEXTY.includes(list[0].type) ? item('Edit text', () => startEdit(list[0].id)) : null,
+    item('Duplicate', () => { copySel(); pasteEls(clip, 24); }), item('Copy', copySel), h('hr'),
+    item('Bring to front', () => arrange('front')), item('Send to back', () => arrange('back')),
+    list.length > 1 ? item('Group', () => arrange('group')) : null, list.some(e => e.g) ? item('Ungroup', () => arrange('ungroup')) : null,
+    list.every(e => e.locked) ? item('Unlock', () => arrange('unlock')) : item('Lock', () => arrange('lock')), h('hr'),
+    item('Delete', removeSel, 'danger')]
+    : [clip.length ? item('Paste here', () => pasteAt(p)) : null,
+      item('Add sticky note', () => makeBox('sticky', p.x, p.y, 0, 0)), item('Add task card', () => makeBox('card', p.x, p.y, 0, 0)), item('Add text', () => makeBox('text', p.x, p.y, 0, 0)), h('hr'),
+      item('Select all', () => { sel = new Set(Object.keys(board.els)); refresh(); }), item('Fit everything', () => fit())];
+  const m = h('div', { class: 'menu', id: 'menu', role: 'menu' }, items.filter(Boolean)), r = cv.getBoundingClientRect(); $('.stage').append(m);
+  m.style.left = Math.max(4, Math.min(p.sx, r.width - m.offsetWidth - 6)) + 'px'; m.style.top = Math.max(4, Math.min(p.sy, r.height - m.offsetHeight - 6)) + 'px';
+}
+const KEYS = [
+  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['K', 'Stickers and tape']]],
+  ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
+  ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
+  ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
+function toggleHelp() {
+  const open = $('#help'); if (open) { open.remove(); return; }
+  document.body.append(h('div', { class: 'help', id: 'help', onclick: e => { if (e.target.id === 'help') e.target.remove(); } },
+    h('div', { class: 'help-b', role: 'dialog', 'aria-label': 'Keyboard shortcuts' },
+      h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { onclick: toggleHelp }, 'Close')),
+      h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
+      h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'))));
 }
 
 /* ---------- Export ---------- */
@@ -597,6 +716,7 @@ function exportAs(kind) {
 
 /* ---------- Boot ---------- */
 window.addEventListener('keydown', onKey);
+window.addEventListener('pointerdown', ev => { if (!(ev.target.closest && ev.target.closest('#menu'))) closeMenu(); }, true);
 window.addEventListener('keyup', ev => { if (ev.key === ' ') { spaceDown = false; if (cv) cv.classList.remove('pan'); } });
 window.addEventListener('pagehide', () => { if (board) saveNow(); });
 (async () => {
