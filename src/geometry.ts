@@ -89,13 +89,42 @@ export function resizeBox(o: Box & { rot?: number }, hd: string, dx: number, dy:
   return { x: cx - w / 2, y: cy - h / 2, w, h };
 }
 
-/** Angle in degrees for a rotate handle dragged to (px, py) around (cx, cy). Snaps to 45s when close, or 15s when `step` is set. */
-export function handleAngle(cx: number, cy: number, px: number, py: number, step: boolean): number {
-  let a = Math.atan2(py - cy, px - cx) * 180 / Math.PI + 90;
-  if (step) a = Math.round(a / 15) * 15;
-  else { const near = Math.round(a / 45) * 45; a = Math.abs(a - near) <= 3 ? near : Math.round(a); }
+/** Wrap an angle into the range (-180, 180]. */
+export function normAngle(a: number): number {
   a = ((a + 180) % 360 + 360) % 360 - 180;
   return a === -180 ? 180 : a;
+}
+
+/** Tidy a dragged angle: 15 degree steps when `step` is set, otherwise whole degrees that settle on 45s when within 3. */
+export function snapAngle(a: number, step: boolean): number {
+  if (step) a = Math.round(a / 15) * 15;
+  else { const near = Math.round(a / 45) * 45; a = Math.abs(a - near) <= 3 ? near : Math.round(a); }
+  return normAngle(a);
+}
+
+export function rotatePoint(x: number, y: number, cx: number, cy: number, deg: number): { x: number; y: number } {
+  const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), dx = x - cx, dy = y - cy;
+  return { x: cx + dx * c - dy * s, y: cy + dx * s + dy * c };
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/**
+ * A copy of `o` turned `deg` degrees around the pivot (cx, cy): its center orbits the pivot and its own
+ * rotation increases by the same amount. Connectors turn their free end points instead.
+ */
+export function rotateEl(o: El, cx: number, cy: number, deg: number): El {
+  const e = { ...o };
+  if (o.type === 'conn') {
+    const p = rotatePoint(o.ax ?? 0, o.ay ?? 0, cx, cy, deg), q = rotatePoint(o.bx ?? 0, o.by ?? 0, cx, cy, deg);
+    return Object.assign(e, { ax: round2(p.x), ay: round2(p.y), bx: round2(q.x), by: round2(q.y) });
+  }
+  const c = rotatePoint(o.x + o.w / 2, o.y + o.h / 2, cx, cy, deg);
+  e.x = round2(c.x - o.w / 2);
+  e.y = round2(c.y - o.h / 2);
+  const rot = round2(normAngle((o.rot || 0) + deg));
+  if (rot) e.rot = rot; else delete e.rot;
+  return e;
 }
 
 export function bbox(e: El, get: Lookup): Box {

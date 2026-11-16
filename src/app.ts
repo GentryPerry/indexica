@@ -205,26 +205,42 @@ function draw() {
   drawOverlay();
   const zv = $('#zoomv'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
 }
+function rotateHandle(mx, top, col, k) {
+  return [s('line', { x1: mx, y1: top, x2: mx, y2: top - 23 * k, stroke: col, 'stroke-width': k, 'pointer-events': 'none' }),
+    s('circle', { 'data-h': 'rot', cx: mx, cy: top - 23 * k, r: 5.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)'))];
+}
 function drawOverlay(extra) {
   const k = 1 / cam.z, list = selEls(), out = [];
   for (const e of list) {
     const b = e.type === 'conn' ? bbox(e) : e, col = e.locked ? '#d64545' : C.accent;
     const g = s('g', { transform: e.rot && e.type !== 'conn' ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null },
       s('rect', { x: b.x - 3 * k, y: b.y - 3 * k, width: b.w + 6 * k, height: b.h + 6 * k, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
-    if (list.length === 1 && !e.locked && BOXY.includes(e.type) && !editing) {
+    if (list.length === 1 && !e.locked && e.type !== 'conn' && !editing) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
-      if (e.type !== 'frame') g.append(
-        s('line', { x1: mx, y1: e.y - 3 * k, x2: mx, y2: e.y - 26 * k, stroke: col, 'stroke-width': k, 'pointer-events': 'none' }),
-        s('circle', { 'data-h': 'rot', cx: mx, cy: e.y - 26 * k, r: 5.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
-      for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew'], ['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) {
+      g.append(...rotateHandle(mx, e.y - 3 * k, col, k));
+      if (BOXY.includes(e.type)) for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew'], ['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) {
         const r = (n.length === 1 ? 4 : 5) * k;
         g.append(s('rect', { 'data-h': n, x: px - r, y: py - r, width: r * 2, height: r * 2, rx: n.length === 1 ? r : 0, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }));
       }
     }
     out.push(g);
   }
+  // Several pieces selected: one dashed box around them all, with a handle that turns the whole selection.
+  const free = list.filter(e => !e.locked);
+  if (list.length > 1 && free.filter(e => e.type !== 'conn').length > 1 && !editing) {
+    const turning = mode && mode.k === 'grotate' ? mode : null, b = turning ? turning.box0 : bounds(free), mx = b.x + b.w / 2, pad = 9 * k;
+    out.push(s('g', { transform: turning && turning.ang ? `rotate(${turning.ang} ${mx} ${b.y + b.h / 2})` : null },
+      s('rect', { x: b.x - pad, y: b.y - pad, width: b.w + pad * 2, height: b.h + pad * 2, fill: 'none', stroke: C.accent, 'stroke-width': k, 'stroke-dasharray': `${5 * k} ${4 * k}`, 'pointer-events': 'none' }),
+      rotateHandle(mx, b.y - pad, C.accent, k)));
+  }
   if (extra) out.push(extra);
   ov.replaceChildren(...out);
+}
+/** Ids that move together: the unlocked selection plus everything sitting inside a selected frame. */
+function moveSet() {
+  const move = new Set(selEls().filter(e => !e.locked).map(e => e.id));
+  for (const f of selEls()) if (f.type === 'frame' && !f.locked) for (const e of all()) if (e.type !== 'conn' && e.type !== 'frame' && !e.locked && e.x >= f.x && e.y >= f.y && e.x + e.w <= f.x + f.w && e.y + e.h <= f.y + f.h) move.add(e.id);
+  return move;
 }
 const otherBoxes = skip => all().filter(e => e.type !== 'conn' && !skip.has(e.id)).map(bbox);
 function guideMarks(guides) {
@@ -335,14 +351,19 @@ function onDown(ev) {
   cv.setPointerCapture(ev.pointerId);
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
   if (tool === 'select') {
-    if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; mode = hd === 'rot' ? { k: 'rotate', e } : { k: 'resize', hd, e, o: clone(e), p, others: otherBoxes(new Set([e.id])) }; return; }
+    if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; 
+      if (hd === 'rot') {
+        const one = sel.size === 1, b = one ? e : bounds(selEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+        mode = { k: 'grotate', start: [...moveSet()].map(i => clone(E(i))), c, a0: Math.atan2(p.y - c.y, p.x - c.x), ang: 0, base: one ? e.rot || 0 : 0, box0: { x: b.x, y: b.y, w: b.w, h: b.h } }; return;
+      }
+      mode = { k: 'resize', hd, e, o: clone(e), p, others: otherBoxes(new Set([e.id])) }; return;
+    }
     if (dbl) { if (id) { sel = new Set([id]); refresh(); startEdit(id); } else makeBox('sticky', p.x, p.y, 0, 0); return; }
     if (id) {
       const had = sel.has(id);
       if (ev.shiftKey) { group(id).forEach(i => had ? sel.delete(i) : sel.add(i)); refresh(); return; }
       if (!had) sel = new Set(group(id));
-      const move = new Set(selEls().filter(e => !e.locked).map(e => e.id));
-      for (const f of selEls()) if (f.type === 'frame' && !f.locked) for (const e of all()) if (e.type !== 'conn' && e.type !== 'frame' && !e.locked && e.x >= f.x && e.y >= f.y && e.x + e.w <= f.x + f.w && e.y + e.h <= f.y + f.h) move.add(e.id);
+      const move = moveSet();
       mode = { k: 'drag', p, id, had, moved: false, start: [...move].map(i => clone(E(i))), box0: bounds([...move].map(E)), others: otherBoxes(move) }; refresh(); return;
     }
     if (!ev.shiftKey) sel.clear(); mode = { k: 'marquee', p, keep: new Set(sel) }; refresh(); return;
@@ -367,9 +388,11 @@ function onMove(ev) {
       if (north || hd.includes('s')) { const sy = snapPoint(north ? r.y : r.y + r.h, 'y', mode.others, thr, [r.x, r.x + r.w]), ht = sy && (north ? r.y + r.h - sy.v : sy.v - r.y); if (sy && ht >= 30) { if (north) r.y = sy.v; r.h = ht; guides.push(sy.guide); } }
     }
     Object.assign(e, { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) }); fitText(e); draw(); drawOverlay(guideMarks(guides));
-  } else if (mode.k === 'rotate') {
-    const e = mode.e, a = G.handleAngle(e.x + e.w / 2, e.y + e.h / 2, p.x, p.y, ev.shiftKey);
-    if (a) e.rot = a; else delete e.rot; draw();
+  } else if (mode.k === 'grotate') {
+    const raw = (Math.atan2(p.y - mode.c.y, p.x - mode.c.x) - mode.a0) * 180 / Math.PI;
+    mode.ang = G.snapAngle(mode.base + raw, ev.shiftKey) - mode.base;
+    for (const o of mode.start) { const e = E(o.id); delete e.rot; Object.assign(e, G.rotateEl(o, mode.c.x, mode.c.y, mode.ang)); }
+    draw();
   } else if (mode.k === 'marquee') {
     const x = Math.min(p.x, mode.p.x), y = Math.min(p.y, mode.p.y), w = Math.abs(p.x - mode.p.x), ht = Math.abs(p.y - mode.p.y);
     sel = new Set(mode.keep); for (const e of all()) { const b = bbox(e); if (b.x < x + w && b.x + b.w > x && b.y < y + ht && b.y + b.h > y) sel.add(e.id); }
@@ -387,7 +410,7 @@ function onMove(ev) {
 function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
   if (m.k === 'drag') { if (m.moved) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } }
-  else if (m.k === 'resize' || m.k === 'rotate') commit();
+  else if (m.k === 'resize' || m.k === 'grotate') commit();
   else if (m.k === 'marquee') refresh();
   else if (m.k === 'pen') {
     if (m.pts.length > 1) {

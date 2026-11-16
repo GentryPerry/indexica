@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { bbox, bounds, ends, fitText, handleAngle, resizeBox, rotatedBox, setMeasurer, wrap } from '../src/geometry';
+import { bbox, bounds, ends, fitText, normAngle, resizeBox, rotateEl, rotatedBox, rotatePoint, snapAngle, setMeasurer, wrap } from '../src/geometry';
 import type { El } from '../src/types';
 
 const el = (p: Partial<El>): El => ({ id: 'x', type: 'rect', z: 1, x: 0, y: 0, w: 100, h: 100, ...p });
@@ -78,14 +78,46 @@ describe('rotation', () => {
     // Turned on its side, the shape reaches 100 (+5 gap) to the right of its center at x = 20.
     expect(p.x).toBeCloseTo(125); expect(p.y).toBeCloseTo(100);
   });
-  it('handleAngle points straight up at 0 and snaps near 45s', () => {
-    expect(handleAngle(0, 0, 0, -50, false)).toBe(0);
-    expect(handleAngle(0, 0, 50, 1, false)).toBe(90);
-    expect(handleAngle(0, 0, 0, 50, false)).toBe(180);
-    expect(handleAngle(0, 0, -50, 0, false)).toBe(-90);
+  it('snapAngle settles on 45s when close and wraps past 180', () => {
+    expect(snapAngle(1.4, false)).toBe(0);
+    expect(snapAngle(88, false)).toBe(90);
+    expect(snapAngle(30.4, false)).toBe(30);
+    expect(snapAngle(190, false)).toBe(-170);
+    expect(snapAngle(-180, false)).toBe(180);
   });
-  it('handleAngle steps by 15 when asked', () => {
-    expect(handleAngle(0, 0, 20, -50, true)).toBe(15);
+  it('snapAngle steps by 15 when asked', () => expect(snapAngle(22, true)).toBe(15));
+  it('normAngle keeps angles in (-180, 180]', () => {
+    expect(normAngle(270)).toBe(-90);
+    expect(normAngle(-450)).toBe(-90);
+    expect(normAngle(360)).toBe(0);
+  });
+});
+
+describe('rotating a selection', () => {
+  it('rotatePoint turns clockwise on screen', () => {
+    const p = rotatePoint(10, 0, 0, 0, 90);
+    expect(p.x).toBeCloseTo(0); expect(p.y).toBeCloseTo(10);
+  });
+  it('a piece orbits the pivot and turns by the same angle', () => {
+    const r = rotateEl(el({ x: 100, y: -10, w: 40, h: 20, rot: 10 }), 0, 0, 90);
+    // Center (120, 0) moves to (0, 120).
+    expect(r.x).toBeCloseTo(-20); expect(r.y).toBeCloseTo(110);
+    expect(r.rot).toBe(100);
+    expect([r.w, r.h]).toEqual([40, 20]);
+  });
+  it('turning back restores the original', () => {
+    const o = el({ x: 33, y: 71, w: 120, h: 45, rot: 20 });
+    const back = rotateEl(rotateEl(o, 200, 150, 37), 200, 150, -37);
+    expect(back.x).toBeCloseTo(o.x, 1); expect(back.y).toBeCloseTo(o.y, 1); expect(back.rot).toBe(20);
+  });
+  it('drops the rot field when the result is upright', () => {
+    expect('rot' in rotateEl(el({ rot: -30 }), 50, 50, 30)).toBe(false);
+  });
+  it('turns a connector\'s free end points and leaves the original untouched', () => {
+    const c = el({ type: 'conn', a: null, b: null, ax: 10, ay: 0, bx: 20, by: 0 });
+    const r = rotateEl(c, 0, 0, 180);
+    expect([r.ax, r.ay, r.bx, r.by]).toEqual([-10, 0, -20, 0]);
+    expect(c.ax).toBe(10);
   });
 });
 
