@@ -2,8 +2,13 @@
 // UI layer, ported as-is from the single-file prototype. It is not type-checked yet:
 // it will be split into typed modules when the canvas renderer is rebuilt.
 import { $, h, s, uid, clone, today, toast } from './dom';
-import { STATUS, FILLS, TEXTY, BOXY } from './types';
-import { FONT, wrap, fitText, measure } from './geometry';
+import { STATUS, FILLS, VIVID, FONTS, WEIGHTS, SIZES, TEXTY, BOXY } from './types';
+import { fitText } from './geometry';
+import { connGeom } from './connectors';
+import { kick, step, still, atRest } from './cable';
+import { renderEl } from './render';
+import { STICKERS, TAPES } from './stickers';
+import { monthGrid, shiftMonth, monthPrefix } from './calendar';
 import * as G from './geometry';
 import { Store } from './store';
 import { History } from './history';
@@ -125,7 +130,9 @@ let board = null;
 const hist = new History();
 let cam = { x: 0, y: 0, z: 1 }, tool = 'select', sel = new Set(), editing = null, clip = [];
 let mode = null, spaceDown = false, lastDown = { t: 0, x: 0, y: 0 }, saveT = 0;
-let tasksOpen = true, taskFilter = 'all', edFor = null;
+let tasksOpen = true, taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
+let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
+let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight';
 let cv, vp, ov, C = {};
 const E = id => board.els[id];
 const all = () => Object.values(board.els);
@@ -147,61 +154,35 @@ function saveNow() {
 }
 
 /* ---------- Text and geometry helpers ---------- */
-function textBlock(lines, x, y, size, fill, anchor, weight) {
-  const t = s('text', { x, y, 'font-size': size, 'font-family': FONT, fill, 'text-anchor': anchor || 'start', 'font-weight': weight || 400, 'pointer-events': 'none' });
-  lines.forEach((ln, i) => t.append(s('tspan', { x, dy: i ? size * 1.3 : 0 }, ln || ' '))); return t;
-}
 const ends = c => G.ends(c, E), bbox = e => G.bbox(e, E), bounds = list => G.bounds(list, E);
 
 /* ---------- Rendering ---------- */
-function renderEl(e, exp) {
-  const g = s('g', { 'data-id': e.id }), ink = exp ? '#17202d' : C.ink, hide = !exp && editing === e.id;
-  const { x, y, w, h: ht } = e;
-  if (e.type === 'sticky') {
-    g.append(s('rect', { x, y, width: w, height: ht, rx: 3, fill: e.fill, filter: exp ? null : 'url(#sh)' }));
-    if (!hide) g.append(textBlock(wrap(e.text, w - 24, 16), x + 12, y + 28, 16, '#1d2530'));
-  } else if (['rect', 'ellipse', 'diamond'].includes(e.type)) {
-    const a = { fill: e.fill, stroke: '#2b3545', 'stroke-width': 1.5 };
-    g.append(e.type === 'rect' ? s('rect', { x, y, width: w, height: ht, rx: 6, ...a })
-      : e.type === 'ellipse' ? s('ellipse', { cx: x + w / 2, cy: y + ht / 2, rx: w / 2, ry: ht / 2, ...a })
-      : s('polygon', { points: `${x + w / 2},${y} ${x + w},${y + ht / 2} ${x + w / 2},${y + ht} ${x},${y + ht / 2}`, ...a }));
-    if (!hide) { const ls = wrap(e.text, w - 24, 15); g.append(textBlock(ls, x + w / 2, y + ht / 2 - ls.length * 19.5 / 2 + 14.5, 15, '#1d2530', 'middle')); }
-  } else if (e.type === 'text') {
-    g.append(s('rect', { x, y, width: w, height: ht, fill: 'transparent' }));
-    if (!hide) g.append(textBlock(wrap(e.text, w - 4, 18), x + 2, y + 21, 18, ink));
-  } else if (e.type === 'card') {
-    const [label, col] = STATUS[e.status] || STATUS.todo, late = e.due && e.due < today() && e.status !== 'done';
-    g.append(s('rect', { x, y, width: w, height: ht, rx: 8, fill: '#ffffff', stroke: '#c3ccda', filter: exp ? null : 'url(#sh)' }));
-    g.append(s('rect', { x, y: y + 8, width: 5, height: ht - 16, rx: 2.5, fill: col, 'pointer-events': 'none' }));
-    if (!hide) g.append(textBlock(wrap(e.text, w - 34, 14, 600).slice(0, 2), x + 18, y + 26, 14, '#1d2530', 'start', 600));
-    const pw = measure(label, 11, 600) + 16;
-    g.append(s('rect', { x: x + 18, y: y + ht - 30, width: pw, height: 18, rx: 9, fill: col, 'pointer-events': 'none' }));
-    g.append(textBlock([label], x + 18 + pw / 2, y + ht - 17, 11, '#ffffff', 'middle', 600));
-    const extra = [e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
-    if (extra) g.append(textBlock([extra], x + 26 + pw, y + ht - 17, 11, late ? '#d64545' : '#5d697c', 'start', late ? 600 : 400));
-  } else if (e.type === 'frame') {
-    g.append(s('rect', { x, y, width: w, height: ht, rx: 10, fill: exp ? 'rgba(36,71,214,.05)' : C.frame, stroke: exp ? '#9aa8c4' : C.frameLine, 'stroke-width': 1.5, 'pointer-events': 'none' }));
-    if (!exp) g.append(s('rect', { x, y, width: w, height: ht, rx: 10, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
-    if (!hide) { const t = textBlock([e.text || 'Frame'], x + 4, y - 9, 13, exp ? '#5d697c' : C.muted, 'start', 600); t.removeAttribute('pointer-events'); g.append(t); }
-  } else if (e.type === 'pen') {
-    const d = 'M' + e.pts.map(p => (x + p[0]) + ' ' + (y + p[1])).join('L');
-    g.append(s('path', { d, fill: 'none', stroke: e.stroke || ink, 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
-    if (!exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': 14 }));
-  } else if (e.type === 'conn') {
-    const [p, q] = ends(e), a = Math.atan2(q.y - p.y, q.x - p.x), L = 11, W = 0.42;
-    g.append(s('line', { x1: p.x, y1: p.y, x2: q.x - Math.cos(a) * 6, y2: q.y - Math.sin(a) * 6, stroke: ink, 'stroke-width': 1.8, 'stroke-linecap': 'round' }));
-    g.append(s('polygon', { points: `${q.x},${q.y} ${q.x - L * Math.cos(a - W)},${q.y - L * Math.sin(a - W)} ${q.x - L * Math.cos(a + W)},${q.y - L * Math.sin(a + W)}`, fill: ink }));
-    if (!exp) g.append(s('line', { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: 'transparent', 'stroke-width': 14 }));
+// Cables swing when their ends move. `mids` remembers where each cable was; `sways` holds the ones still moving.
+const sways = new Map(), mids = new Map(); let swayRaf = 0, swayT = 0;
+const calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+const rctx = exp => ({ exp, ink: C.ink, muted: C.muted, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine, hideId: exp ? null : editing, get: E, sway: exp ? undefined : id => sways.get(id) });
+function trackCables() {
+  const seen = new Set();
+  for (const e of all()) if (e.type === 'conn' && e.style === 'cable') {
+    const [p, q] = G.ends(e, E, 0), mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }, last = mids.get(e.id); seen.add(e.id); mids.set(e.id, mid);
+    if (last && !calm && (last.x !== mid.x || last.y !== mid.y)) sways.set(e.id, kick(sways.get(e.id) || still(), mid.x - last.x, mid.y - last.y));
   }
-  if (e.rot && e.type !== 'conn') g.setAttribute('transform', `rotate(${e.rot} ${x + w / 2} ${y + ht / 2})`);
-  return g;
+  for (const id of [...mids.keys()]) if (!seen.has(id)) { mids.delete(id); sways.delete(id); }
+  if (sways.size && !swayRaf) { swayT = performance.now(); swayRaf = requestAnimationFrame(swing); }
+}
+function swing(now) {
+  swayRaf = 0; if (!board) { sways.clear(); return; }
+  const dt = (now - swayT) / 1000;
+  for (const [id, sp] of [...sways]) { const n = step(sp, dt); if (atRest(n)) sways.delete(id); else sways.set(id, n); }
+  draw();
 }
 function draw() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
-  C = { ink: v('--ink'), muted: v('--muted'), accent: v('--accent'), frame: v('--frame'), frameLine: v('--frame-line') };
+  C = { ink: v('--ink'), muted: v('--muted'), accent: v('--accent'), canvas: v('--canvas'), frame: v('--frame'), frameLine: v('--frame-line') };
+  trackCables();
   const t = `translate(${cam.x},${cam.y}) scale(${cam.z})`;
   vp.setAttribute('transform', t); ov.setAttribute('transform', t); $('#dots').setAttribute('patternTransform', t);
-  vp.replaceChildren(...sorted().map(e => renderEl(e, false)));
+  const rc = rctx(false); vp.replaceChildren(...sorted().map(e => renderEl(e, rc)));
   drawOverlay();
   const zv = $('#zoomv'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
 }
@@ -222,6 +203,10 @@ function drawOverlay(extra) {
         const r = (n.length === 1 ? 4 : 5) * k;
         g.append(s('rect', { 'data-h': n, x: px - r, y: py - r, width: r * 2, height: r * 2, rx: n.length === 1 ? r : 0, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }));
       }
+    }
+    if (list.length === 1 && !e.locked && e.type === 'conn' && !editing && !(mode && mode.k === 'connEnd')) {
+      const gm = connGeom(e, E);
+      for (const [n, at] of [['ca', gm.p], ['cb', gm.q]]) g.append(s('circle', { 'data-h': n, cx: at.x, cy: at.y, r: 6 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:move' }, s('title', null, 'Drag to re-attach this end')));
     }
     out.push(g);
   }
@@ -248,7 +233,7 @@ function guideMarks(guides) {
   return s('g', { 'pointer-events': 'none' }, guides.map(g => s('line', { ...(g.axis === 'x' ? { x1: g.pos, x2: g.pos, y1: g.from, y2: g.to } : { y1: g.pos, y2: g.pos, x1: g.from, x2: g.to }), stroke: '#e0409a', 'stroke-width': k })));
 }
 function refresh() {
-  draw(); renderCtx(); renderTasks();
+  draw(); renderCtx(); renderTasks(); renderFly();
   const u = $('#undo'), r = $('#redo'); if (u) { u.disabled = !hist.undo.length; r.disabled = !hist.redo.length; }
   document.querySelectorAll('.tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === tool));
 }
@@ -309,25 +294,32 @@ function fit(list) {
   cam = { z, x: r.width / 2 - (b.x + b.w / 2) * z, y: r.height / 2 - (b.y + b.h / 2) * z + 14 }; draw();
 }
 function makeBox(type, x, y, w, ht) {
-  const d = { sticky: [180, 150], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320] }[type];
+  const d = { sticky: [180, 150], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320], sticker: [84, 84], tape: [220, 32] }[type];
   const drawn = w > 8 && ht > 8, e = { id: uid('e'), type, z: topZ() + 1, x: Math.round(drawn ? x : x - d[0] / 2), y: Math.round(drawn ? y : y - d[1] / 2), w: Math.round(drawn && type !== 'card' ? Math.max(w, 30) : d[0]), h: Math.round(drawn && type !== 'card' && type !== 'text' ? Math.max(ht, 30) : d[1]), text: '' };
   if (type === 'sticky') e.fill = FILLS[0];
   if (['rect', 'ellipse', 'diamond'].includes(type)) e.fill = '#ffffff';
   if (type === 'card') Object.assign(e, { text: 'New task', status: 'todo', due: '', notes: '' });
   if (type === 'frame') e.text = 'Frame';
-  board.els[e.id] = e; sel = new Set([e.id]); tool = 'select'; commit();
-  if (type !== 'frame') startEdit(e.id);
+  const stuck = type === 'sticker' || type === 'tape';
+  if (stuck) delete e.text;
+  if (type === 'sticker') Object.assign(e, { shape: stamp.shape, fill: stamp.fill });
+  if (type === 'tape') { Object.assign(e, { pattern: stamp.pattern || 'stripes', fill: stamp.fill }); if (!drawn) e.rot = -3; }
+  // Stickers and tape keep the tool active so several can be placed in a row.
+  board.els[e.id] = e; sel = new Set([e.id]); tool = stuck ? 'stamp' : 'select'; commit();
+  if (type !== 'frame' && !stuck) startEdit(e.id);
 }
 
 /* ---------- Text editing ---------- */
 function placeEditor() {
   const ed = $('#ed'), e = editing && E(editing); if (!e) return;
-  const z = cam.z, box = e.type === 'card' ? [e.x + 10, e.y + 6, e.w - 20, 46, 14] : e.type === 'frame' ? [e.x, e.y - 28, Math.max(e.w, 160), 24, 13]
-    : e.type === 'sticky' ? [e.x, e.y, e.w, e.h, 16] : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4, 18] : [e.x, e.y, e.w, e.h, 15];
-  Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px', fontSize: box[4] * z + 'px',
-    padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' ? 2 : 8) * z + 'px', fontWeight: e.type === 'card' || e.type === 'frame' ? 600 : 400,
-    textAlign: ['rect', 'ellipse', 'diamond'].includes(e.type) ? 'center' : 'left', background: e.type === 'sticky' ? e.fill : '#ffffff',
-    transform: e.rot ? `rotate(${e.rot}deg)` : '', transformOrigin: `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
+  const z = cam.z, st = G.textStyle(e), lab = e.type === 'conn' ? connGeom(e, E).label : null, centered = !!lab || ['rect', 'ellipse', 'diamond'].includes(e.type);
+  const box = lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 10, e.y + 6, e.w - 20, 46] : e.type === 'frame' ? [e.x, e.y - 28, Math.max(e.w, 160), 24]
+    : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
+  Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
+    fontSize: st.size * z + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
+    padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px',
+    textAlign: centered ? 'center' : 'left', background: e.type === 'sticky' ? e.fill : '#ffffff',
+    transform: e.rot && !lab ? `rotate(${e.rot}deg)` : '', transformOrigin: lab ? '' : `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
 }
 function startEdit(id) {
   const e = E(id); if (!e || e.locked || !TEXTY.includes(e.type)) return;
@@ -352,6 +344,7 @@ function onDown(ev) {
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
   if (tool === 'select') {
     if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; 
+      if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
       if (hd === 'rot') {
         const one = sel.size === 1, b = one ? e : bounds(selEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
         mode = { k: 'grotate', start: [...moveSet()].map(i => clone(E(i))), c, a0: Math.atan2(p.y - c.y, p.x - c.x), ang: 0, base: one ? e.rot || 0 : 0, box0: { x: b.x, y: b.y, w: b.w, h: b.h } }; return;
@@ -393,6 +386,8 @@ function onMove(ev) {
     mode.ang = G.snapAngle(mode.base + raw, ev.shiftKey) - mode.base;
     for (const o of mode.start) { const e = E(o.id); delete e.rot; Object.assign(e, G.rotateEl(o, mode.c.x, mode.c.y, mode.ang)); }
     draw();
+  } else if (mode.k === 'connEnd') {
+    const e = mode.e, n = mode.end; e[n] = null; e[n + 'x'] = Math.round(p.x); e[n + 'y'] = Math.round(p.y); draw();
   } else if (mode.k === 'marquee') {
     const x = Math.min(p.x, mode.p.x), y = Math.min(p.y, mode.p.y), w = Math.abs(p.x - mode.p.x), ht = Math.abs(p.y - mode.p.y);
     sel = new Set(mode.keep); for (const e of all()) { const b = bbox(e); if (b.x < x + w && b.x + b.w > x && b.y < y + ht && b.y + b.h > y) sel.add(e.id); }
@@ -411,6 +406,11 @@ function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
   if (m.k === 'drag') { if (m.moved) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } }
   else if (m.k === 'resize' || m.k === 'grotate') commit();
+  else if (m.k === 'connEnd') {
+    const other = m.end === 'a' ? m.e.b : m.e.a;
+    const hit = document.elementsFromPoint(ev.clientX, ev.clientY).map(idAt).find(id => id && id !== other && E(id) && E(id).type !== 'conn');
+    if (hit) m.e[m.end] = hit; commit();
+  }
   else if (m.k === 'marquee') refresh();
   else if (m.k === 'pen') {
     if (m.pts.length > 1) {
@@ -421,9 +421,9 @@ function onUp(ev) {
     commit();
   } else if (m.k === 'conn') {
     let b = idAt(document.elementFromPoint(ev.clientX, ev.clientY)); if (b && (E(b).type === 'conn' || b === m.a)) b = null;
-    if ((m.a && b) || Math.hypot(p.x - m.p.x, p.y - m.p.y) > 12) { const e = { id: uid('e'), type: 'conn', z: topZ() + 1, a: m.a, b, ax: m.p.x, ay: m.p.y, bx: p.x, by: p.y }; board.els[e.id] = e; sel = new Set([e.id]); }
+    if ((m.a && b) || Math.hypot(p.x - m.p.x, p.y - m.p.y) > 12) { const e = { id: uid('e'), type: 'conn', z: topZ() + 1, a: m.a, b, ax: m.p.x, ay: m.p.y, bx: p.x, by: p.y, ...(connStyle !== 'straight' ? { style: connStyle } : {}) }; board.els[e.id] = e; sel = new Set([e.id]); }
     tool = 'select'; commit();
-  } else if (m.k === 'create') makeBox(tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), Math.abs(p.x - m.p.x), Math.abs(p.y - m.p.y));
+  } else if (m.k === 'create') makeBox(tool === 'stamp' ? stamp.type : tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), Math.abs(p.x - m.p.x), Math.abs(p.y - m.p.y));
 }
 function onKey(ev) {
   if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT');
@@ -448,19 +448,19 @@ function onKey(ev) {
   else if (k === ']') arrange('front'); else if (k === '[') arrange('back');
   else if (k === '=' || k === '+') zoomAt(1.2); else if (k === '-') zoomAt(1 / 1.2); else if (k === '1' && ev.shiftKey || k === '!') fit();
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
-  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen' }[k]; if (t) { tool = t; refresh(); } else done = false; }
+  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp' }[k]; if (t) { tool = t; refresh(); } else done = false; }
   if (done) ev.preventDefault();
 }
 
 /* ---------- Board chrome ---------- */
 const ICON = { select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
-  diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z' };
-const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)']];
+  diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z' };
+const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['stamp', 'Stickers and tape (K)']];
 async function openBoard(id) {
   const m = meta(id); if (!m) return;
   $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
   const data = await Store.get('b_' + id) || { els: {} };
-  board = { id, els: data.els || {} }; hist.reset(board.els);
+  board = { id, els: data.els || {} }; hist.reset(board.els); mids.clear(); sways.clear();
   sel = new Set(); tool = 'select'; editing = null; edFor = null; taskFilter = 'all'; tasksOpen = window.innerWidth > 800;
   const [sc, st] = statParts();
   const menu = (id2, label, opts, fn) => h('select', { id: id2, 'aria-label': label, onchange: e => { const v = e.target.value; e.target.value = ''; if (v) fn(v); } }, h('option', { value: '' }, label), opts.map(o => h('option', { value: o[0] }, o[1])));
@@ -479,8 +479,8 @@ async function openBoard(id) {
       h('button', { id: 'tasks-toggle', onclick: () => { tasksOpen = !tasksOpen; edFor = null; renderTasks(); } }, 'Tasks')),
     h('div', { class: 'work' },
       h('nav', { class: 'tools', 'aria-label': 'Tools' }, TOOLS.map(([t, label]) => h('button', { 'data-tool': t, title: label, 'aria-label': label, onclick: () => { tool = t; refresh(); } }, s('svg', { viewBox: '0 0 20 20' }, s('path', { d: ICON[t] }))))),
-      h('div', { class: 'stage' }, h('div', { class: 'ctx', id: 'ctx', hidden: true }),
-        h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); const one = editing && ['card', 'frame'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
+      h('div', { class: 'stage' }, h('div', { class: 'ctx', id: 'ctx', hidden: true }), h('div', { class: 'fly', id: 'fly', hidden: true }),
+        h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
       h('aside', { class: 'tasks', id: 'tasks', 'aria-label': 'Tasks' }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
   cv = s('svg', { id: 'cv', role: 'application', 'aria-label': 'Board canvas' },
     s('defs', null,
@@ -495,21 +495,64 @@ async function openBoard(id) {
 function renderCtx() {
   const el = $('#ctx'); if (!el) return; const list = selEls();
   if (!list.length || editing) { el.hidden = true; return; } el.hidden = false;
+  const free = list.filter(e => !e.locked), of = types => free.filter(e => types.includes(e.type));
+  const same = (els, key) => els.length && els.every(e => e[key] === els[0][key]) ? els[0][key] ?? '' : '';
   const menu = (id, label, opts, fn) => h('select', { id, 'aria-label': label, onchange: e => { const v = e.target.value; if (v) fn(v); } }, h('option', { value: '' }, label), opts.map(o => h('option', { value: o[0] }, o[1])));
-  const fillable = list.filter(e => ['sticky', 'rect', 'ellipse', 'diamond'].includes(e.type) && !e.locked);
+  // A picker that shows the current value; choosing its first entry goes back to the default.
+  const pick = (id, label, opts, cur, fn) => h('select', { id, 'aria-label': label, title: label, value: String(cur), onchange: e => fn(e.target.value) }, h('option', { value: '' }, label), opts.map(o => h('option', { value: String(o[0]) }, o[1])));
+  const setAll = (els, key, val) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; fitText(e); }); commit(); };
+  const swatch = (c, fn) => h('button', { class: 'sw', style: 'background:' + c, title: 'Color ' + c, 'aria-label': 'Color ' + c, onclick: fn });
+  const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']), vivid = of(['sticker', 'tape']), conns = of(['conn']), tapes = of(['tape']), texty = free.filter(e => TEXTY.includes(e.type));
   el.replaceChildren(...[
-    fillable.length ? FILLS.map(c => h('button', { class: 'sw', style: 'background:' + c, title: 'Fill ' + c, 'aria-label': 'Fill ' + c, onclick: () => { fillable.forEach(e => { e.fill = c; }); commit(); } })) : [],
+    fillable.length ? FILLS.map(c => swatch(c, () => setAll(fillable, 'fill', c))) : [],
+    !fillable.length && (vivid.length || conns.length) ? VIVID.map(c => swatch(c, () => { vivid.forEach(e => { e.fill = c; }); conns.forEach(e => { e.stroke = c; }); commit(); })) : [],
+    conns.length ? pick('conn-style', 'Line style', [['straight', 'Straight'], ['curve', 'Curved'], ['elbow', 'Right angle'], ['cable', 'Cable']], same(conns, 'style') || 'straight', v => { connStyle = v || 'straight'; setAll(conns, 'style', connStyle === 'straight' ? '' : connStyle); }) : null,
+    tapes.length ? pick('tape-pattern', 'Pattern', Object.entries(TAPES), same(tapes, 'pattern') || 'stripes', v => setAll(tapes, 'pattern', v)) : null,
+    texty.length ? [
+      pick('font', 'Font', Object.entries(FONTS).map(([k, v]) => [k, v.label]), same(texty, 'font'), v => setAll(texty, 'font', v)),
+      pick('weight', 'Weight', WEIGHTS, same(texty, 'weight'), v => setAll(texty, 'weight', v ? Number(v) : '')),
+      pick('size', 'Size', SIZES.map(n => [n, n + ' px']), same(texty, 'size'), v => setAll(texty, 'size', v ? Number(v) : '')),
+      h('button', { class: same(texty, 'italic') === true ? 'fav-on' : '', title: 'Italic', style: 'font-style:italic', onclick: () => setAll(texty, 'italic', !texty.every(e => e.italic)) }, 'Italic')] : [],
     list.length > 1 ? menu('align', 'Align', [['l', 'Left edges'], ['c', 'Centers'], ['r', 'Right edges'], ['t', 'Top edges'], ['m', 'Middles'], ['b', 'Bottom edges'], ['dh', 'Space evenly across'], ['dv', 'Space evenly down']], align) : null,
     menu('arrange', 'Arrange', [['front', 'Bring to front'], ['back', 'Send to back'], ['group', 'Group'], ['ungroup', 'Ungroup'], ['lock', 'Lock'], ['unlock', 'Unlock']], arrange),
     h('button', { onclick: () => { copySel(); pasteEls(clip, 24); } }, 'Duplicate'),
     h('button', { class: 'danger', onclick: removeSel }, 'Delete')].flat().filter(Boolean));
+}
+function renderFly() {
+  const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp'; if (el.hidden) return;
+  const pv = (e, vb) => s('svg', { viewBox: vb, 'aria-hidden': 'true' }, renderEl({ id: 'pv-' + (e.shape || e.pattern), z: 0, x: 0, y: 0, ...e }, rctx(true)));
+  const btn = (on, label, fn, kid) => h('button', { class: on ? 'on' : '', title: label, 'aria-label': label, onclick: () => { fn(); renderFly(); } }, kid);
+  el.replaceChildren(
+    h('div', { class: 'fly-h' }, 'Stickers'),
+    h('div', { class: 'fly-g' }, Object.entries(STICKERS).map(([k, v]) => btn(stamp.type === 'sticker' && stamp.shape === k, v.label, () => { stamp = { ...stamp, type: 'sticker', shape: k }; }, pv({ type: 'sticker', shape: k, fill: stamp.fill, w: 100, h: 100 }, '-10 -10 120 120')))),
+    h('div', { class: 'fly-h' }, 'Washi tape'),
+    h('div', { class: 'fly-t' }, Object.entries(TAPES).map(([k, v]) => btn(stamp.type === 'tape' && stamp.pattern === k, v + ' tape', () => { stamp = { ...stamp, type: 'tape', pattern: k }; }, pv({ type: 'tape', pattern: k, fill: stamp.fill, w: 120, h: 26 }, '-4 -4 128 34')))),
+    h('div', { class: 'fly-h' }, 'Color'),
+    h('div', { class: 'fly-c' }, VIVID.map(c => h('button', { class: 'sw' + (stamp.fill === c ? ' on' : ''), style: 'background:' + c, title: 'Color ' + c, 'aria-label': 'Color ' + c, onclick: () => { stamp = { ...stamp, fill: c }; renderFly(); } }))),
+    h('p', { class: 'fly-n' }, 'Click the board to place it, or drag to set the size. Press Esc when done.'));
+}
+function calendarEl(cards) {
+  const byDay = {}; for (const c of cards) if (c.due) (byDay[c.due] ||= []).push(c);
+  const pre = monthPrefix(cal.year, cal.month), name = new Date(cal.year, cal.month, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const go = by => () => { cal = shiftMonth(cal.year, cal.month, by); calDay = ''; renderTasks(); };
+  const undated = cards.filter(c => !c.due).length;
+  return h('div', { class: 'cal' },
+    h('div', { class: 'cal-h' }, h('button', { 'aria-label': 'Previous month', onclick: go(-1) }, '‹'), h('strong', null, name), h('button', { 'aria-label': 'Next month', onclick: go(1) }, '›')),
+    h('div', { class: 'cal-g' }, ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => h('span', { class: 'cal-w' }, d)),
+      monthGrid(cal.year, cal.month).flat().map(day => {
+        const due = byDay[day] || [];
+        return h('button', { class: 'cal-d' + (day.startsWith(pre) ? '' : ' out') + (day === today() ? ' now' : '') + (day === calDay ? ' on' : ''), 'aria-label': `${day}, ${due.length} tasks due`, onclick: () => { calDay = calDay === day ? '' : day; renderTasks(); } },
+          String(Number(day.slice(8))), h('span', { class: 'cal-m' }, due.slice(0, 4).map(c => h('b', { style: 'background:' + STATUS[c.status][1] }))));
+      })),
+    undated ? h('p', { class: 'note' }, `${undated} ${undated === 1 ? 'task has' : 'tasks have'} no due date.`) : null);
 }
 function renderTasks() {
   const el = $('#tasks'); if (!el) return; el.hidden = !tasksOpen; if (!tasksOpen) return;
   const cards = all().filter(e => e.type === 'card').sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : 1), cur = selEls().length === 1 && selEls()[0].type === 'card' ? selEls()[0] : null;
   const n = k => cards.filter(c => k === 'all' || c.status === k).length;
   $('#thead').replaceChildren(h('h2', null, 'Tasks'),
-    h('div', { class: 'chips' }, [['all', 'All'], ...Object.entries(STATUS).map(([k, v]) => [k, v[0], v[1]])].map(([k, label, col]) =>
+    h('div', { class: 'tabs' }, [['list', 'List'], ['cal', 'Calendar']].map(([k, label]) => h('button', { class: taskView === k ? 'on' : '', onclick: () => { taskView = k; renderTasks(); } }, label))),
+    taskView === 'cal' ? calendarEl(cards) : h('div', { class: 'chips' }, [['all', 'All'], ...Object.entries(STATUS).map(([k, v]) => [k, v[0], v[1]])].map(([k, label, col]) =>
       h('button', { class: 'chip' + (taskFilter === k ? ' on' : ''), onclick: () => { taskFilter = k; renderTasks(); } }, col && h('b', { style: 'background:' + col }), `${label} ${n(k)}`))));
   if ((cur ? cur.id : '') !== edFor) {
     edFor = cur ? cur.id : '';
@@ -521,12 +564,13 @@ function renderTasks() {
         h('input', { type: 'date', id: 'task-due', 'aria-label': 'Due date', value: cur.due || '', onchange: set('due') })),
       h('label', { for: 'task-notes' }, 'Notes'), h('textarea', { id: 'task-notes', value: cur.notes || '', oninput: e => { cur.notes = e.target.value; }, onchange: () => commit() }))] : []));
   }
-  const show = cards.filter(c => taskFilter === 'all' || c.status === taskFilter);
+  const show = taskView === 'cal' ? cards.filter(c => calDay ? c.due === calDay : (c.due || '').startsWith(monthPrefix(cal.year, cal.month))) : cards.filter(c => taskFilter === 'all' || c.status === taskFilter);
+  const none = taskView === 'cal' ? (calDay ? 'Nothing is due on this day.' : 'Nothing is due this month.') : cards.length ? 'No tasks with this status.' : 'No tasks yet. Press C and click the board to add a task card.';
   $('#tlist').replaceChildren(...(show.length ? show.map(c => {
     const late = c.due && c.due < today() && c.status !== 'done';
     return h('button', { class: 'trow' + (cur === c ? ' on' : ''), onclick: () => { sel = new Set([c.id]); const r = cv.getBoundingClientRect(); cam.x = r.width / 2 - (c.x + c.w / 2) * cam.z; cam.y = r.height / 2 - (c.y + c.h / 2) * cam.z; refresh(); } },
       h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, c.text), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : ''))));
-  }) : [h('p', { class: 'note' }, cards.length ? 'No tasks with this status.' : 'No tasks yet. Press C and click the board to add a task card.')]));
+  }) : [h('p', { class: 'note' }, none)]));
 }
 
 /* ---------- Export ---------- */
@@ -539,7 +583,7 @@ function exportAs(kind) {
   const list = (sel.size ? selEls() : all()), b = bounds(list); if (!b) return toast('Nothing to export yet.');
   const pad = 36, w = Math.ceil(b.w + pad * 2), ht = Math.ceil(b.h + pad * 2), x = Math.floor(b.x - pad), y = Math.floor(b.y - pad);
   const order = sorted().filter(e => list.includes(e));
-  const svg = s('svg', { viewBox: `${x} ${y} ${w} ${ht}`, width: w, height: ht }, s('rect', { x, y, width: w, height: ht, fill: '#ffffff' }), order.map(e => renderEl(e, true)));
+  const svg = s('svg', { viewBox: `${x} ${y} ${w} ${ht}`, width: w, height: ht }, s('rect', { x, y, width: w, height: ht, fill: '#ffffff' }), order.map(e => renderEl(e, rctx(true))));
   const str = new XMLSerializer().serializeToString(svg), name = (meta(board.id).name || 'board').replace(/[^\w\- ]+/g, '').trim() || 'board';
   if (kind === 'svg') return saveFile(name + '.svg', str, 'image/svg+xml');
   const img = new Image(), url = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));

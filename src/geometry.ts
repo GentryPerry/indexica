@@ -1,22 +1,37 @@
-import type { Box, El, Lookup } from './types';
+import { connGeom } from './connectors';
+import { FONTS, type Box, type El, type Lookup } from './types';
 
-export const FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+export { ends } from './connectors';
 
-type Measurer = (text: string, size: number, weight: number) => number;
+export const FONT = FONTS.sans.stack;
+
+export interface TextStyle { size: number; weight: number; family: string; italic: boolean }
+
+type Measurer = (text: string, size: number, weight: number, family: string, italic: boolean) => number;
 let ctx: CanvasRenderingContext2D | null = null;
-let measurer: Measurer = (text, size, weight) => {
+let measurer: Measurer = (text, size, weight, family, italic) => {
   if (!ctx) ctx = document.createElement('canvas').getContext('2d')!;
-  ctx.font = `${weight} ${size}px ${FONT}`;
+  ctx.font = `${italic ? 'italic ' : ''}${weight} ${size}px ${family}`;
   return ctx.measureText(text).width;
 };
 /** Swap the text measurer (tests use a fixed-width one). */
 export function setMeasurer(m: Measurer) { measurer = m; }
-export const measure = (text: string, size: number, weight = 400) => measurer(text, size, weight);
+export const measure = (text: string, size: number, weight = 400, family = FONT, italic = false) => measurer(text, size, weight, family, italic);
+
+const DEFAULTS: Partial<Record<El['type'], [size: number, weight: number]>> = {
+  sticky: [16, 400], text: [18, 400], rect: [15, 400], ellipse: [15, 400], diamond: [15, 400], card: [14, 600], frame: [13, 600], conn: [13, 500],
+};
+
+/** The text style an element is drawn with: its own font choices on top of its type's defaults. */
+export function textStyle(e: El): TextStyle {
+  const [size, weight] = DEFAULTS[e.type] || [15, 400];
+  return { size: e.size || size, weight: e.weight || weight, family: (FONTS[e.font || ''] || FONTS.sans).stack, italic: !!e.italic };
+}
 
 /** Word-wrap text to a pixel width. Long words are split; blank lines are kept. */
-export function wrap(text: string | undefined, maxW: number, size: number, weight = 400): string[] {
+export function wrap(text: string | undefined, maxW: number, size: number, weight = 400, family = FONT, italic = false): string[] {
   const out: string[] = [];
-  const fits = (t: string) => measurer(t, size, weight) <= maxW;
+  const fits = (t: string) => measurer(t, size, weight, family, italic) <= maxW;
   for (const para of String(text || '').split('\n')) {
     let line = '';
     for (let word of para.split(' ')) {
@@ -35,34 +50,10 @@ export function wrap(text: string | undefined, maxW: number, size: number, weigh
   return out;
 }
 
-interface Anchor { x: number; y: number; el?: El }
-
-/** Move point P toward Q until it sits just outside P's own shape. */
-function clipTo(P: Anchor, Q: Anchor): Anchor {
-  const t = P.el;
-  if (!t) return P;
-  const wx = Q.x - P.x, wy = Q.y - P.y;
-  if (!wx && !wy) return P;
-  // Work in the shape's own unrotated frame; the scale factor k is the same in both frames.
-  const r = -(t.rot || 0) * Math.PI / 180;
-  const dx = wx * Math.cos(r) - wy * Math.sin(r), dy = wx * Math.sin(r) + wy * Math.cos(r);
-  const rx = t.w / 2 + 5, ry = t.h / 2 + 5;
-  let k: number;
-  if (t.type === 'ellipse') k = 1 / Math.hypot(dx / rx, dy / ry);
-  else if (t.type === 'diamond') k = 1 / (Math.abs(dx) / rx + Math.abs(dy) / ry);
-  else k = Math.min(dx ? rx / Math.abs(dx) : 1e9, dy ? ry / Math.abs(dy) : 1e9);
-  k = Math.min(k, 1);
-  return { x: P.x + wx * k, y: P.y + wy * k };
-}
-
-/** The two drawn endpoints of a connector, clipped to the edges of what it attaches to. */
-export function ends(c: El, get: Lookup): [Anchor, Anchor] {
-  const anchor = (id: string | null | undefined, x = 0, y = 0): Anchor => {
-    const t = id ? get(id) : undefined;
-    return t ? { x: t.x + t.w / 2, y: t.y + t.h / 2, el: t } : { x, y };
-  };
-  const A = anchor(c.a, c.ax, c.ay), B = anchor(c.b, c.bx, c.by);
-  return [clipTo(A, B), clipTo(B, A)];
+/** Wrap an element's own text in its own style. */
+export function wrapEl(e: El, maxW: number): string[] {
+  const st = textStyle(e);
+  return wrap(e.text, maxW, st.size, st.weight, st.family, st.italic);
 }
 
 /** Axis-aligned box that contains `b` after rotating it `deg` degrees around its center. */
@@ -129,8 +120,9 @@ export function rotateEl(o: El, cx: number, cy: number, deg: number): El {
 
 export function bbox(e: El, get: Lookup): Box {
   if (e.type !== 'conn') return e.rot ? rotatedBox(e, e.rot) : { x: e.x, y: e.y, w: e.w, h: e.h };
-  const [p, q] = ends(e, get);
-  return { x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), w: Math.abs(p.x - q.x), h: Math.abs(p.y - q.y) };
+  const pts = connGeom(e, get).pts;
+  const x = Math.min(...pts.map(p => p.x)), y = Math.min(...pts.map(p => p.y));
+  return { x, y, w: Math.max(...pts.map(p => p.x)) - x, h: Math.max(...pts.map(p => p.y)) - y };
 }
 
 export function bounds(list: El[], get: Lookup): Box | null {
@@ -142,7 +134,8 @@ export function bounds(list: El[], get: Lookup): Box | null {
 
 /** Grow an element's height so its text is never clipped. */
 export function fitText(e: El) {
-  if (e.type === 'sticky') e.h = Math.max(e.h, Math.ceil(wrap(e.text, e.w - 24, 16).length * 20.8 + 24));
-  else if (e.type === 'text') e.h = Math.max(30, Math.ceil(wrap(e.text, e.w - 4, 18).length * 23.4 + 8));
-  else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrap(e.text, e.w - 24, 15).length * 19.5 + 20));
+  const lh = textStyle(e).size * 1.3;
+  if (e.type === 'sticky') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 24));
+  else if (e.type === 'text') e.h = Math.ceil(wrapEl(e, e.w - 4).length * lh + 8);
+  else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
 }
