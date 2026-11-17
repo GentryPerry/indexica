@@ -7,3 +7,5 @@
 - The build must stay a single self-contained `dist/index.html` (it is also published as a Claude artifact). Do not add runtime network dependencies other than Google Fonts.
 - Canvas content uses only the system font stacks in `FONTS` (`types.ts`) so exports match the screen. Do not add web fonts to canvas content.
 - Before committing: `npm test` and `npm run build` must pass.
+- UI follows the Indexica style reference (Claude design artifact "Indexica style"): flat light chrome, Inter for UI text (Bricolage Grotesque only for the wordmark), docked outline (240px) and properties (264px) panels divided by 1px #E3E6EB hairlines, tools in a floating bar at the bottom of the canvas. Only floating pieces get the shadow `0 0 0 1px rgba(23,32,45,.08), 0 4px 14px rgba(23,32,45,.14)`. Colors and sizes live as tokens at the top of `src/styles.css`; use them rather than new values.
+- Chrome stays neutral. Color belongs to board content, task status, and the accent #2447D6.

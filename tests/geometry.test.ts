@@ -52,7 +52,7 @@ describe('fitText', () => {
   it('grows a sticky note so text is not clipped', () => {
     const note = el({ type: 'sticky', w: 124, h: 40, text: 'aaaaaaaaa bbbbbbbbb ccccccccc ddddddddd' });
     fitText(note);
-    expect(note.h).toBe(Math.ceil(4 * 20.8 + 24));
+    expect(note.h).toBe(Math.ceil(4 * 14 * 1.3 + 24));
   });
   it('never shrinks a shape', () => {
     const box = el({ h: 200, text: 'hi' });
@@ -167,7 +167,7 @@ describe('scaling a selection', () => {
     expect([r.x, r.y, r.w, r.h]).toEqual([200, 100, 80, 40]);
   });
   it('text grows with its note', () => {
-    expect(scaleEl(el({ type: 'sticky' }), 0, 0, 1.5).size).toBe(24);
+    expect(scaleEl(el({ type: 'sticky' }), 0, 0, 1.5).size).toBe(21);
     expect(scaleEl(el({ type: 'sticky', size: 20 }), 0, 0, 0.5).size).toBe(10);
     expect(scaleEl(el({ type: 'card' }), 0, 0, 2).size).toBeUndefined();
   });

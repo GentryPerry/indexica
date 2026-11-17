@@ -88,6 +88,6 @@ export const FONTS: Record<string, { label: string; stack: string }> = {
   mono: { label: 'Mono', stack: 'ui-monospace,"SF Mono",Menlo,Consolas,monospace' },
   type: { label: 'Typewriter', stack: '"Courier New",Courier,monospace' },
 };
-export const WEIGHTS: [number, string][] = [[300, 'Light'], [400, 'Regular'], [600, 'Semibold'], [700, 'Bold'], [900, 'Black']];
+export const WEIGHTS: [number, string][] = [[300, 'Light'], [400, 'Regular'], [500, 'Medium'], [600, 'Semibold'], [700, 'Bold'], [900, 'Black']];
 export const SIZES = [12, 14, 16, 18, 24, 32, 48, 64];
 export const TEXT_COLORS: [string, string][] = [['#1d2530', 'Black'], ['#5d697c', 'Gray'], ['#e5484d', 'Red'], ['#f76b15', 'Orange'], ['#2a9460', 'Green'], ['#2f6fed', 'Blue'], ['#8e4ec6', 'Purple'], ['#e0409a', 'Pink'], ['#ffffff', 'White']];

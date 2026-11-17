@@ -19,7 +19,7 @@ export function setMeasurer(m: Measurer) { measurer = m; }
 export const measure = (text: string, size: number, weight = 400, family = FONT, italic = false) => measurer(text, size, weight, family, italic);
 
 const DEFAULTS: Partial<Record<El['type'], [size: number, weight: number]>> = {
-  sticky: [16, 400], text: [18, 400], rect: [15, 400], ellipse: [15, 400], diamond: [15, 400], card: [14, 600], frame: [13, 600], conn: [13, 500],
+  sticky: [14, 400], text: [18, 400], rect: [15, 400], ellipse: [15, 400], diamond: [15, 400], card: [13, 600], frame: [11, 500], conn: [13, 500],
 };
 
 /** The text style an element is drawn with: its own font choices on top of its type's defaults. */

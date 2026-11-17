@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barPosition, miniFit, miniToWorld, union } from '../src/layout';
+import { miniFit, miniToWorld, union } from '../src/layout';
 import { groupTasks } from '../src/tasks';
 import type { El } from '../src/types';
 
@@ -17,23 +17,6 @@ describe('minimap', () => {
   });
   it('union covers both boxes', () => {
     expect(union({ x: 0, y: 0, w: 10, h: 10 }, { x: -5, y: 5, w: 10, h: 20 })).toEqual({ x: -5, y: 0, w: 15, h: 25 });
-  });
-});
-
-describe('selection toolbar position', () => {
-  const stage = { w: 1000, h: 600 }, bar = { w: 300, h: 40 };
-  it('sits centered above the selection', () => {
-    expect(barPosition({ x: 400, y: 300, w: 200, h: 100 }, bar, stage)).toEqual({ left: 350, top: 216 });
-  });
-  it('drops below when there is no room above', () => {
-    expect(barPosition({ x: 400, y: 30, w: 200, h: 100 }, bar, stage).top).toBe(146);
-  });
-  it('stays inside the left and right edges', () => {
-    expect(barPosition({ x: -50, y: 300, w: 20, h: 20 }, bar, stage).left).toBe(8);
-    expect(barPosition({ x: 990, y: 300, w: 20, h: 20 }, bar, stage).left).toBe(692);
-  });
-  it('pins to the top when the selection fills the screen', () => {
-    expect(barPosition({ x: 0, y: -20, w: 1000, h: 700 }, bar, stage).top).toBe(8);
   });
 });
 

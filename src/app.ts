@@ -9,7 +9,8 @@ import { kick, step, still, atRest } from './cable';
 import { renderEl } from './render';
 import { STICKERS, TAPES } from './stickers';
 import { monthGrid, shiftMonth, monthPrefix } from './calendar';
-import { barPosition, miniFit, miniToWorld, union } from './layout';
+import { miniFit, miniToWorld, union } from './layout';
+import { outlineRows, TYPE_NAMES } from './outline';
 import { groupTasks } from './tasks';
 import * as G from './geometry';
 import { Store } from './store';
@@ -60,62 +61,101 @@ function thumbSvg(t) {
   if (!t || !t.length) return s('svg', { viewBox: '0 0 10 10' });
   const x0 = Math.min(...t.map(r => r[0])), y0 = Math.min(...t.map(r => r[1]));
   const x1 = Math.max(...t.map(r => r[0] + r[2])), y1 = Math.max(...t.map(r => r[1] + r[3]));
-  const pad = Math.max(x1 - x0, y1 - y0) * 0.06 + 10;
+  const pad = Math.max(x1 - x0, y1 - y0) * 0.08 + 10;
   return s('svg', { viewBox: `${x0 - pad} ${y0 - pad} ${x1 - x0 + pad * 2} ${y1 - y0 + pad * 2}`, 'aria-hidden': 'true' },
-    t.map(r => s('rect', { x: r[0], y: r[1], width: r[2], height: r[3], rx: 4, fill: r[4] || 'none', stroke: r[4] ? 'rgba(0,0,0,.18)' : '#9aa8c4', 'stroke-width': 2, 'vector-effect': 'non-scaling-stroke' })));
+    t.map(r => s('rect', { x: r[0], y: r[1], width: r[2], height: r[3], rx: r[4] ? 2 : 0, fill: r[4] || '#ffffff', stroke: r[4] ? 'none' : '#d3d8e0', 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' })));
+}
+
+/* ---------- Shared chrome pieces ---------- */
+const STAR = 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z';
+const LOCK = 'M6.5 9V7a3.5 3.5 0 0 1 7 0v2M5 9h10v8H5z';
+const icon = (d, size = 14, extra = {}) => s('svg', { width: size, height: size, viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', ...extra }, s('path', { d }));
+const logo = () => h('span', { class: 'logo', 'aria-hidden': 'true' }, s('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', stroke: '#ffffff', 'stroke-width': 1.6, 'stroke-linecap': 'round' }, s('path', { d: 'M4 2v10M10 2v10M2 4h10M2 10h10' })));
+const fmtDate = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+function closeMenu() { const m = $('#menu'); if (m) m.remove(); }
+/** A menu of [label, action, class] items at a screen point. '-' draws a divider; null items are skipped. */
+function popupAt(x, y, items, alignRight = false) {
+  closeMenu();
+  const list = items.filter(Boolean).filter((it, i, a) => it !== '-' || (i > 0 && i < a.length - 1 && a[i - 1] !== '-'));
+  const m = h('div', { class: 'menu', id: 'menu', role: 'menu' }, list.map(it => it === '-' ? h('hr') : h('button', { class: it[2] || '', role: 'menuitem', onclick: () => { closeMenu(); it[1](); } }, it[0])));
+  document.body.append(m);
+  const left = alignRight ? x - m.offsetWidth : x;
+  m.style.left = Math.max(4, Math.min(left, innerWidth - m.offsetWidth - 6)) + 'px';
+  m.style.top = Math.max(4, Math.min(y, innerHeight - m.offsetHeight - 6)) + 'px';
+  const first = m.querySelector('button'); if (first) first.focus({ preventScroll: true });
+}
+function popup(anchor, items) { const r = anchor.getBoundingClientRect(); popupAt(r.right, r.bottom + 4, items, true); }
+/** Arrow keys move through an open menu and Esc closes it. Returns true when the key was used. */
+function menuKeys(ev) {
+  const menu = $('#menu'); if (!menu) return false;
+  const items = [...menu.querySelectorAll('button')], i = items.indexOf(document.activeElement);
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); items[(i + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus(); return true; }
+  if (ev.key === 'Escape') { ev.preventDefault(); closeMenu(); return true; }
+  if (ev.key === 'Tab') closeMenu();
+  return false;
 }
 
 /* ---------- Home ---------- */
 function renderHome() {
-  board = null;
+  board = null; closeMenu();
   const live = index.boards.filter(b => !b.trashed);
   const count = f => f === 'trash' ? index.boards.length - live.length : f === 'all' ? live.length : f === 'fav' ? live.filter(b => b.fav).length : live.filter(b => b.projectId === f).length;
-  const nav = (f, label) => h('button', { class: 'nav' + (home.filter === f ? ' on' : ''), onclick: () => { home.filter = f; home.rename = null; renderHome(); } }, label, h('span', null, String(count(f))));
+  const nav = (f, label) => h('button', { class: 'nav' + (home.filter === f ? ' on' : ''), 'aria-current': home.filter === f ? 'page' : null, onclick: () => { home.filter = f; home.rename = null; renderHome(); } }, h('span', { class: 'nav-l' }, label), h('span', { class: 'num' }, String(count(f))));
   const proj = index.projects.find(p => p.id === home.filter);
   const q = home.q.trim().toLowerCase();
-  const list = index.boards.filter(b => (home.filter === 'trash' ? b.trashed : !b.trashed && (home.filter === 'all' || (home.filter === 'fav' ? b.fav : b.projectId === home.filter))) && (!q || b.name.toLowerCase().includes(q)))
-    .sort((a, b) => b.updated - a.updated);
+  const sorter = { edited: (a, b) => b.updated - a.updated, created: (a, b) => b.created - a.created, name: (a, b) => a.name.localeCompare(b.name) }[home.sort || 'edited'];
+  const list = index.boards.filter(b => (home.filter === 'trash' ? b.trashed : !b.trashed && (home.filter === 'all' || (home.filter === 'fav' ? b.fav : b.projectId === home.filter))) && (!q || b.name.toLowerCase().includes(q))).sort(sorter);
   const [sc, st] = statParts();
+  const addProject = name => { const p = { id: uid('p'), name }; index.projects.push(p); home.filter = p.id; home.newProj = false; saveIndex(); renderHome(); };
   const title = proj
-    ? h('input', { class: 'title', id: 'proj-name', type: 'text', value: proj.name, 'aria-label': 'Project name', onchange: e => { proj.name = e.target.value.trim() || proj.name; saveIndex(); renderHome(); } })
-    : h('h1', null, home.filter === 'fav' ? 'Favorites' : home.filter === 'trash' ? 'Trash' : 'All boards');
+    ? h('input', { class: 'h-title', id: 'proj-name', type: 'text', value: proj.name, 'aria-label': 'Project name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onchange: e => { proj.name = e.target.value.trim() || proj.name; saveIndex(); renderHome(); } })
+    : h('h1', { class: 'h-title' }, home.filter === 'fav' ? 'Favorites' : home.filter === 'trash' ? 'Trash' : 'All boards');
   $('#app').replaceChildren(h('div', { class: 'home' },
-    h('aside', { class: 'side' },
-      h('div', { class: 'brand' }, 'Index', h('i', null, 'ica')),
-      nav('all', 'All boards'), nav('fav', 'Favorites'),
-      h('div', { class: 'side-h' }, 'Projects'),
+    h('nav', { class: 'lib', 'aria-label': 'Library' },
+      h('div', { class: 'brand' }, logo(), h('span', { class: 'word' }, 'Indexica')),
+      h('input', { type: 'search', id: 'board-search', class: 'search', placeholder: 'Search boards', 'aria-label': 'Search boards', value: home.q, oninput: e => { home.q = e.target.value; renderHome(); const i = $('#board-search'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }),
+      nav('all', 'All boards'), nav('fav', 'Favorites'), nav('trash', 'Trash'),
+      h('div', { class: 'lib-h' }, 'Projects', h('button', { class: 'icon-btn sm', title: 'New project', 'aria-label': 'New project', onclick: () => { home.newProj = true; renderHome(); $('#new-project').focus(); } }, icon('M10 4v12M4 10h12', 12))),
+      home.newProj ? h('input', { type: 'text', id: 'new-project', class: 'inp', placeholder: 'Project name', 'aria-label': 'New project name',
+        onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) addProject(e.target.value.trim()); else if (e.key === 'Escape') { home.newProj = false; renderHome(); } },
+        onblur: e => { if (!e.target.value.trim() && home.newProj) { home.newProj = false; renderHome(); } } }) : null,
       index.projects.map(p => nav(p.id, p.name)),
-      h('input', { type: 'text', id: 'new-project', placeholder: 'New project name', 'aria-label': 'New project name', onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) { const p = { id: uid('p'), name: e.target.value.trim() }; index.projects.push(p); home.filter = p.id; saveIndex(); renderHome(); } } }),
-      h('div', { class: 'grow' }), nav('trash', 'Trash'),
-      h('div', { class: 'note', id: 'stat' }, h('span', { class: 'dot ' + sc }), st)),
-    h('main', { class: 'main' },
-      h('div', { class: 'head' }, title,
-        h('input', { type: 'search', id: 'board-search', placeholder: 'Search boards', 'aria-label': 'Search boards', value: home.q, oninput: e => { home.q = e.target.value; renderHome(); const i = $('#board-search'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }),
-        proj && h('button', { onclick: () => { index.boards.forEach(b => { if (b.projectId === proj.id) b.projectId = ''; }); index.projects = index.projects.filter(p => p !== proj); home.filter = 'all'; saveIndex(); renderHome(); toast('Project deleted. Its boards are in All boards.'); } }, 'Delete project'),
-        home.filter !== 'trash' && h('button', { class: 'primary', onclick: newBoard }, 'New board')),
-      list.length ? h('div', { class: 'grid' }, list.map(boardCard))
+      !index.projects.length && !home.newProj ? h('p', { class: 'lib-empty' }, 'No projects yet.') : null,
+      h('div', { class: 'grow' }),
+      h('div', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st)),
+    h('main', { class: 'lib-main' },
+      h('header', { class: 'lib-top' }, title,
+        proj ? h('button', { class: 'btn danger-t', onclick: () => { index.boards.forEach(b => { if (b.projectId === proj.id) b.projectId = ''; }); index.projects = index.projects.filter(p => p !== proj); home.filter = 'all'; saveIndex(); renderHome(); toast('Project deleted. Its boards are in All boards.'); } }, 'Delete project') : null,
+        home.filter !== 'trash' ? h('select', { class: 'sel ghost', id: 'sort', 'aria-label': 'Sort boards', value: home.sort || 'edited', onchange: e => { home.sort = e.target.value; renderHome(); } },
+          h('option', { value: 'edited' }, 'Last edited'), h('option', { value: 'created' }, 'Date created'), h('option', { value: 'name' }, 'Name')) : null,
+        home.filter !== 'trash' ? h('button', { class: 'btn primary', onclick: newBoard }, 'New board') : null),
+      list.length ? h('div', { class: 'cards' }, list.map(boardCard))
         : h('p', { class: 'empty' }, q ? 'No boards match that search.' : home.filter === 'trash' ? 'Trash is empty.' : 'No boards here yet. Select New board to start one.'))));
 }
 function boardCard(b) {
   const p = index.projects.find(x => x.id === b.projectId);
-  const act = (label, fn, cls) => h('button', { class: cls, onclick: () => { fn(); saveIndex(); renderHome(); } }, label);
   const name = home.rename === b.id
-    ? h('input', { type: 'text', id: 'rename-' + b.id, value: b.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onblur: e => { b.name = e.target.value.trim() || b.name; home.rename = null; saveIndex(); renderHome(); } })
-    : b.name;
-  const card = h('div', { class: 'card' },
-    h('button', { class: 'thumb', 'aria-label': 'Open ' + b.name, disabled: b.trashed, onclick: () => openBoard(b.id) }, thumbSvg(b.thumb)),
-    h('div', { class: 'body' },
-      h('div', { class: 'name' }, name),
-      h('div', { class: 'meta' }, (p ? p.name : 'No project') + ' · edited ' + new Date(b.updated).toLocaleDateString()),
-      h('div', { class: 'acts' }, b.trashed
-        ? [act('Restore', () => { b.trashed = false; }), act('Delete forever', () => { index.boards = index.boards.filter(x => x !== b); Store.del('b_' + b.id); (b.imgs || []).filter(i => !index.boards.some(x => (x.imgs || []).includes(i))).forEach(i => Store.del('img_' + i)); }, 'danger')]
-        : [act(b.fav ? 'Favorited' : 'Favorite', () => { b.fav = !b.fav; }, b.fav ? 'fav-on' : ''),
-           h('button', { onclick: () => { home.rename = b.id; renderHome(); const i = $('#rename-' + b.id); i.focus(); i.select(); } }, 'Rename'),
-           h('button', { onclick: () => dupBoard(b) }, 'Duplicate'),
-           h('select', { id: 'move-' + b.id, 'aria-label': 'Move to project', value: b.projectId || '', onchange: e => { b.projectId = e.target.value; saveIndex(); renderHome(); } },
-             h('option', { value: '' }, 'No project'), index.projects.map(x => h('option', { value: x.id }, x.name))),
-           act('Trash', () => { b.trashed = true; })])));
-  return card;
+    ? h('input', { class: 'inp', type: 'text', id: 'rename-' + b.id, value: b.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { home.rename = null; renderHome(); } }, onblur: e => { if (home.rename !== b.id) return; b.name = e.target.value.trim() || b.name; home.rename = null; saveIndex(); renderHome(); } })
+    : h('div', { class: 'c-name' }, b.name);
+  return h('div', { class: 'card' + (b.trashed ? ' gone' : '') },
+    h('button', { class: 'thumb', 'aria-label': b.trashed ? b.name + ', in Trash' : 'Open ' + b.name, disabled: b.trashed, onclick: () => openBoard(b.id) }, thumbSvg(b.thumb)),
+    h('div', { class: 'c-row' },
+      h('div', { class: 'c-text' }, name, h('div', { class: 'meta' }, (p ? p.name : 'No project') + ' · Edited ' + fmtDate(b.updated))),
+      b.trashed ? null : h('button', { class: 'icon-btn sm star' + (b.fav ? ' on' : ''), title: b.fav ? 'Remove from favorites' : 'Add to favorites', 'aria-label': b.fav ? 'Remove from favorites' : 'Add to favorites', 'aria-pressed': String(!!b.fav), onclick: () => { b.fav = !b.fav; saveIndex(); renderHome(); } }, icon(STAR, 14, b.fav ? { fill: 'currentColor' } : {})),
+      h('button', { class: 'icon-btn sm more', title: 'More', 'aria-label': 'More actions for ' + b.name, 'aria-haspopup': 'menu', onclick: e => cardMenu(b, e.currentTarget) }, icon('M4.5 10h.01M10 10h.01M15.5 10h.01', 14, { 'stroke-width': 2.6 }))));
+}
+function cardMenu(b, anchor) {
+  const done = fn => () => { fn(); saveIndex(); renderHome(); };
+  popup(anchor, b.trashed ? [
+    ['Restore', done(() => { b.trashed = false; })],
+    ['Delete forever', done(() => { index.boards = index.boards.filter(x => x !== b); Store.del('b_' + b.id); (b.imgs || []).filter(i => !index.boards.some(x => (x.imgs || []).includes(i))).forEach(i => Store.del('img_' + i)); }), 'danger']]
+  : [['Open', () => openBoard(b.id)],
+    ['Rename', () => { home.rename = b.id; renderHome(); const i = $('#rename-' + b.id); i.focus(); i.select(); }],
+    ['Duplicate', () => dupBoard(b)], '-',
+    ...index.projects.filter(x => x.id !== b.projectId).map(x => ['Move to ' + x.name, done(() => { b.projectId = x.id; })]),
+    b.projectId ? ['Remove from project', done(() => { b.projectId = ''; })] : null, '-',
+    ['Move to Trash', done(() => { b.trashed = true; }), 'danger']]);
 }
 function newBoard() {
   const b = { id: uid('b'), name: 'Untitled board', projectId: index.projects.some(p => p.id === home.filter) ? home.filter : '', fav: false, trashed: false, created: Date.now(), updated: Date.now(), thumb: [] };
@@ -132,7 +172,7 @@ let board = null;
 const hist = new History();
 let cam = { x: 0, y: 0, z: 1 }, tool = 'select', sel = new Set(), editing = null, clip = [];
 let mode = null, spaceDown = false, lastDown = { t: 0, x: 0, y: 0 }, saveT = 0;
-let tasksOpen = true, taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
+let rightTab = 'design', panelHold = false, fieldSync = [], outlineSig = '', outlineKey = '', taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
 let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight';
 let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = null;
@@ -222,18 +262,18 @@ function draw() {
   C = { ink: v('--ink'), muted: v('--muted'), accent: v('--accent'), canvas: v('--canvas'), frame: v('--frame'), frameLine: v('--frame-line') };
   trackCables();
   const t = `translate(${cam.x},${cam.y}) scale(${cam.z})`;
-  vp.setAttribute('transform', t); ov.setAttribute('transform', t); $('#dots').setAttribute('patternTransform', t);
+  vp.setAttribute('transform', t); ov.setAttribute('transform', t);
   const rc = rctx(false); vp.replaceChildren(...sorted().map(e => renderEl(e, rc)));
   drawOverlay();
-  const zv = $('#zoomv'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
-  drawMini(); placeCtx();
+  const zv = $('#zoomt'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
+  drawMini();
 }
 function centerOn(e) { const r = cv.getBoundingClientRect(), b = bbox(e); cam.x = r.width / 2 - (b.x + b.w / 2) * cam.z; cam.y = r.height / 2 - (b.y + b.h / 2) * cam.z; }
 function drawMini() {
   const el = $('#mini'); if (!el || !mini) return; el.hidden = !miniOn || kanban; if (el.hidden) return;
   const r = cv.getBoundingClientRect(), view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z }, content = bounds(all());
   // While the map is being dragged the scale is frozen, so the board does not slide under the pointer.
-  if (!miniDrag || !miniState) miniState = miniFit(content ? union(content, view) : view, 180, 120);
+  if (!miniDrag || !miniState) miniState = miniFit(content ? union(content, view) : view, 144, 96);
   const m = miniState, box = b => ({ x: b.x * m.k + m.ox, y: b.y * m.k + m.oy, width: Math.max(b.w * m.k, 1.5), height: Math.max(b.h * m.k, 1.5) });
   mini.replaceChildren(
     ...sorted().filter(e => e.type !== 'conn' && e.type !== 'pen').map(e => s('rect', { ...box(bbox(e)), rx: 1,
@@ -244,44 +284,52 @@ function miniGo(ev) {
   const r = mini.getBoundingClientRect(), w = miniToWorld(miniState, ev.clientX - r.left, ev.clientY - r.top), st = cv.getBoundingClientRect();
   cam.x = st.width / 2 - w.x * cam.z; cam.y = st.height / 2 - w.y * cam.z; draw(); placeEditor();
 }
-function placeCtx() {
-  const el = $('#ctx'); if (!el || el.hidden) return; const b = bounds(selEls()); if (!b) return;
-  const r = cv.getBoundingClientRect(), pos = barPosition({ x: cam.x + b.x * cam.z, y: cam.y + b.y * cam.z, w: b.w * cam.z, h: b.h * cam.z }, { w: el.offsetWidth, h: el.offsetHeight }, { w: r.width, h: r.height });
-  el.style.left = pos.left + 'px'; el.style.top = pos.top + 'px';
-}
 function rotateHandle(mx, top, col, k) {
-  return [s('line', { x1: mx, y1: top, x2: mx, y2: top - 23 * k, stroke: col, 'stroke-width': k, 'pointer-events': 'none' }),
-    s('circle', { 'data-h': 'rot', cx: mx, cy: top - 23 * k, r: 5.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)'))];
+  return [s('line', { x1: mx, y1: top, x2: mx, y2: top - 18 * k, stroke: col, 'stroke-width': k, 'pointer-events': 'none' }),
+    s('circle', { 'data-h': 'rot', cx: mx, cy: top - 18 * k, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)'))];
+}
+const handleSq = (n, x, y, r, k, cur, title) => s('rect', { 'data-h': n, x: x - r, y: y - r, width: r * 2, height: r * 2, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }, title ? s('title', null, title) : null);
+/** The blue width-by-height badge under a selection. */
+function sizeBadge(b, w, ht, k) {
+  const label = `${Math.round(w)} × ${Math.round(ht)}`, tw = (G.measure(label, 11, 500) + 14) * k, y = b.y + b.h + 8 * k;
+  return s('g', { 'pointer-events': 'none' },
+    s('rect', { x: b.x + b.w / 2 - tw / 2, y, width: tw, height: 18 * k, rx: 4 * k, fill: C.accent }),
+    s('text', { x: b.x + b.w / 2, y: y + 12.6 * k, 'font-size': 11 * k, 'font-weight': 500, 'font-family': 'Inter,system-ui,sans-serif', fill: '#ffffff', 'text-anchor': 'middle' }, label));
 }
 function drawOverlay(extra) {
-  const k = 1 / cam.z, list = selEls(), out = [];
+  const k = 1 / cam.z, list = selEls(), out = [], solo = list.length === 1 && !editing;
   for (const e of list) {
-    const b = e.type === 'conn' ? bbox(e) : e, col = e.locked ? '#d64545' : C.accent;
-    const g = s('g', { transform: e.rot && e.type !== 'conn' ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null },
-      s('rect', { x: b.x - 3 * k, y: b.y - 3 * k, width: b.w + 6 * k, height: b.h + 6 * k, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
-    if (list.length === 1 && !e.locked && e.type !== 'conn' && !editing) {
+    const col = e.locked ? '#b93232' : C.accent;
+    if (e.type === 'conn') {
+      const gm = connGeom(e, E);
+      out.push(s('path', { d: gm.d, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-opacity': 0.6, 'pointer-events': 'none' }));
+      if (solo && !e.locked && !(mode && mode.k === 'connEnd')) for (const [n, at] of [['ca', gm.p], ['cb', gm.q]]) out.push(s('circle', { 'data-h': n, cx: at.x, cy: at.y, r: 5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:move' }, s('title', null, 'Drag to re-attach this end')));
+      continue;
+    }
+    const g = s('g', { transform: e.rot ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null },
+      s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
+    if (solo && !e.locked) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
-      g.append(...rotateHandle(mx, e.y - 3 * k, col, k));
-      if (BOXY.includes(e.type)) for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew'], ['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) {
-        const r = (n.length === 1 ? 4 : 5) * k;
-        g.append(s('rect', { 'data-h': n, x: px - r, y: py - r, width: r * 2, height: r * 2, rx: n.length === 1 ? r : 0, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }));
+      g.append(...rotateHandle(mx, e.y, col, k));
+      if (BOXY.includes(e.type)) {
+        for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew']]) g.append(handleSq(n, px, py, 3 * k, k, cur));
+        for (const [n, px, py, cur] of [['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) g.append(handleSq(n, px, py, 4 * k, k, cur));
       }
     }
-    if (list.length === 1 && !e.locked && e.type === 'conn' && !editing && !(mode && mode.k === 'connEnd')) {
-      const gm = connGeom(e, E);
-      for (const [n, at] of [['ca', gm.p], ['cb', gm.q]]) g.append(s('circle', { 'data-h': n, cx: at.x, cy: at.y, r: 6 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:move' }, s('title', null, 'Drag to re-attach this end')));
-    }
     out.push(g);
+    if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k));
   }
-  // Several pieces selected: one dashed box around them all, with a handle that turns the whole selection.
+  // Several pieces selected: one box around them all, with handles that turn or scale the whole selection.
   const free = list.filter(e => !e.locked);
   if (list.length > 1 && free.filter(e => e.type !== 'conn').length > 1 && !editing) {
-    const turning = mode && mode.k === 'grotate' ? mode : null, b = turning ? turning.box0 : bounds(free), mx = b.x + b.w / 2, pad = 9 * k;
-    out.push(s('g', { transform: turning && turning.ang ? `rotate(${turning.ang} ${mx} ${b.y + b.h / 2})` : null },
-      s('rect', { x: b.x - pad, y: b.y - pad, width: b.w + pad * 2, height: b.h + pad * 2, fill: 'none', stroke: C.accent, 'stroke-width': k, 'stroke-dasharray': `${5 * k} ${4 * k}`, 'pointer-events': 'none' }),
-      rotateHandle(mx, b.y - pad, C.accent, k),
-      turning ? [] : [['nw', b.x - pad, b.y - pad, 'nwse'], ['ne', b.x + b.w + pad, b.y - pad, 'nesw'], ['sw', b.x - pad, b.y + b.h + pad, 'nesw'], ['se', b.x + b.w + pad, b.y + b.h + pad, 'nwse']].map(([n, px, py, cur]) =>
-        s('rect', { 'data-h': 'gs-' + n, x: px - 5 * k, y: py - 5 * k, width: 10 * k, height: 10 * k, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }, s('title', null, 'Drag to resize the whole selection')))));
+    const turning = mode && mode.k === 'grotate' ? mode : null, b = turning ? turning.box0 : bounds(free), pad = 6 * k;
+    const box = { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 };
+    out.push(s('g', { transform: turning && turning.ang ? `rotate(${turning.ang} ${b.x + b.w / 2} ${b.y + b.h / 2})` : null },
+      s('rect', { x: box.x, y: box.y, width: box.w, height: box.h, fill: 'none', stroke: C.accent, 'stroke-width': k, 'pointer-events': 'none' }),
+      rotateHandle(box.x + box.w / 2, box.y, C.accent, k),
+      turning ? [] : [['nw', box.x, box.y, 'nwse'], ['ne', box.x + box.w, box.y, 'nesw'], ['sw', box.x, box.y + box.h, 'nesw'], ['se', box.x + box.w, box.y + box.h, 'nwse']]
+        .map(([n, px, py, cur]) => handleSq('gs-' + n, px, py, 4 * k, k, cur, 'Drag to resize the whole selection'))));
+    if (!turning) out.push(sizeBadge(box, b.w, b.h, k));
   }
   if (extra) out.push(extra);
   ov.replaceChildren(...out);
@@ -298,9 +346,9 @@ function guideMarks(guides) {
   return s('g', { 'pointer-events': 'none' }, guides.map(g => s('line', { ...(g.axis === 'x' ? { x1: g.pos, x2: g.pos, y1: g.from, y2: g.to } : { y1: g.pos, y2: g.pos, x1: g.from, x2: g.to }), stroke: '#e0409a', 'stroke-width': k })));
 }
 function refresh() {
-  draw(); renderCtx(); renderTasks(); renderFly(); renderKanban(); renderFrames();
+  draw(); renderRight(); renderOutline(); renderFly(); renderKanban();
   const u = $('#undo'), r = $('#redo'); if (u) { u.disabled = !hist.undo.length; r.disabled = !hist.redo.length; }
-  document.querySelectorAll('.tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === tool));
+  document.querySelectorAll('.toolbar button').forEach(b => { const on = b.dataset.tool === tool; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
 }
 
 /* ---------- Actions ---------- */
@@ -341,8 +389,8 @@ function addTask(status) {
   const cards = all().filter(e => e.type === 'card'), r = cv.getBoundingClientRect();
   const x = cards.length ? Math.min(...cards.map(c => c.x)) : Math.round((r.width / 2 - cam.x) / cam.z - 120), y = cards.length ? Math.max(...cards.map(c => c.y + c.h)) + 20 : Math.round((r.height / 2 - cam.y) / cam.z - 50);
   const e = { id: uid('e'), type: 'card', z: topZ() + 1, x, y, w: 240, h: 100, text: 'New task', status, due: '', notes: '' };
-  board.els[e.id] = e; sel = new Set([e.id]); tasksOpen = true; edFor = null; commit();
-  const title = $('#task-title'); if (title) { title.focus(); title.select(); }
+  board.els[e.id] = e; sel = new Set([e.id]); rightTab = 'design'; edFor = null; commit();
+  const title = $('#d-task-title'); if (title) { title.focus(); title.select(); }
 }
 function align(kind) {
   const list = selEls().filter(e => !e.locked && e.type !== 'conn'), b = bounds(list); if (!b || list.length < 2) return;
@@ -399,7 +447,7 @@ function makeBox(type, x, y, w, ht) {
 function placeEditor() {
   const ed = $('#ed'), e = editing && E(editing); if (!e) return;
   const z = cam.z, st = G.textStyle(e), lab = e.type === 'conn' ? connGeom(e, E).label : null, centered = !!lab || ['rect', 'ellipse', 'diamond'].includes(e.type);
-  const box = lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 10, e.y + 6, e.w - 20, 46] : e.type === 'frame' ? [e.x, e.y - 28, Math.max(e.w, 160), 24]
+  const box = lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 12, e.y + 4, e.w - 20, 44] : e.type === 'frame' ? [e.x - 2, e.y - 22, Math.max(e.w, 160), 20]
     : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
@@ -529,6 +577,7 @@ function onUp(ev) {
   }
 }
 function onKey(ev) {
+  if (menuKeys(ev)) return;
   if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT');
   if (typing || (tgt && tgt.tagName === 'BUTTON' && (ev.key === 'Enter' || ev.key === ' '))) return;
   const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let done = true;
@@ -563,43 +612,51 @@ function onKey(ev) {
 const ICON = { select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
   diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z', image: 'M3 4h14v12H3zM3 13.5l4-4 3 3 2.5-2 4.5 4M13.2 7.6a.6.6 0 1 0 .01 0' };
 const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
+const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'conn', 'pen', '|', 'card', 'frame', 'stamp', 'image'];
 async function openBoard(id) {
   const m = meta(id); if (!m) return;
-  $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
+  closeMenu(); $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
   const data = await Store.get('b_' + id) || { els: {} };
-  board = { id, els: data.els || {} }; hist.reset(board.els); mids.clear(); sways.clear(); kanban = false; miniState = null;
-  sel = new Set(); tool = 'select'; editing = null; edFor = null; taskFilter = 'all'; tasksOpen = window.innerWidth > 800;
-  const [sc, st] = statParts();
-  const menu = (id2, label, opts, fn) => h('select', { id: id2, 'aria-label': label, onchange: e => { const v = e.target.value; e.target.value = ''; if (v) fn(v); } }, h('option', { value: '' }, label), opts.map(o => h('option', { value: o[0] }, o[1])));
+  board = { id, els: data.els || {} }; hist.reset(board.els); mids.clear(); sways.clear(); kanban = false; miniState = null; outlineSig = ''; outlineKey = '';
+  sel = new Set(); tool = 'select'; editing = null; edFor = null; taskFilter = 'all'; rightTab = 'design';
+  const proj = index.projects.find(p => p.id === m.projectId), [sc, st] = statParts(), label = Object.fromEntries(TOOLS);
+  const tab = (k, text) => h('button', { role: 'tab', id: 'tab-' + k, 'aria-controls': 'p' + k, onclick: () => { rightTab = k; edFor = null; renderRight(); } }, text);
   $('#app').replaceChildren(h('div', { class: 'board' },
-    h('header', { class: 'top' },
-      h('button', { onclick: () => { if (editing) endEdit(); saveNow(); renderHome(); } }, 'All boards'),
-      h('input', { class: 'bname', id: 'board-name', type: 'text', value: m.name, 'aria-label': 'Board name', onchange: e => { m.name = e.target.value.trim() || m.name; e.target.value = m.name; saveIndex(); } }),
-      h('div', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st),
-      h('button', { id: 'undo', title: 'Undo (Ctrl+Z)', onclick: () => travel('undo') }, 'Undo'),
-      h('button', { id: 'redo', title: 'Redo (Ctrl+Shift+Z)', onclick: () => travel('redo') }, 'Redo'),
-      h('button', { title: 'Zoom out', 'aria-label': 'Zoom out', onclick: () => zoomAt(1 / 1.2) }, '−'),
-      h('button', { class: 'zoomv', id: 'zoomv', title: 'Reset to 100%', onclick: () => zoomAt(1 / cam.z) }, '100%'),
-      h('button', { title: 'Zoom in', 'aria-label': 'Zoom in', onclick: () => zoomAt(1.2) }, '+'),
-      h('button', { title: 'Fit everything (Shift+1)', onclick: () => fit() }, 'Fit'),
-      h('select', { id: 'frames', 'aria-label': 'Jump to frame', hidden: true, onchange: e => { const f = E(e.target.value); e.target.value = ''; if (f) { kanban = false; fit([f]); refresh(); } } }),
-      menu('export', 'Export', [['png', 'PNG image'], ['svg', 'SVG vector']], exportAs),
-      h('button', { id: 'tasks-toggle', onclick: () => { tasksOpen = !tasksOpen; edFor = null; renderTasks(); } }, 'Tasks'),
-      h('button', { id: 'kanban-toggle', title: 'Show tasks as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
-      h('button', { title: 'Keyboard shortcuts (?)', onclick: toggleHelp }, 'Keys')),
-    h('div', { class: 'work' },
-      h('nav', { class: 'tools', 'aria-label': 'Tools' }, TOOLS.map(([t, label]) => h('button', { 'data-tool': t, title: label, 'aria-label': label, onclick: () => { if (t === 'image') $('#img-file').click(); else { tool = t; refresh(); } } }, s('svg', { viewBox: '0 0 20 20' }, s('path', { d: ICON[t] }))))),
-      h('div', { class: 'stage' }, h('div', { class: 'ctx', id: 'ctx', hidden: true }), h('div', { class: 'fly', id: 'fly', hidden: true }), h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }), h('div', { class: 'kan', id: 'kan', hidden: true }),
-        h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { for (const f of [...e.target.files]) await addImage(f); e.target.value = ''; } }),
-        h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
-      h('aside', { class: 'tasks', id: 'tasks', 'aria-label': 'Tasks' }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
+    h('aside', { class: 'outline', 'aria-label': 'Outline' },
+      h('div', { class: 'o-head' },
+        h('button', { class: 'back', onclick: () => { if (editing) endEdit(); saveNow(); renderHome(); } }, logo(), icon('M12.5 4.5L7 10l5.5 5.5', 10, { 'stroke-width': 2 }), 'All boards'),
+        h('input', { class: 'b-name', id: 'board-name', type: 'text', value: m.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onchange: e => { m.name = e.target.value.trim() || m.name; e.target.value = m.name; saveIndex(); } }),
+        h('div', { class: 'b-meta' }, proj ? h('span', null, proj.name) : null, h('span', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st))),
+      h('div', { class: 'o-label' }, 'Outline'),
+      h('div', { class: 'o-list', id: 'olist' }),
+      h('button', { class: 'o-foot', onclick: toggleHelp }, 'Keyboard shortcuts', h('kbd', null, '?'))),
+    h('div', { class: 'stage' },
+      h('nav', { class: 'toolbar', 'aria-label': 'Tools' }, BAR.map(t => t === '|' ? h('span', { class: 'tsep', 'aria-hidden': 'true' })
+        : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { tool = t; refresh(); } } }, icon(ICON[t], 18)))),
+      h('div', { class: 'fly', id: 'fly', hidden: true }),
+      h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
+      h('div', { class: 'kan', id: 'kan', hidden: true }),
+      h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { for (const f of [...e.target.files]) await addImage(f); e.target.value = ''; } }),
+      h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
+    h('aside', { class: 'props', 'aria-label': 'Properties' },
+      h('div', { class: 'p-head' },
+        h('button', { class: 'icon-btn', id: 'undo', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => travel('undo') }, icon('M7.5 5L4 8.5 7.5 12M4 8.5h8.5a3.5 3.5 0 0 1 0 7H10', 16)),
+        h('button', { class: 'icon-btn', id: 'redo', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => travel('redo') }, icon('M12.5 5L16 8.5 12.5 12M16 8.5H7.5a3.5 3.5 0 0 0 0 7H10', 16)),
+        h('button', { class: 'btn zoom', id: 'zoomv', title: 'Zoom', 'aria-label': 'Zoom options', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [
+          ['Zoom in', () => zoomAt(1.2)], ['Zoom out', () => zoomAt(1 / 1.2)], ['Zoom to 100%', () => zoomAt(1 / cam.z)], ['Fit everything', () => fit()], '-',
+          [miniOn ? 'Hide minimap' : 'Show minimap', () => { miniOn = !miniOn; draw(); }]]) }, h('span', { id: 'zoomt' }, '100%'), icon('M6 8l4 4 4-4', 10, { 'stroke-width': 2 })),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'btn', id: 'kanban-toggle', 'aria-pressed': 'false', title: 'Show task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
+        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [['PNG image', () => exportAs('png')], ['SVG vector', () => exportAs('svg')]]) }, 'Export')),
+      h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks')),
+      h('div', { class: 'p-body', id: 'pdesign', role: 'tabpanel' }),
+      h('div', { class: 'p-body', id: 'ptasks', role: 'tabpanel', hidden: true }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
+  // Rebuild the properties once focus leaves them, so values typed into a field are not wiped mid-edit.
+  $('#pdesign').addEventListener('focusout', () => setTimeout(() => { const p = $('#pdesign'); if (board && p && !p.contains(document.activeElement)) renderProps(); }, 0));
   cv = s('svg', { id: 'cv', role: 'application', 'aria-label': 'Board canvas' },
-    s('defs', null,
-      s('pattern', { id: 'dots', width: 24, height: 24, patternUnits: 'userSpaceOnUse' }, s('circle', { cx: 1, cy: 1, r: 1, style: 'fill:var(--dot)' })),
-      s('filter', { id: 'sh', x: '-10%', y: '-10%', width: '120%', height: '130%' }, s('feDropShadow', { dx: 0, dy: 2, stdDeviation: 3, 'flood-color': '#0a1428', 'flood-opacity': 0.16 }))),
-    s('rect', { width: '100%', height: '100%', fill: 'url(#dots)' }));
+    s('defs', null, s('filter', { id: 'sh', x: '-10%', y: '-10%', width: '120%', height: '130%' }, s('feDropShadow', { dx: 0, dy: 1, stdDeviation: 1.5, 'flood-color': '#17202d', 'flood-opacity': 0.18 }))));
   vp = s('g'); ov = s('g'); cv.append(vp, ov); $('.stage').prepend(cv);
-  mini = s('svg', { width: 180, height: 120, 'aria-hidden': 'true' }); $('#mini').append(mini);
+  mini = s('svg', { width: 144, height: 96, 'aria-hidden': 'true' }); $('#mini').append(mini);
   mini.addEventListener('pointerdown', ev => { miniDrag = true; mini.setPointerCapture(ev.pointerId); miniGo(ev); });
   mini.addEventListener('pointermove', ev => { if (miniDrag) miniGo(ev); });
   const miniEnd = () => { miniDrag = false; draw(); }; mini.addEventListener('pointerup', miniEnd); mini.addEventListener('pointercancel', miniEnd);
@@ -610,34 +667,133 @@ async function openBoard(id) {
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; draw(); placeEditor(); } }, { passive: false });
   fit(); refresh(); loadImages();
 }
-function renderCtx() {
-  const el = $('#ctx'); if (!el) return; const list = selEls();
-  if (!list.length || editing) { el.hidden = true; return; } el.hidden = false;
-  const free = list.filter(e => !e.locked), of = types => free.filter(e => types.includes(e.type));
+/* ---------- Outline and properties ---------- */
+function outlineIcon(e) {
+  const chip = style => h('span', { class: 'oi', 'aria-hidden': 'true' }, h('span', { style }));
+  const fill = e.fill || '#ffffff';
+  if (e.type === 'sticky') return chip(`width:10px;height:10px;background:${fill};border:1px solid rgba(23,32,45,.25)`);
+  if (e.type === 'rect') return chip(`width:10px;height:8px;border-radius:2px;background:${fill};border:1px solid #2b3545`);
+  if (e.type === 'ellipse') return chip(`width:10px;height:8px;border-radius:50%;background:${fill};border:1px solid #2b3545`);
+  if (e.type === 'diamond') return chip(`width:7px;height:7px;transform:rotate(45deg);background:${fill};border:1px solid #2b3545`);
+  if (e.type === 'card') return chip(`width:4px;height:12px;border-radius:2px;background:${STATUS[e.status || 'todo'][1]}`);
+  if (e.type === 'tape') return chip(`width:12px;height:5px;background:${e.fill || '#2f6fed'};opacity:.8`);
+  if (e.type === 'sticker') return h('span', { class: 'oi', 'aria-hidden': 'true', style: 'color:' + (e.fill || '#f5c518') }, icon(STAR, 12, { fill: 'currentColor', stroke: 'none' }));
+  return h('span', { class: 'oi', 'aria-hidden': 'true' }, icon(ICON[{ conn: 'conn', pen: 'pen', image: 'image', frame: 'frame' }[e.type] || 'text'], 12, { 'stroke-width': 2 }));
+}
+function renderOutline() {
+  const el = $('#olist'); if (!el) return;
+  const rows = outlineRows(all(), E), sig = rows.map(r => { const e = E(r.id); return [r.id, r.depth, r.label, e.locked ? 1 : 0, e.fill || '', e.status || ''].join('~'); }).join('|');
+  // Rebuild only when rows change, so a double-click on a row lands on the same element twice.
+  if (sig !== outlineSig) {
+    outlineSig = sig;
+    el.replaceChildren(...(rows.length ? rows.map(r => {
+      const e = E(r.id);
+      return h('button', { class: 'orow' + (r.depth ? ' sub' : '') + (r.kind === 'frame' ? ' fr' : '') + (r.kind === 'conn' ? ' dim' : ''), 'data-id': r.id, title: r.label,
+        onclick: ev => { if (editing) endEdit(); if (ev.shiftKey) { const had = sel.has(r.id); group(r.id).forEach(i => had ? sel.delete(i) : sel.add(i)); } else sel = new Set(group(r.id)); refresh(); },
+        ondblclick: () => { const x = E(r.id); if (x) { if (x.type === 'frame') fit([x]); else centerOn(x); draw(); } } },
+        outlineIcon(e), h('span', { class: 'ol' }, r.label), e.locked ? h('span', { class: 'olock', title: 'Locked' }, icon(LOCK, 12)) : null);
+    }) : [h('p', { class: 'o-empty' }, 'Nothing on this board yet.')]));
+  }
+  el.querySelectorAll('.orow').forEach(b => { const on = sel.has(b.dataset.id); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  const key = [...sel].join();
+  if (key !== outlineKey) { outlineKey = key; const on = el.querySelector('.orow.on'); if (on) on.scrollIntoView({ block: 'nearest' }); }
+}
+function renderRight() {
+  const d = $('#pdesign'); if (!d) return;
+  const n = all().filter(e => e.type === 'card').length;
+  for (const k of ['design', 'tasks']) $('#tab-' + k).setAttribute('aria-selected', String(rightTab === k));
+  $('#tab-tasks').replaceChildren('Tasks', n ? h('span', { class: 'num' }, String(n)) : null);
+  d.hidden = rightTab !== 'design'; $('#ptasks').hidden = rightTab !== 'tasks';
+  if (rightTab === 'design') renderProps(); else renderTasks();
+}
+/** Commit an edit made in a panel field without rebuilding the panel under the cursor. */
+function holdCommit() { panelHold = true; try { commit(); } finally { panelHold = false; } }
+function taskFields(cur, pre, save) {
+  const id = n => pre + 'task-' + n;
+  return [
+    h('label', { class: 'f-label', for: id('title') }, 'Title'),
+    h('input', { class: 'inp', type: 'text', id: id('title'), value: cur.text, oninput: e => { cur.text = e.target.value; draw(); }, onchange: save }),
+    h('div', { class: 'grid2' },
+      h('select', { class: 'sel', id: id('status'), 'aria-label': 'Status', value: cur.status, onchange: e => { cur.status = e.target.value; save(); } }, Object.entries(STATUS).map(([k, v]) => h('option', { value: k }, v[0]))),
+      h('input', { class: 'inp', type: 'date', id: id('due'), 'aria-label': 'Due date', value: cur.due || '', onchange: e => { cur.due = e.target.value; save(); } })),
+    h('label', { class: 'f-label', for: id('notes') }, 'Notes'),
+    h('textarea', { class: 'inp', id: id('notes'), value: cur.notes || '', oninput: e => { cur.notes = e.target.value; }, onchange: save })];
+}
+const FILL_NAMES = ['Yellow', 'Peach', 'Green', 'Blue', 'Lilac', 'White', 'Gray'];
+const ALIGN = [['l', 'Align left edges', 'M3 3v14M6 6h10M6 13h6'], ['c', 'Align centers', 'M10 3v14M4 6h12M6.5 13h7'], ['r', 'Align right edges', 'M17 3v14M4 6h10M8 13h6'], ['dh', 'Space evenly across', 'M3 3v14M17 3v14M8 6v8M12 6v8'],
+  ['t', 'Align top edges', 'M3 3h14M6 6v10M13 6v6'], ['m', 'Align middles', 'M3 10h14M6 4v12M13 6.5v7'], ['b', 'Align bottom edges', 'M3 17h14M6 4v10M13 8v6'], ['dv', 'Space evenly down', 'M3 3h14M3 17h14M6 8h8M6 12h8']];
+function renderProps() {
+  const el = $('#pdesign'); if (!el || rightTab !== 'design') return;
+  if (panelHold) { fieldSync.forEach(f => { if (document.activeElement !== f.el) f.el.value = f.get(); }); return; }
+  fieldSync = [];
+  const list = selEls(), free = list.filter(e => !e.locked), one = list.length === 1 ? list[0] : null;
+  const of = types => free.filter(e => types.includes(e.type));
   const same = (els, key) => els.length && els.every(e => e[key] === els[0][key]) ? els[0][key] ?? '' : '';
-  const menu = (id, label, opts, fn) => h('select', { id, 'aria-label': label, onchange: e => { const v = e.target.value; if (v) fn(v); } }, h('option', { value: '' }, label), opts.map(o => h('option', { value: o[0] }, o[1])));
-  // A picker that shows the current value; choosing its first entry goes back to the default.
-  const pick = (id, label, opts, cur, fn) => h('select', { id, 'aria-label': label, title: label, value: String(cur), onchange: e => fn(e.target.value) }, h('option', { value: '' }, label), opts.map(o => h('option', { value: String(o[0]) }, o[1])));
-  const setAll = (els, key, val) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; fitText(e); }); commit(); };
-  const swatch = (c, fn) => h('button', { class: 'sw', style: 'background:' + c, title: 'Color ' + c, 'aria-label': 'Color ' + c, onclick: fn });
-  const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']), vivid = of(['sticker', 'tape']), conns = of(['conn']), tapes = of(['tape']), texty = free.filter(e => TEXTY.includes(e.type));
-  el.replaceChildren(...[
-    fillable.length ? FILLS.map(c => swatch(c, () => setAll(fillable, 'fill', c))) : [],
-    !fillable.length && (vivid.length || conns.length) ? VIVID.map(c => swatch(c, () => { vivid.forEach(e => { e.fill = c; }); conns.forEach(e => { e.stroke = c; }); commit(); })) : [],
-    conns.length ? pick('conn-style', 'Line style', [['straight', 'Straight'], ['curve', 'Curved'], ['elbow', 'Right angle'], ['cable', 'Cable']], same(conns, 'style') || 'straight', v => { connStyle = v || 'straight'; setAll(conns, 'style', connStyle === 'straight' ? '' : connStyle); }) : null,
-    tapes.length ? pick('tape-pattern', 'Pattern', Object.entries(TAPES), same(tapes, 'pattern') || 'stripes', v => setAll(tapes, 'pattern', v)) : null,
-    texty.length ? [
-      pick('font', 'Font', Object.entries(FONTS).map(([k, v]) => [k, v.label]), same(texty, 'font'), v => setAll(texty, 'font', v)),
-      pick('weight', 'Weight', WEIGHTS, same(texty, 'weight'), v => setAll(texty, 'weight', v ? Number(v) : '')),
-      pick('size', 'Size', SIZES.map(n => [n, n + ' px']), same(texty, 'size'), v => setAll(texty, 'size', v ? Number(v) : '')),
-      h('button', { class: same(texty, 'italic') === true ? 'fav-on' : '', title: 'Italic', style: 'font-style:italic', onclick: () => setAll(texty, 'italic', !texty.every(e => e.italic)) }, 'Italic'),
-      pick('text-color', 'Text color', TEXT_COLORS, same(texty, 'color'), v => setAll(texty, 'color', v)),
-      pick('text-align', 'Text align', [['left', 'Left'], ['center', 'Center'], ['right', 'Right']], same(texty, 'align'), v => setAll(texty, 'align', v))] : [],
-    list.length > 1 ? menu('align', 'Align', [['l', 'Left edges'], ['c', 'Centers'], ['r', 'Right edges'], ['t', 'Top edges'], ['m', 'Middles'], ['b', 'Bottom edges'], ['dh', 'Space evenly across'], ['dv', 'Space evenly down']], align) : null,
-    menu('arrange', 'Arrange', [['front', 'Bring to front'], ['back', 'Send to back'], ['group', 'Group'], ['ungroup', 'Ungroup'], ['lock', 'Lock'], ['unlock', 'Unlock']], arrange),
-    h('button', { onclick: () => { copySel(); pasteEls(clip, 24); } }, 'Duplicate'),
-    h('button', { class: 'danger', onclick: removeSel }, 'Delete')].flat().filter(Boolean));
-  placeCtx();
+  const sec = (title, ...kids) => h('section', { class: 'psec' }, title ? h('h3', null, title) : null, ...kids);
+  const setAll = (els, key, val, field) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; fitText(e); }); field ? holdCommit() : commit(); };
+  const swatch = (c, on, fn, name, small) => h('button', { class: 'sw' + (small ? ' sm' : ''), style: 'background:' + c, title: name || c, 'aria-label': name || 'Color ' + c, 'aria-pressed': String(!!on), onclick: fn });
+  const num = (id, short, label, get, put, disabled) => {
+    const inp = h('input', { type: 'text', inputmode: 'decimal', id, value: get(), 'aria-label': label, disabled,
+      onkeydown: e => { if (e.key === 'Enter') e.target.blur(); else if (e.key === 'Escape') { e.target.value = get(); e.target.blur(); } },
+      onchange: e => { const v = parseFloat(String(e.target.value).replace(/[^0-9.\-]/g, '')); if (Number.isFinite(v)) { put(v); holdCommit(); } e.target.value = get(); } });
+    fieldSync.push({ el: inp, get });
+    return h('label', { class: 'field' + (disabled ? ' off' : ''), title: label }, h('span', null, short), inp);
+  };
+  const pick = (id, label, opts, cur, fn) => h('select', { class: 'sel', id, 'aria-label': label, title: label, value: String(cur), onchange: e => fn(e.target.value) }, opts.map(o => h('option', { value: String(o[0]) }, o[1])));
+  const out = [];
+  if (!list.length) {
+    const count = type => all().filter(e => e.type === type).length;
+    out.push(sec('Board', h('div', { class: 'kv' }, h('span', null, 'Pieces'), h('span', null, String(all().length)), h('span', null, 'Frames'), h('span', null, String(count('frame'))), h('span', null, 'Task cards'), h('span', null, String(count('card')))),
+        h('button', { class: 'fbtn', onclick: () => fit() }, 'Fit everything on screen')),
+      sec(null, h('p', { class: 'hint' }, 'Select a piece to change it here. Double-click empty space to add a sticky note, or pick a tool from the bar under the board.')));
+  } else {
+    out.push(h('div', { class: 'psec p-top' }, h('div', { class: 'p-title' }, one ? TYPE_NAMES[one.type] : `${list.length} pieces selected`,
+      list.some(e => e.locked) ? h('span', { class: 'lockchip' }, list.every(e => e.locked) ? 'Locked' : 'Some locked') : null)));
+    if (one && one.type !== 'conn') {
+      const e = one, lock = !!e.locked, keep = e.type === 'image' || e.type === 'sticker', pen = e.type === 'pen';
+      out.push(sec('Position and size', h('div', { class: 'grid2' },
+        num('prop-x', 'X', 'X position', () => String(Math.round(e.x)), v => { e.x = Math.round(v); }, lock),
+        num('prop-y', 'Y', 'Y position', () => String(Math.round(e.y)), v => { e.y = Math.round(v); }, lock),
+        num('prop-w', 'W', 'Width', () => String(Math.round(e.w)), v => { const r = e.w / e.h; e.w = Math.max(10, Math.round(v)); if (keep) e.h = Math.round(e.w / r); fitText(e); }, lock || pen),
+        num('prop-h', 'H', 'Height', () => String(Math.round(e.h)), v => { const r = e.w / e.h; e.h = Math.max(10, Math.round(v)); if (keep) e.w = Math.round(e.h * r); fitText(e); }, lock || pen || e.type === 'text'),
+        num('prop-rot', 'Turn', 'Rotation in degrees', () => Math.round(e.rot || 0) + '°', v => { const a = G.normAngle(Math.round(v)); if (a) e.rot = a; else delete e.rot; }, lock))));
+    }
+    const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']);
+    if (fillable.length) out.push(sec('Fill', h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => setAll(fillable, 'fill', c), FILL_NAMES[i])))));
+    const vivid = of(['sticker', 'tape']), tapes = of(['tape']);
+    if (vivid.length) out.push(sec('Color', h('div', { class: 'swatches' }, VIVID.map(c => swatch(c, same(vivid, 'fill') === c, () => setAll(vivid, 'fill', c)))),
+      tapes.length ? pick('tape-pattern', 'Tape pattern', Object.entries(TAPES), same(tapes, 'pattern') || 'stripes', v => setAll(tapes, 'pattern', v, true)) : null));
+    const conns = of(['conn']);
+    if (conns.length) out.push(sec('Line',
+      pick('conn-style', 'Line style', [['straight', 'Straight'], ['curve', 'Curved'], ['elbow', 'Right angle'], ['cable', 'Cable']], same(conns, 'style') || 'straight', v => { connStyle = v; setAll(conns, 'style', v === 'straight' ? '' : v, true); }),
+      h('div', { class: 'swatches' }, swatch(C.ink, conns.every(e => !e.stroke), () => setAll(conns, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(conns, 'stroke') === c, () => setAll(conns, 'stroke', c))))));
+    const texty = free.filter(e => TEXTY.includes(e.type));
+    if (texty.length) {
+      const st0 = G.textStyle(texty[0]), al = same(texty, 'align'), col = same(texty, 'color'), ital = texty.every(e => e.italic);
+      out.push(sec('Text',
+        pick('font', 'Font', Object.entries(FONTS).map(([k, v]) => [k, v.label]), same(texty, 'font') || 'sans', v => setAll(texty, 'font', v === 'sans' ? '' : v, true)),
+        h('div', { class: 'grid2' },
+          pick('weight', 'Weight', WEIGHTS, same(texty, 'weight') || st0.weight, v => setAll(texty, 'weight', Number(v), true)),
+          num('size', 'Size', 'Text size', () => String(Math.round(G.textStyle(texty[0]).size)), v => texty.forEach(e => { e.size = Math.min(400, Math.max(4, Math.round(v))); fitText(e); }))),
+        h('div', { class: 'row' },
+          h('div', { class: 'seg', role: 'group', 'aria-label': 'Text alignment' }, [['left', 'Align left', 'M3 5h14M3 10h9M3 15h11'], ['center', 'Align center', 'M3 5h14M5.5 10h9M4.5 15h11'], ['right', 'Align right', 'M3 5h14M8 10h9M6 15h11']]
+            .map(([k, label, d]) => h('button', { title: label, 'aria-label': label, 'aria-pressed': String(al === k), onclick: () => setAll(texty, 'align', al === k ? '' : k) }, icon(d, 14)))),
+          h('button', { class: 'fbtn', style: 'font-style:italic', 'aria-pressed': String(ital), onclick: () => setAll(texty, 'italic', !ital) }, 'Italic')),
+        h('div', { class: 'swatches', role: 'group', 'aria-label': 'Text color' }, TEXT_COLORS.map(([c, name]) => swatch(c, col === c || (c === '#1d2530' && texty.every(e => !e.color)), () => setAll(texty, 'color', c === '#1d2530' ? '' : c), name, true)))));
+    }
+    if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit)));
+    if (free.filter(e => e.type !== 'conn').length > 1) out.push(sec('Align', h('div', { class: 'grid4' }, ALIGN.map(([k, label, d]) => h('button', { class: 'ibtn', title: label, 'aria-label': label, onclick: () => align(k) }, icon(d, 16))))));
+    const locked = list.every(e => e.locked);
+    out.push(sec('Arrange', h('div', { class: 'grid2' },
+      h('button', { class: 'fbtn', onclick: () => arrange('front') }, 'Bring to front'),
+      h('button', { class: 'fbtn', onclick: () => arrange('back') }, 'Send to back'),
+      h('button', { class: 'fbtn', onclick: () => arrange(locked ? 'unlock' : 'lock') }, locked ? 'Unlock' : 'Lock'),
+      h('button', { class: 'fbtn', onclick: () => { copySel(); pasteEls(clip, 24); } }, 'Duplicate'),
+      list.length > 1 ? h('button', { class: 'fbtn', onclick: () => arrange('group') }, 'Group') : null,
+      list.some(e => e.g) ? h('button', { class: 'fbtn', onclick: () => arrange('ungroup') }, 'Ungroup') : null)));
+    out.push(h('div', { class: 'psec' }, h('button', { class: 'del', disabled: !free.length, onclick: removeSel }, list.length > 1 ? 'Delete selection' : 'Delete')));
+  }
+  el.replaceChildren(...out);
 }
 function renderFly() {
   const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp'; if (el.hidden) return;
@@ -668,22 +824,16 @@ function calendarEl(cards) {
     undated ? h('p', { class: 'note' }, `${undated} ${undated === 1 ? 'task has' : 'tasks have'} no due date.`) : null);
 }
 function renderTasks() {
-  const el = $('#tasks'); if (!el) return; el.hidden = !tasksOpen; if (!tasksOpen) return;
+  if (!$('#ptasks') || rightTab !== 'tasks') return;
   const cards = all().filter(e => e.type === 'card').sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : 1), cur = selEls().length === 1 && selEls()[0].type === 'card' ? selEls()[0] : null;
   const n = k => cards.filter(c => k === 'all' || c.status === k).length;
-  $('#thead').replaceChildren(h('h2', null, 'Tasks'),
-    h('div', { class: 'tabs' }, [['list', 'List'], ['cal', 'Calendar']].map(([k, label]) => h('button', { class: taskView === k ? 'on' : '', onclick: () => { taskView = k; renderTasks(); } }, label))),
+  $('#thead').replaceChildren(h('div', { class: 'tpad' },
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Task view' }, [['list', 'List'], ['cal', 'Calendar']].map(([k, label]) => h('button', { 'aria-pressed': String(taskView === k), onclick: () => { taskView = k; renderTasks(); } }, label))),
     taskView === 'cal' ? calendarEl(cards) : h('div', { class: 'chips' }, [['all', 'All'], ...Object.entries(STATUS).map(([k, v]) => [k, v[0], v[1]])].map(([k, label, col]) =>
-      h('button', { class: 'chip' + (taskFilter === k ? ' on' : ''), onclick: () => { taskFilter = k; renderTasks(); } }, col && h('b', { style: 'background:' + col }), `${label} ${n(k)}`))));
+      h('button', { class: 'chip' + (taskFilter === k ? ' on' : ''), 'aria-pressed': String(taskFilter === k), onclick: () => { taskFilter = k; renderTasks(); } }, col ? h('b', { style: 'background:' + col }) : null, `${label} ${n(k)}`)))));
   if ((cur ? cur.id : '') !== edFor) {
     edFor = cur ? cur.id : '';
-    const set = (key, live) => e => { cur[key] = e.target.value; if (live) draw(); else commit(); };
-    $('#ted').replaceChildren(...(cur ? [h('div', { class: 'ted' },
-      h('label', { for: 'task-title' }, 'Task'), h('input', { type: 'text', id: 'task-title', value: cur.text, oninput: set('text', true), onchange: () => commit() }),
-      h('div', { class: 'row' },
-        h('select', { id: 'task-status', 'aria-label': 'Status', value: cur.status, onchange: set('status') }, Object.entries(STATUS).map(([k, v]) => h('option', { value: k }, v[0]))),
-        h('input', { type: 'date', id: 'task-due', 'aria-label': 'Due date', value: cur.due || '', onchange: set('due') })),
-      h('label', { for: 'task-notes' }, 'Notes'), h('textarea', { id: 'task-notes', value: cur.notes || '', oninput: e => { cur.notes = e.target.value; }, onchange: () => commit() }))] : []));
+    $('#ted').replaceChildren(...(cur ? [h('section', { class: 'psec tsel' }, h('h3', null, 'Selected task'), ...taskFields(cur, 't-', () => commit()))] : []));
   }
   const show = taskView === 'cal' ? cards.filter(c => calDay ? c.due === calDay : (c.due || '').startsWith(monthPrefix(cal.year, cal.month))) : cards.filter(c => taskFilter === 'all' || c.status === taskFilter);
   const none = taskView === 'cal' ? (calDay ? 'Nothing is due on this day.' : 'Nothing is due this month.') : cards.length ? 'No tasks with this status.' : 'No tasks yet. Press C and click the board to add a task card.';
@@ -693,13 +843,8 @@ function renderTasks() {
       h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, c.text), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : ''))));
   }) : [h('p', { class: 'note' }, none)]));
 }
-
-function renderFrames() {
-  const el = $('#frames'); if (!el) return; const fs = all().filter(e => e.type === 'frame').sort((a, b) => a.y - b.y || a.x - b.x);
-  el.hidden = !fs.length; el.replaceChildren(h('option', { value: '' }, 'Frames'), ...fs.map(f => h('option', { value: f.id }, f.text || 'Frame')));
-}
 function renderKanban() {
-  const el = $('#kan'), btn = $('#kanban-toggle'); if (!el) return; el.hidden = !kanban; btn.classList.toggle('fav-on', kanban); if (!kanban) return;
+  const el = $('#kan'), btn = $('#kanban-toggle'); if (!el) return; el.hidden = !kanban; btn.classList.toggle('on', kanban); btn.setAttribute('aria-pressed', String(kanban)); if (!kanban) return;
   const groups = groupTasks(all());
   el.replaceChildren(...Object.entries(STATUS).map(([k, [label, col]]) => h('section', { class: 'kcol', 'aria-label': label,
     ondragover: e => { e.preventDefault(); e.currentTarget.classList.add('over'); }, ondragleave: e => e.currentTarget.classList.remove('over'),
@@ -708,31 +853,28 @@ function renderKanban() {
     h('div', { class: 'klist' }, groups[k].map(c => {
       const late = c.due && c.due < today() && c.status !== 'done';
       return h('article', { class: 'kcard' + (sel.has(c.id) ? ' on' : ''), draggable: 'true', tabindex: '0', style: 'border-left-color:' + col,
-        ondragstart: e => e.dataTransfer.setData('text/plain', c.id), onclick: () => { sel = new Set([c.id]); tasksOpen = true; refresh(); },
-        onkeydown: e => { if (e.key === 'Enter') { sel = new Set([c.id]); tasksOpen = true; refresh(); } },
+        ondragstart: e => e.dataTransfer.setData('text/plain', c.id), onclick: () => { sel = new Set([c.id]); rightTab = 'design'; refresh(); },
+        onkeydown: e => { if (e.key === 'Enter') { sel = new Set([c.id]); rightTab = 'design'; refresh(); } },
         ondblclick: () => { kanban = false; sel = new Set([c.id]); centerOn(c); refresh(); } },
         h('strong', null, c.text), c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
     })),
-    h('button', { class: 'kadd', onclick: () => addTask(k) }, 'Add task'))));
+    h('button', { class: 'kadd', onclick: () => { kanban = false; addTask(k); } }, 'Add task'))));
 }
-function closeMenu() { const m = $('#menu'); if (m) m.remove(); }
 function openMenu(ev) {
-  ev.preventDefault(); if (editing) endEdit(); closeMenu();
+  ev.preventDefault(); if (editing) endEdit();
   const p = pt(ev), id = idAt(ev.target);
   if (id && !sel.has(id)) { sel = new Set(group(id)); refresh(); } else if (!id && sel.size) { sel.clear(); refresh(); }
-  const list = selEls(), item = (label, fn, cls) => h('button', { class: cls, role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, label);
-  const items = id ? [
-    list.length === 1 && TEXTY.includes(list[0].type) ? item('Edit text', () => startEdit(list[0].id)) : null,
-    item('Duplicate', () => { copySel(); pasteEls(clip, 24); }), item('Copy', copySel), h('hr'),
-    item('Bring to front', () => arrange('front')), item('Send to back', () => arrange('back')),
-    list.length > 1 ? item('Group', () => arrange('group')) : null, list.some(e => e.g) ? item('Ungroup', () => arrange('ungroup')) : null,
-    list.every(e => e.locked) ? item('Unlock', () => arrange('unlock')) : item('Lock', () => arrange('lock')), h('hr'),
-    item('Delete', removeSel, 'danger')]
-    : [clip.length ? item('Paste here', () => pasteAt(p)) : null,
-      item('Add sticky note', () => makeBox('sticky', p.x, p.y, 0, 0)), item('Add task card', () => makeBox('card', p.x, p.y, 0, 0)), item('Add text', () => makeBox('text', p.x, p.y, 0, 0)), item('Add picture', () => $('#img-file').click()), h('hr'),
-      item('Select all', () => { sel = new Set(Object.keys(board.els)); refresh(); }), item('Fit everything', () => fit())];
-  const m = h('div', { class: 'menu', id: 'menu', role: 'menu' }, items.filter(Boolean)), r = cv.getBoundingClientRect(); $('.stage').append(m);
-  m.style.left = Math.max(4, Math.min(p.sx, r.width - m.offsetWidth - 6)) + 'px'; m.style.top = Math.max(4, Math.min(p.sy, r.height - m.offsetHeight - 6)) + 'px';
+  const list = selEls();
+  popupAt(ev.clientX, ev.clientY, id ? [
+    list.length === 1 && TEXTY.includes(list[0].type) ? ['Edit text', () => startEdit(list[0].id)] : null,
+    ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
+    ['Bring to front', () => arrange('front')], ['Send to back', () => arrange('back')],
+    list.length > 1 ? ['Group', () => arrange('group')] : null, list.some(e => e.g) ? ['Ungroup', () => arrange('ungroup')] : null,
+    list.every(e => e.locked) ? ['Unlock', () => arrange('unlock')] : ['Lock', () => arrange('lock')], '-',
+    ['Delete', removeSel, 'danger']]
+  : [clip.length ? ['Paste here', () => pasteAt(p)] : null,
+    ['Add sticky note', () => makeBox('sticky', p.x, p.y, 0, 0)], ['Add task card', () => makeBox('card', p.x, p.y, 0, 0)], ['Add text', () => makeBox('text', p.x, p.y, 0, 0)], ['Add picture', () => $('#img-file').click()], '-',
+    ['Select all', () => { sel = new Set(Object.keys(board.els)); refresh(); }], ['Fit everything', () => fit()], ['Keyboard shortcuts', toggleHelp]]);
 }
 const KEYS = [
   ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
@@ -743,7 +885,7 @@ function toggleHelp() {
   const open = $('#help'); if (open) { open.remove(); return; }
   document.body.append(h('div', { class: 'help', id: 'help', onclick: e => { if (e.target.id === 'help') e.target.remove(); } },
     h('div', { class: 'help-b', role: 'dialog', 'aria-label': 'Keyboard shortcuts' },
-      h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { onclick: toggleHelp }, 'Close')),
+      h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { class: 'btn', onclick: toggleHelp }, 'Close')),
       h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
       h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'))));
 }

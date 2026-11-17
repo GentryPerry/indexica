@@ -26,7 +26,7 @@ describe('calendar', () => {
 describe('text style', () => {
   beforeAll(() => setMeasurer((text, size) => text.length * size * 0.5));
   it('uses the type default until a choice is made', () => {
-    expect(textStyle(el({}))).toEqual({ size: 16, weight: 400, family: FONTS.sans.stack, italic: false });
+    expect(textStyle(el({}))).toEqual({ size: 14, weight: 400, family: FONTS.sans.stack, italic: false });
     expect(textStyle(el({ type: 'card' })).weight).toBe(600);
   });
   it('applies font, weight, size, and italic choices', () => {

@@ -23,6 +23,8 @@ export interface RenderCtx {
 }
 
 const DARK = '#1d2530';
+/** Status pill fills, darker than the status colors so white text stays readable. */
+const PILL: Record<string, string> = { todo: '#5d697c', doing: '#2358c9', blocked: '#b93232', done: '#1f7a4d' };
 
 /** Where a line of text starts and how it is anchored, for an element's alignment choice. */
 function lineStart(e: El, x: number, w: number, pad: number, fallback: 'left' | 'center' | 'right'): [number, string] {
@@ -61,7 +63,7 @@ function renderConn(g: SVGElement, e: El, c: RenderCtx) {
   if (!c.exp) g.append(s('path', { d: geom.d, fill: 'none', stroke: 'transparent', 'stroke-width': 16 }));
   if (e.text && c.hideId !== e.id) {
     const st = textStyle(e), w = measure(e.text, st.size, st.weight, st.family, st.italic) + 14, h = st.size * 1.3 + 6;
-    g.append(s('rect', { x: geom.label.x - w / 2, y: geom.label.y - h / 2, width: w, height: h, rx: 5, fill: c.exp ? '#ffffff' : c.canvas, stroke: color, 'stroke-opacity': 0.25 }),
+    g.append(s('rect', { x: geom.label.x - w / 2, y: geom.label.y - h / 2, width: w, height: h, rx: 5, fill: '#ffffff', stroke: color, 'stroke-opacity': 0.25 }),
       textBlock([e.text], geom.label.x, geom.label.y + st.size * 0.35, st, c.ink, 'middle'));
   }
 }
@@ -71,7 +73,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
   const g = s('g', { 'data-id': e.id }), hide = c.hideId === e.id, shadow = c.exp ? null : 'url(#sh)';
   const { x, y, w, h } = e, st = textStyle(e), lh = st.size * 1.3;
   if (e.type === 'sticky') {
-    g.append(s('rect', { x, y, width: w, height: h, rx: 3, fill: e.fill, filter: shadow }));
+    g.append(s('rect', { x, y, width: w, height: h, fill: e.fill, filter: shadow }));
     if (!hide) { const [tx, anchor] = lineStart(e, x, w, 12, 'left'); g.append(textBlock(wrapEl(e, w - 24), tx, y + 12 + st.size, st, e.color || DARK, anchor)); }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
     const a = { fill: e.fill, stroke: '#2b3545', 'stroke-width': 1.5 };
@@ -83,20 +85,20 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
     if (!hide) { const [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(wrapEl(e, w - 4), tx, y + 4 + st.size * 0.95, st, e.color || c.ink, anchor)); }
   } else if (e.type === 'card') {
-    const [label, col] = STATUS[e.status || 'todo'] || STATUS.todo, late = !!e.due && e.due < today() && e.status !== 'done';
+    const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';
     g.append(s('rect', { x, y, width: w, height: h, rx: 8, fill: '#ffffff', stroke: '#c3ccda', filter: shadow }),
-      s('rect', { x, y: y + 8, width: 5, height: h - 16, rx: 2.5, fill: col, 'pointer-events': 'none' }));
-    if (!hide) g.append(textBlock(wrapEl(e, w - 34).slice(0, 2), x + 18, y + 12 + st.size, st, e.color || DARK));
+      s('rect', { x: x + 6, y: y + 8, width: 4, height: h - 16, rx: 2, fill: col, 'pointer-events': 'none' }));
+    if (!hide) g.append(textBlock(wrapEl(e, w - 30).slice(0, 2), x + 18, y + 10 + st.size, st, e.color || DARK));
     const pill: TextStyle = { size: 11, weight: 600, family: textStyle({ ...e, font: undefined }).family, italic: false };
     const pw = measure(label, 11, 600) + 16;
-    g.append(s('rect', { x: x + 18, y: y + h - 30, width: pw, height: 18, rx: 9, fill: col, 'pointer-events': 'none' }),
-      textBlock([label], x + 18 + pw / 2, y + h - 17, pill, '#ffffff', 'middle'));
+    g.append(s('rect', { x: x + 18, y: y + h - 28, width: pw, height: 18, rx: 9, fill: PILL[status] || col, 'pointer-events': 'none' }),
+      textBlock([label], x + 18 + pw / 2, y + h - 15, pill, '#ffffff', 'middle'));
     const extra = [e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
-    if (extra) g.append(textBlock([extra], x + 26 + pw, y + h - 17, { ...pill, weight: late ? 600 : 400 }, late ? '#d64545' : '#5d697c'));
+    if (extra) g.append(textBlock([extra], x + 26 + pw, y + h - 15, { ...pill, weight: late ? 600 : 400 }, late ? '#b93232' : '#5d697c'));
   } else if (e.type === 'frame') {
-    g.append(s('rect', { x, y, width: w, height: h, rx: 10, fill: c.exp ? 'rgba(36,71,214,.05)' : c.frame, stroke: c.exp ? '#9aa8c4' : c.frameLine, 'stroke-width': 1.5, 'pointer-events': 'none' }));
-    if (!c.exp) g.append(s('rect', { x, y, width: w, height: h, rx: 10, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
-    if (!hide) { const t = textBlock([e.text || 'Frame'], x + 4, y - 9, st, c.exp ? '#5d697c' : c.muted); t.removeAttribute('pointer-events'); g.append(t); }
+    g.append(s('rect', { x, y, width: w, height: h, fill: '#ffffff', stroke: '#d3d8e0', 'stroke-width': 1, 'pointer-events': 'none' }));
+    if (!c.exp) g.append(s('rect', { x, y, width: w, height: h, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
+    if (!hide) { const t = textBlock([e.text || 'Frame'], x, y - 7, st, e.color || '#5d697c'); t.removeAttribute('pointer-events'); g.append(t); }
   } else if (e.type === 'pen') {
     const d = 'M' + (e.pts || []).map(p => (x + p[0]) + ' ' + (y + p[1])).join('L');
     g.append(s('path', { d, fill: 'none', stroke: e.stroke || c.ink, 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
