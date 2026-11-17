@@ -59,6 +59,10 @@ export interface El {
   /** Table cell text, row by row, and whether the first row is a header. */
   cells?: string[][];
   header?: boolean;
+  /** Table column widths as shares of the table width. Unset means equal columns. */
+  colw?: number[];
+  /** Draw this piece with a rough, hand-drawn outline. */
+  sketch?: boolean;
   /** Sticker shape key (STICKERS) or tape pattern key (TAPES). */
   shape?: string;
   pattern?: string;

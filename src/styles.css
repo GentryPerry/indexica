@@ -293,6 +293,9 @@ input.h-title:focus{background:var(--field);box-shadow:inset 0 0 0 1.5px var(--a
 .stepper{display:grid;grid-template-columns:1fr 28px 32px 28px;align-items:center;gap:4px}
 .stepper .num{text-align:center;color:var(--ink)}
 .stepper .ibtn:disabled{color:var(--faint)}
+.colh:hover{fill-opacity:.25}
+.kan-top{grid-column:1/-1;display:flex;justify-content:flex-end}
+.tpad>.seg+.seg{margin-top:-2px}
 .flow{animation:ixflow .9s linear infinite}
 @keyframes ixflow{to{stroke-dashoffset:-12.1}}
 @media (prefers-reduced-motion:reduce){.flow{animation:none}}

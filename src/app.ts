@@ -13,7 +13,8 @@ import { miniFit, miniToWorld, union } from './layout';
 import { outlineRows, TYPE_NAMES } from './outline';
 import { migrateBoard, clonePages, nextPageName, TEMPLATES } from './templates';
 import { groupTasks } from './tasks';
-import { emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf } from './table';
+import { emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol } from './table';
+import { buildPdf } from './pdf';
 import * as G from './geometry';
 import { Store } from './store';
 import { History } from './history';
@@ -222,7 +223,7 @@ let mode = null, spaceDown = false, lastDown = { t: 0, x: 0, y: 0 }, saveT = 0;
 let rightTab = 'design', panelHold = false, fieldSync = [], outlineSig = '', outlineKey = '', taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
 let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight', connColor = '';
-let penMode = 'pen', penColor = '', penWidth = 0, editCell = null;
+let taskScope = 'page', penMode = 'pen', penColor = '', penWidth = 0, editCell = null;
 const PEN_WIDTHS = { pen: [[2, 'Thin'], [4, 'Medium'], [8, 'Thick']], hl: [[12, 'Thin'], [18, 'Medium'], [28, 'Thick']] };
 const HL_COLORS = ['#f5c518', '#7ee0a1', '#8fc7ff', '#ff9ec7', '#ffb27a'];
 let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = null;
@@ -258,8 +259,8 @@ const LIGHT = { ink: '#17202d', muted: '#5d697c', canvas: '#e9ebef', frame: '#ff
 const rctx = exp => ({ exp, ...(exp ? LIGHT : { ink: C.ink, muted: C.muted, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
-async function loadImages() {
-  const ids = [...new Set(all().filter(e => e.type === 'image' && e.src && !images.has(e.src)).map(e => e.src))], bid = board.id; if (!ids.length) return;
+async function loadImages(els = all()) {
+  const ids = [...new Set(els.filter(e => e.type === 'image' && e.src && !images.has(e.src)).map(e => e.src))], bid = board.id; if (!ids.length) return;
   await Promise.all(ids.map(async id => { const d = await Store.get('img_' + id); if (d && d.url) images.set(id, d.url); }));
   if (board && board.id === bid) draw();
 }
@@ -363,6 +364,7 @@ function drawOverlay(extra) {
     if (solo && !e.locked) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
       g.append(s('circle', { 'data-h': 'rot', cx: x1 + 12 * k, cy: e.y - 12 * k, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
+      if (e.type === 'table') { const fr = colFractions(e); let acc = 0; fr.slice(0, -1).forEach((f, i) => { acc += f; g.append(s('rect', { 'data-h': 'col-' + i, class: 'colh', x: e.x + acc * e.w - 4 * k, y: e.y, width: 8 * k, height: e.h, fill: C.accent, 'fill-opacity': 0, style: 'cursor:col-resize' }, s('title', null, 'Drag to resize columns'))); }); }
       if (BOXY.includes(e.type)) {
         for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew']]) g.append(handleSq(n, px, py, 3 * k, k, cur));
         for (const [n, px, py, cur] of [['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) g.append(handleSq(n, px, py, 4 * k, k, cur));
@@ -605,6 +607,7 @@ function onDown(ev) {
         mode = { k: 'gscale', start: [...moveSet()].map(i => clone(E(i))), ax, ay, vx: (c.includes('w') ? b.x : b.x + b.w) - ax, vy: (c.includes('n') ? b.y : b.y + b.h) - ay }; return;
       }
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
+      if (hd.startsWith('col-')) { mode = { k: 'colsz', e, i: Number(hd.slice(4)), fr: colFractions(e), p }; return; }
       if (hd.startsWith('qc-')) { const side = hd.slice(3); mode = { k: 'conn', quick: true, a: e.id, as: side, p: sidePoint(e, side), sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
       if (hd === 'rot') {
         const one = sel.size === 1, b = one ? e : bounds(selEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
@@ -688,6 +691,9 @@ function onMove(ev) {
     const l = mode.pts[mode.pts.length - 1]; if (Math.hypot(p.x - l[0], p.y - l[1]) * cam.z > 2) mode.pts.push([p.x, p.y]);
     const hl = penMode === 'hl', sw = penWidth || (hl ? 18 : 2.5);
     drawOverlay(s('path', { d: 'M' + mode.pts.map(q => q[0] + ' ' + q[1]).join('L'), fill: 'none', stroke: penColor || (hl ? HL_COLORS[0] : C.ink), 'stroke-opacity': hl ? 0.4 : null, 'stroke-width': sw, 'stroke-linecap': hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' }));
+  } else if (mode.k === 'colsz') {
+    const e = mode.e, r = (e.rot || 0) * Math.PI / 180, along = (p.x - mode.p.x) * Math.cos(r) + (p.y - mode.p.y) * Math.sin(r);
+    e.colw = resizeCols(mode.fr, mode.i, along / e.w).map(v => Math.round(v * 1000) / 1000); fitText(e); draw();
   } else if (mode.k === 'erase') {
     eraseAt(ev);
   } else if (mode.k === 'conn') {
@@ -703,7 +709,7 @@ function onUp(ev) {
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
-  else if (m.k === 'erase') commit();
+  else if (m.k === 'erase' || m.k === 'colsz') commit();
   else if (m.k === 'pen') {
     if (m.pts.length > 1) {
       const x = Math.min(...m.pts.map(q => q[0])), y = Math.min(...m.pts.map(q => q[1]));
@@ -801,7 +807,7 @@ async function openBoard(id) {
           ...THEMES.map(([k, label]) => [(k === 'auto' ? 'Match system theme' : label + ' theme'), () => setTheme(k), themePref() === k ? 'cur' : ''])]) }, h('span', { id: 'zoomt' }, '100%'), icon('M6 8l4 4 4-4', 10, { 'stroke-width': 2 })),
         h('span', { class: 'grow' }),
         h('button', { class: 'btn', id: 'kanban-toggle', 'aria-pressed': 'false', title: 'Show task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
-        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [['PNG image', () => exportAs('png')], ['SVG vector', () => exportAs('svg')], '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
+        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [['PNG image', () => exportAs('png')], ['SVG vector', () => exportAs('svg')], ['PDF, this page', () => exportPdf(false)], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true)] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
       h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks')),
       h('div', { class: 'p-body', id: 'pdesign', role: 'tabpanel' }),
       h('div', { class: 'p-body', id: 'ptasks', role: 'tabpanel', hidden: true }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
@@ -821,6 +827,25 @@ async function openBoard(id) {
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; draw(); placeEditor(); } }, { passive: false });
   fit(); refresh(); loadImages();
 }
+/* ---------- Tasks across pages ---------- */
+const pageOf = id => board.pages.find(p => p.els[id]);
+/** Task cards in the chosen scope: this page, or every page of the board. */
+function scopeCards() {
+  const els = taskScope === 'all' && board.pages.length > 1 ? board.pages.flatMap(p => Object.values(p.els)) : all();
+  return els.filter(e => e.type === 'card');
+}
+/** Go to a card, switching pages if it lives on another one. */
+function gotoCard(c) {
+  const pg = pageOf(c.id); if (pg && pg.id !== board.page) switchPage(pg.id);
+  sel = new Set([c.id]); centerOn(c); refresh();
+}
+/** Save a change to a card that may sit on another page (outside this page's undo history). */
+function cardChanged(c) { if (board.els[c.id]) commit(); else { saveNow(); refresh(); } }
+function scopeSwitch() {
+  if (board.pages.length < 2) return null;
+  return h('div', { class: 'seg', role: 'group', 'aria-label': 'Which tasks' }, [['page', 'This page'], ['all', 'All pages']].map(([k, label]) => h('button', { 'aria-pressed': String(taskScope === k), onclick: () => { taskScope = k; refresh(); } }, label)));
+}
+
 /* ---------- Pages ---------- */
 function switchPage(id) {
   if (!board || id === board.page) return; if (editing) endEdit();
@@ -963,7 +988,9 @@ function renderProps() {
     if (fillable.length) out.push(sec('Fill', h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => setAll(fillable, 'fill', c), FILL_NAMES[i])))));
     const bordered = of(['rect', 'ellipse', 'diamond']);
     if (bordered.length) out.push(sec('Border', h('div', { class: 'swatches' }, swatch('#2b3545', bordered.every(e => !e.stroke), () => setAll(bordered, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(bordered, 'stroke') === c, () => setAll(bordered, 'stroke', c)))),
-      pick('border-dash', 'Border pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(bordered, 'dash') || 'solid', v => setAll(bordered, 'dash', v === 'solid' ? '' : v, true))));
+      h('div', { class: 'grid2' },
+        pick('border-dash', 'Border pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(bordered, 'dash') || 'solid', v => setAll(bordered, 'dash', v === 'solid' ? '' : v, true)),
+        h('button', { class: 'fbtn', 'aria-pressed': String(bordered.every(e => e.sketch)), title: 'Rough, hand-drawn outline', onclick: () => setAll(bordered, 'sketch', !bordered.every(e => e.sketch)) }, 'Hand-drawn'))));
     const drawn = of(['pen']);
     if (drawn.length) {
       const hl = drawn.every(e => e.hl), cols = hl ? HL_COLORS : ['', ...VIVID];
@@ -974,7 +1001,7 @@ function renderProps() {
     }
     if (one && one.type === 'table') {
       const tb = one;
-      const resize = (cells, dr, dc) => { const r0 = rowsOf(tb), c0 = colsOf(tb); tb.cells = cells; if (dr) tb.h = Math.round(tb.h / r0 * (r0 + dr)); if (dc) tb.w = Math.round(tb.w / c0 * (c0 + dc)); fitText(tb); commit(); };
+      const resize = (cells, dr, dc) => { const r0 = rowsOf(tb), c0 = colsOf(tb); if (dc && tb.colw) tb.colw = dc > 0 ? sharesWithCol(colFractions(tb), c0) : sharesWithoutCol(colFractions(tb), c0 - 1); tb.cells = cells; if (dr) tb.h = Math.round(tb.h / r0 * (r0 + dr)); if (dc) tb.w = Math.round(tb.w / c0 * (c0 + dc)); fitText(tb); commit(); };
       const r = rowsOf(tb), c = colsOf(tb);
       out.push(sec('Table',
         h('div', { class: 'stepper' }, h('span', null, 'Rows'), h('button', { class: 'ibtn', 'aria-label': 'Remove last row', disabled: r <= 1, onclick: () => resize(removeRow(tb.cells, r - 1), -1, 0) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(r)), h('button', { class: 'ibtn', 'aria-label': 'Add a row', onclick: () => resize(insertRow(tb.cells, r), 1, 0) }, icon('M10 5v10M5 10h10', 14))),
@@ -995,6 +1022,7 @@ function renderProps() {
         pick('conn-head', 'End', HEADS, same(conns, 'head') || 'triangle', v => setAll(conns, 'head', v === 'triangle' ? '' : v, true))) : null,
       h('div', { class: 'row' },
         h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.flow)), title: 'Show dots moving from start to end', onclick: () => setAll(conns, 'flow', !conns.every(e => e.flow)) }, 'Animate flow'),
+        conns.some(e => e.style !== 'cable') ? h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.sketch)), title: 'Rough, hand-drawn line', onclick: () => setAll(conns, 'sketch', !conns.every(e => e.sketch)) }, 'Hand-drawn') : null,
         conns.some(e => e.as || e.bs) ? h('button', { class: 'fbtn', title: 'Let both ends pick the best side again', onclick: () => { conns.forEach(e => { delete e.as; delete e.bs; }); commit(); } }, 'Unpin ends') : null)));
     const texty = free.filter(e => TEXTY.includes(e.type));
     if (texty.length) {
@@ -1078,9 +1106,10 @@ function calendarEl(cards) {
 }
 function renderTasks() {
   if (!$('#ptasks') || rightTab !== 'tasks') return;
-  const cards = all().filter(e => e.type === 'card').sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : 1), cur = selEls().length === 1 && selEls()[0].type === 'card' ? selEls()[0] : null;
+  const cards = scopeCards().sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : 1), cur = selEls().length === 1 && selEls()[0].type === 'card' ? selEls()[0] : null;
   const n = k => cards.filter(c => k === 'all' || c.status === k).length;
   $('#thead').replaceChildren(h('div', { class: 'tpad' },
+    scopeSwitch(),
     h('div', { class: 'seg', role: 'group', 'aria-label': 'Task view' }, [['list', 'List'], ['cal', 'Calendar']].map(([k, label]) => h('button', { 'aria-pressed': String(taskView === k), onclick: () => { taskView = k; renderTasks(); } }, label))),
     taskView === 'cal' ? calendarEl(cards) : h('div', { class: 'chips' }, [['all', 'All'], ...Object.entries(STATUS).map(([k, v]) => [k, v[0], v[1]])].map(([k, label, col]) =>
       h('button', { class: 'chip' + (taskFilter === k ? ' on' : ''), 'aria-pressed': String(taskFilter === k), onclick: () => { taskFilter = k; renderTasks(); } }, col ? h('b', { style: 'background:' + col }) : null, `${label} ${n(k)}`)))));
@@ -1092,24 +1121,25 @@ function renderTasks() {
   const none = taskView === 'cal' ? (calDay ? 'Nothing is due on this day.' : 'Nothing is due this month.') : cards.length ? 'No tasks with this status.' : 'No tasks yet. Press C and click the board to add a task card.';
   $('#tlist').replaceChildren(...(show.length ? show.map(c => {
     const late = c.due && c.due < today() && c.status !== 'done';
-    return h('button', { class: 'trow' + (cur === c ? ' on' : ''), onclick: () => { sel = new Set([c.id]); centerOn(c); refresh(); } },
-      h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, c.text), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : ''))));
+    const where = taskScope === 'all' && board.pages.length > 1 ? ' \u00b7 ' + (pageOf(c.id) || {}).name : '';
+    return h('button', { class: 'trow' + (cur === c ? ' on' : ''), onclick: () => gotoCard(c) },
+      h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, c.text), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : '') + where)));
   }) : [h('p', { class: 'note' }, none)]));
 }
 function renderKanban() {
   const el = $('#kan'), btn = $('#kanban-toggle'); if (!el) return; el.hidden = !kanban; btn.classList.toggle('on', kanban); btn.setAttribute('aria-pressed', String(kanban)); if (!kanban) return;
-  const groups = groupTasks(all());
+  const groups = groupTasks(scopeCards()), multi = taskScope === 'all' && board.pages.length > 1;
   el.replaceChildren(...Object.entries(STATUS).map(([k, [label, col]]) => h('section', { class: 'kcol', 'aria-label': label,
     ondragover: e => { e.preventDefault(); e.currentTarget.classList.add('over'); }, ondragleave: e => e.currentTarget.classList.remove('over'),
-    ondrop: e => { e.preventDefault(); e.currentTarget.classList.remove('over'); const c = E(e.dataTransfer.getData('text/plain')); if (c && c.type === 'card' && c.status !== k) { c.status = k; edFor = null; commit(); } } },
+    ondrop: e => { e.preventDefault(); e.currentTarget.classList.remove('over'); const c = E(e.dataTransfer.getData('text/plain')); const c2 = c || board.pages.map(p => p.els[e.dataTransfer.getData('text/plain')]).find(Boolean); if (c2 && c2.type === 'card' && c2.status !== k) { c2.status = k; edFor = null; cardChanged(c2); } } },
     h('header', null, h('b', { style: 'background:' + col }), label, h('span', null, String(groups[k].length))),
     h('div', { class: 'klist' }, groups[k].map(c => {
       const late = c.due && c.due < today() && c.status !== 'done';
       return h('article', { class: 'kcard' + (sel.has(c.id) ? ' on' : ''), draggable: 'true', tabindex: '0', style: 'border-left-color:' + col,
         ondragstart: e => e.dataTransfer.setData('text/plain', c.id), onclick: () => { sel = new Set([c.id]); rightTab = 'design'; refresh(); },
         onkeydown: e => { if (e.key === 'Enter') { sel = new Set([c.id]); rightTab = 'design'; refresh(); } },
-        ondblclick: () => { kanban = false; sel = new Set([c.id]); centerOn(c); refresh(); } },
-        h('strong', null, c.text), c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
+        ondblclick: () => { kanban = false; gotoCard(c); } },
+        h('strong', null, c.text), multi ? h('small', null, (pageOf(c.id) || {}).name) : null, c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
     })),
     h('button', { class: 'kadd', onclick: () => { kanban = false; addTask(k); } }, 'Add task'))));
 }
@@ -1150,20 +1180,47 @@ async function saveFile(name, data, mime) {
   if (dl) { try { await dl.save({ filename: name, data }); } catch (e) { if (!e || e.code !== 'declined') toast('Export failed. ' + ((e && e.message) || '')); } return; }
   const a = h('a', { href: URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: mime })), download: name }); document.body.append(a); a.click(); a.remove();
 }
-function exportAs(kind) {
-  const list = (sel.size ? selEls() : all()), b = bounds(list); if (!b) return toast('Nothing to export yet.');
-  const pad = 36, w = Math.ceil(b.w + pad * 2), ht = Math.ceil(b.h + pad * 2), x = Math.floor(b.x - pad), y = Math.floor(b.y - pad);
-  const order = sorted().filter(e => list.includes(e));
-  const svg = s('svg', { viewBox: `${x} ${y} ${w} ${ht}`, width: w, height: ht }, s('rect', { x, y, width: w, height: ht, fill: '#ffffff' }), order.map(e => renderEl(e, rctx(true))));
-  const str = new XMLSerializer().serializeToString(svg), name = (meta(board.id).name || 'board').replace(/[^\w\- ]+/g, '').trim() || 'board';
-  if (kind === 'svg') return saveFile(name + '.svg', str, 'image/svg+xml');
-  const img = new Image(), url = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));
-  img.onload = () => {
-    const k = Math.min(2, 8000 / Math.max(w, ht)), c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(ht * k);
-    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
-    c.toBlob(blob => blob ? saveFile(name + '.png', blob, 'image/png') : toast('Export failed. Try SVG instead.'), 'image/png');
-  };
-  img.onerror = () => toast('Export failed. Try SVG instead.'); img.src = url;
+const byLayer = (a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - b.z : a.type === 'frame' ? -1 : 1;
+/** One page (or a selection on it) as a standalone light-theme SVG string. */
+function pageSvg(els, list) {
+  const get = id => els[id], b = G.bounds(list, get); if (!b) return null;
+  const pad = 36, w = Math.ceil(b.w + pad * 2), ht = Math.ceil(b.h + pad * 2), x = Math.floor(b.x - pad), y = Math.floor(b.y - pad), rc = { ...rctx(true), get };
+  const svg = s('svg', { viewBox: `${x} ${y} ${w} ${ht}`, width: w, height: ht }, s('rect', { x, y, width: w, height: ht, fill: '#ffffff' }), [...list].sort(byLayer).map(e => renderEl(e, rc)));
+  return { str: new XMLSerializer().serializeToString(svg), w, ht };
+}
+/** Draw an SVG string onto a canvas, at up to 2x and never more than `max` pixels on a side. */
+function rasterize(sv, max) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(new Blob([sv.str], { type: 'image/svg+xml' }));
+    img.onload = () => {
+      const k = Math.min(2, max / Math.max(sv.w, sv.ht)), c = document.createElement('canvas'); c.width = Math.max(1, Math.round(sv.w * k)); c.height = Math.max(1, Math.round(sv.ht * k));
+      const x = c.getContext('2d'); x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); resolve(c);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('render')); }; img.src = url;
+  });
+}
+const fileName = () => (meta(board.id).name || 'board').replace(/[^\w\- ]+/g, '').trim() || 'board';
+async function exportAs(kind) {
+  const sv = pageSvg(board.els, sel.size ? selEls() : all()); if (!sv) return toast('Nothing to export yet.');
+  if (kind === 'svg') return saveFile(fileName() + '.svg', sv.str, 'image/svg+xml');
+  try { const c = await rasterize(sv, 8000); c.toBlob(blob => blob ? saveFile(fileName() + '.png', blob, 'image/png') : toast('Export failed. Try SVG instead.'), 'image/png'); }
+  catch (e) { toast('Export failed. Try SVG instead.'); }
+}
+/** A PDF with one page per board page (or just this page, or the selection on it). */
+async function exportPdf(allPages) {
+  const pages = allPages ? board.pages : [board.pages.find(p => p.id === board.page)];
+  await loadImages(pages.flatMap(p => Object.values(p.els)));
+  const out = [];
+  try {
+    for (const pg of pages) {
+      const sv = pageSvg(pg.els, !allPages && sel.size ? selEls() : Object.values(pg.els)); if (!sv) continue;
+      const c = await rasterize(sv, 4000), blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92)); if (!blob) throw new Error('encode');
+      const k = Math.min(0.75, 14000 / Math.max(sv.w, sv.ht));
+      out.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), px: c.width, py: c.height, w: sv.w * k, h: sv.ht * k });
+    }
+  } catch (e) { return toast('The PDF could not be made. Try PNG instead.'); }
+  if (!out.length) return toast('Nothing to export yet.');
+  saveFile(fileName() + '.pdf', new Blob([buildPdf(out)], { type: 'application/pdf' }), 'application/pdf');
 }
 
 /* ---------- Boot ---------- */

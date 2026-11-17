@@ -1,4 +1,5 @@
 import { connGeom } from './connectors';
+import { colFractions } from './table';
 import { FONTS, type Box, type El, type Lookup } from './types';
 
 export { ends } from './connectors';
@@ -157,8 +158,8 @@ export function fitText(e: El) {
   else if (e.type === 'text') e.h = Math.ceil(wrapEl(e, e.w - 4).length * lh + 8);
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
   else if (e.type === 'table' && e.cells) {
-    const st = textStyle(e), cw = e.w / Math.max(1, ...e.cells.map(r => r.length)) - 16;
-    const lines = Math.max(1, ...e.cells.flat().map(t => wrap(t, cw, st.size, st.weight, st.family, st.italic).length));
+    const st = textStyle(e), fr = colFractions(e);
+    const lines = Math.max(1, ...e.cells.flatMap(row => row.map((t, i) => wrap(t, e.w * (fr[i] || 0) - 16, st.size, st.weight, st.family, st.italic).length)));
     e.h = Math.max(e.h, Math.ceil(e.cells.length * (lines * lh + 16)));
   }
 }

@@ -201,7 +201,7 @@ export function connGeom(c: El, get: Lookup, sway: Pt = { x: 0, y: 0 }): ConnGeo
     const c2 = { x: q.x + B.d.x * reach + side, y: q.y + B.d.y * reach + drop };
     return {
       d: `M${n2(p.x)} ${n2(p.y)}C${n2(c1.x)} ${n2(c1.y)} ${n2(c2.x)} ${n2(c2.y)} ${n2(q.x)} ${n2(q.y)}`,
-      pts: [0, 0.25, 0.5, 0.75, 1].map(t => cubicAt(p, c1, c2, q, t)), label: cubicAt(p, c1, c2, q, 0.5), p, q,
+      pts: Array.from({ length: 13 }, (_, i) => cubicAt(p, c1, c2, q, i / 12)), label: cubicAt(p, c1, c2, q, 0.5), p, q,
       a0: Math.atan2(c1.y - p.y, c1.x - p.x), a1: Math.atan2(q.y - c2.y, q.x - c2.x),
     };
   }

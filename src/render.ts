@@ -3,7 +3,8 @@ import { s, today } from './dom';
 import { measure, textStyle, wrapEl, type TextStyle } from './geometry';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { STATUS, type El, type Head, type Lookup } from './types';
-import { cellBox, colsOf, rowsOf } from './table';
+import { cellBox, colFractions, rowsOf } from './table';
+import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 
 /** What the renderer needs to know about where it is drawing. */
 export interface RenderCtx {
@@ -83,7 +84,7 @@ function renderConn(g: SVGElement, e: El, c: RenderCtx) {
       s('path', { d: geom.d, fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.28, 'stroke-width': 1.2, 'stroke-linecap': 'round', 'pointer-events': 'none' }),
       plug(geom.p, geom.a0, cord), plug(geom.q, geom.a1 + Math.PI, cord));
   } else {
-    g.append(s('path', { d: geom.d, fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, 1.8) }));
+    g.append(s('path', { d: e.sketch ? roughPath(geom.pts, hashId(e.id), 1.6) : geom.d, fill: 'none', stroke: color, 'stroke-width': e.sketch ? 1.4 : 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, 1.8) }));
     for (const end of [headShape(e.head || 'triangle', geom.q, geom.a1, color), headShape(e.tail || 'none', geom.p, geom.a0 + Math.PI, color)]) if (end) { end.setAttribute('pointer-events', 'none'); g.append(end); }
   }
   // Flow: dots travelling from the start to the end. Drawn on screen only; exports show the still line.
@@ -104,10 +105,11 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     g.append(s('rect', { x, y, width: w, height: h, fill: e.fill, filter: shadow }));
     if (!hide) { const [tx, anchor] = lineStart(e, x, w, 12, 'left'); g.append(textBlock(wrapEl(e, w - 24), tx, y + 12 + st.size, st, e.color || DARK, anchor)); }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
-    const a = { fill: e.fill, stroke: e.stroke || '#2b3545', 'stroke-width': 1.5, 'stroke-dasharray': dashOf(e, 1.5) };
+    const a = e.sketch ? { fill: e.fill, stroke: 'none' } : { fill: e.fill, stroke: e.stroke || '#2b3545', 'stroke-width': 1.5, 'stroke-dasharray': dashOf(e, 1.5) };
     g.append(e.type === 'rect' ? s('rect', { x, y, width: w, height: h, rx: 6, ...a })
       : e.type === 'ellipse' ? s('ellipse', { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2, ...a })
       : s('polygon', { points: `${x + w / 2},${y} ${x + w},${y + h / 2} ${x + w / 2},${y + h} ${x},${y + h / 2}`, ...a }));
+    if (e.sketch) g.append(s('path', { d: roughPath(shapeOutline(e.type, x, y, w, h), hashId(e.id), wobble(w, h)), fill: 'none', stroke: e.stroke || '#2b3545', 'stroke-width': 1.3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, 1.5), 'pointer-events': 'none' }));
     if (!hide) { const ls = wrapEl(e, w - 24); const [tx, anchor] = lineStart(e, x, w, 12, 'center'); g.append(textBlock(ls, tx, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, e.color || DARK, anchor)); }
   } else if (e.type === 'text') {
     g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
@@ -150,12 +152,12 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     else g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: '#dfe5ee', stroke: '#9aa8c4', 'stroke-dasharray': '6 4' }),
       textBlock(['Loading picture'], x + w / 2, y + h / 2 + 4, { size: 13, weight: 500, family: st.family, italic: false }, '#5d697c', 'middle'));
   } else if (e.type === 'table') {
-    const rows = rowsOf(e), cols = colsOf(e), line = '#d3d8e0';
+    const rows = rowsOf(e), fr = colFractions(e), line = '#d3d8e0';
     g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: '#ffffff', stroke: '#c3ccda', filter: shadow }));
     if (e.header) g.append(s('path', { d: `M${x} ${y + h / rows}V${y + 4}Q${x} ${y} ${x + 4} ${y}H${x + w - 4}Q${x + w} ${y} ${x + w} ${y + 4}V${y + h / rows}Z`, fill: '#eef0f4', 'pointer-events': 'none' }));
     let grid = '';
     for (let r = 1; r < rows; r++) grid += `M${x} ${y + r * h / rows}H${x + w}`;
-    for (let k = 1; k < cols; k++) grid += `M${x + k * w / cols} ${y}V${y + h}`;
+    for (let k = 1, acc = 0; k < fr.length; k++) { acc += fr[k - 1]; grid += `M${x + acc * w} ${y}V${y + h}`; }
     if (grid) g.append(s('path', { d: grid, stroke: line, 'stroke-width': 1, fill: 'none', 'pointer-events': 'none' }));
     (e.cells || []).forEach((row, r) => row.forEach((text, k) => {
       if (!text || (hide && c.editCell && c.editCell[0] === r && c.editCell[1] === k)) return;
