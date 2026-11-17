@@ -651,7 +651,7 @@ function fit(list) {
 }
 /** The color of the last sticky note colored by hand, used for the next new one (as FigJam does). */
 let lastSticky = null;
-function makeBox(type, x, y, w, ht) {
+function makeBox(type, x, y, w, ht, keep = false) {
   const d = { sticky: [G.STICKY_SIDE, G.STICKY_SIDE], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320], sticker: [84, 84], tape: [220, 32], table: [360, 120] }[type];
   const drawn = w > 8 && ht > 8, e = { id: uid('e'), type, z: topZ() + 1, x: Math.round(drawn ? x : x - d[0] / 2), y: Math.round(drawn ? y : y - d[1] / 2), w: Math.round(drawn && type !== 'card' ? Math.max(w, 30) : d[0]), h: Math.round(drawn && type !== 'card' && type !== 'text' ? Math.max(ht, 30) : d[1]), text: '' };
   if (type === 'sticky') { e.fill = lastSticky || FILLS[0]; if (Store.uid) e.author = Store.uid; }
@@ -663,8 +663,8 @@ function makeBox(type, x, y, w, ht) {
   if (stuck) delete e.text;
   if (type === 'sticker') Object.assign(e, { shape: stamp.shape, fill: stamp.fill });
   if (type === 'tape') { Object.assign(e, { pattern: stamp.pattern || 'stripes', fill: stamp.fill }); if (!drawn) e.rot = -3; }
-  // Stickers and tape keep the tool active so several can be placed in a row.
-  board.els[e.id] = e; sel = new Set([e.id]); tool = stuck ? 'stamp' : 'select'; commit();
+  // Placing a piece hands back the pointer, as in Figma. Holding Alt keeps the tool for placing several.
+  board.els[e.id] = e; sel = new Set([e.id]); if (!keep) tool = 'select'; commit();
   if (type !== 'frame' && !stuck) startEdit(e.id, type === 'table' ? [0, 0] : null);
 }
 
@@ -960,7 +960,7 @@ function onUp(ev) {
     if (!m.quick) tool = 'select'; commit();
   } else if (m.k === 'create') {
     let w = Math.abs(p.x - m.p.x), ht = Math.abs(p.y - m.p.y); if (ev.shiftKey) w = ht = Math.max(w, ht);
-    makeBox(tool === 'stamp' ? stamp.type : tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), w, ht);
+    makeBox(tool === 'stamp' ? stamp.type : tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), w, ht, ev.altKey);
   }
 }
 function onKey(ev) {
@@ -1495,7 +1495,7 @@ const KEYS = [
   ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['H', 'Highlighter'], ['E', 'Eraser (drawings only)'], ['G', 'Table'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
-  ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
+  ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Alt while placing', 'Keep the tool to place several'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
   ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+Alt+U / S / I / X', 'Union, subtract, intersect, exclude'], ['Double-click a boolean', 'Select the shape under the pointer'], ['Enter on a boolean', 'Select the shapes inside it'], ['Esc on a shape inside', 'Back to the boolean'], ['Ctrl+E', 'Flatten the selection, or bake a boolean'], ['Ctrl+Shift+O', 'Outline stroke'], ['Ctrl+Alt+M', 'Use the bottom piece as a mask, or release it']]],
   ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
