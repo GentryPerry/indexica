@@ -20,6 +20,7 @@ import { Store } from './store';
 import { History } from './history';
 import { snapMove, snapPoint } from './snap';
 import * as L from './library';
+import { paintFill, outlineFor, inkOn, SURFACE } from './palette';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -281,8 +282,8 @@ const ends = c => G.ends(c, E), bbox = e => G.bbox(e, E), bounds = list => G.bou
 const sways = new Map(), mids = new Map(); let swayRaf = 0, swayT = 0;
 const calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 // Exports always use the light look, whatever the theme on screen.
-const LIGHT = { ink: '#17202d', muted: '#5d697c', canvas: '#e9ebef', frame: '#ffffff', frameLine: '#d3d8e0' };
-const rctx = exp => ({ exp, ...(exp ? LIGHT : { ink: C.ink, muted: C.muted, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
+const LIGHT = { theme: 'light', ink: '#17202d', muted: '#5d697c', line: '#5b6679', canvas: '#eef0f3', frame: '#ffffff', frameLine: '#dce1e8' };
+const rctx = exp => ({ exp, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
 async function loadImages(els = all()) {
@@ -338,15 +339,30 @@ function swing(now) {
 }
 function draw() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
-  C = { ink: v('--ink'), muted: v('--muted'), accent: v('--accent'), accentFill: v('--accent-fill'), canvas: v('--canvas'), frame: v('--frame'), frameLine: v('--frame-line') };
+  C = { theme: v('color-scheme') === 'dark' ? 'dark' : 'light', ink: v('--ink'), muted: v('--muted'), line: v('--conn'), accent: v('--accent'), accentFill: v('--accent-fill'), canvas: v('--canvas'), frame: v('--frame'), frameLine: v('--frame-line'), dot: v('--dot') };
   trackCables();
   const t = `translate(${cam.x},${cam.y}) scale(${cam.z})`;
   vp.setAttribute('transform', t); ov.setAttribute('transform', t);
+  dotGrid();
   const rc = rctx(false); vp.replaceChildren(...sorted().map(e => renderEl(e, rc)));
   drawOverlay();
   const zv = $('#zoomt'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
   drawMini();
 }
+/**
+ * The canvas dot grid. Two levels are drawn: the finer one fades out as you zoom out, and the next
+ * level, four times wider, takes over, so the grid never turns into noise.
+ */
+function dotGrid() {
+  if (!cv) return;
+  let fine = 24; while (fine * cam.z < 10) fine *= 4;
+  const f = fine * cam.z, c = f * 4, a = Math.max(0, Math.min(1, (f - 10) / 14)), rgb = hexRgb(C.dot);
+  const dot = (alpha, r) => `radial-gradient(circle at 1px 1px, rgba(${rgb},${alpha}) ${r}px, rgba(${rgb},0) ${r + 0.6}px)`;
+  cv.style.backgroundImage = `${dot(a, 0.8)}, ${dot(1, 0.9)}`;
+  cv.style.backgroundSize = `${f}px ${f}px, ${c}px ${c}px`;
+  cv.style.backgroundPosition = `${cam.x - 1}px ${cam.y - 1}px`;
+}
+const hexRgb = hex => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return '150,160,175'; const n = parseInt(m[1], 16); return `${n >> 16},${(n >> 8) & 255},${n & 255}`; };
 function centerOn(e) { const r = cv.getBoundingClientRect(), b = bbox(e); cam.x = r.width / 2 - (b.x + b.w / 2) * cam.z; cam.y = r.height / 2 - (b.y + b.h / 2) * cam.z; }
 function drawMini() {
   const el = $('#mini'); if (!el || !mini) return; el.hidden = !miniOn || kanban; if (el.hidden) return;
@@ -356,7 +372,7 @@ function drawMini() {
   const m = miniState, box = b => ({ x: b.x * m.k + m.ox, y: b.y * m.k + m.oy, width: Math.max(b.w * m.k, 1.5), height: Math.max(b.h * m.k, 1.5) });
   mini.replaceChildren(
     ...sorted().filter(e => e.type !== 'conn' && e.type !== 'pen').map(e => s('rect', { ...box(bbox(e)), rx: 1,
-      fill: e.type === 'frame' ? 'none' : e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? '#ffffff' : e.fill || C.muted, 'fill-opacity': e.type === 'text' ? 0.5 : 1, stroke: e.type === 'frame' ? C.frameLine : 'rgba(0,0,0,.15)', 'stroke-width': 0.75 })),
+      fill: e.type === 'frame' ? 'none' : e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? C.frame : paintFill(e.fill, C.theme) || C.muted, 'fill-opacity': e.type === 'text' ? 0.5 : 1, stroke: e.type === 'frame' ? C.frameLine : 'rgba(0,0,0,.15)', 'stroke-width': 0.75 })),
     s('rect', { ...box(view), rx: 2, fill: C.accent, 'fill-opacity': 0.1, stroke: C.accent, 'stroke-width': 1.5 }));
 }
 function miniGo(ev) {
@@ -367,12 +383,14 @@ function rotateHandle(mx, top, col, k) {
   return [s('line', { x1: mx, y1: top, x2: mx, y2: top - 18 * k, stroke: col, 'stroke-width': k, 'pointer-events': 'none' }),
     s('circle', { 'data-h': 'rot', cx: mx, cy: top - 18 * k, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)'))];
 }
-const handleSq = (n, x, y, r, k, cur, title) => s('rect', { 'data-h': n, x: x - r, y: y - r, width: r * 2, height: r * 2, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }, title ? s('title', null, title) : null);
+const handleSq = (n, x, y, r, k, cur, title) => s('rect', { 'data-h': n, x: x - r, y: y - r, width: r * 2, height: r * 2, rx: 1.5 * k, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.25 * k, style: `cursor:${cur}-resize` }, title ? s('title', null, title) : null);
+/** An invisible strip along one edge of a selection that resizes on that side. */
+const edgeGrip = (n, x, y, w, ht, cur) => s('rect', { 'data-h': n, x, y, width: w, height: ht, fill: 'transparent', style: `cursor:${cur}-resize` });
 /** The blue width-by-height badge under a selection. */
-function sizeBadge(b, w, ht, k) {
-  const label = `${Math.round(w)} × ${Math.round(ht)}`, tw = (G.measure(label, 11, 500) + 14) * k, y = b.y + b.h + 8 * k;
+function sizeBadge(b, w, ht, k, below = false) {
+  const label = `${Math.round(w)} × ${Math.round(ht)}`, tw = (G.measure(label, 11, 500) + 14) * k, y = b.y + b.h + (below ? 32 : 8) * k;
   return s('g', { 'pointer-events': 'none' },
-    s('rect', { x: b.x + b.w / 2 - tw / 2, y, width: tw, height: 18 * k, rx: 4 * k, fill: C.accentFill }),
+    s('rect', { x: b.x + b.w / 2 - tw / 2, y, width: tw, height: 18 * k, rx: 5 * k, fill: C.accentFill }),
     s('text', { x: b.x + b.w / 2, y: y + 12.6 * k, 'font-size': 11 * k, 'font-weight': 500, 'font-family': 'Inter,system-ui,sans-serif', fill: '#ffffff', 'text-anchor': 'middle' }, label));
 }
 function drawOverlay(extra) {
@@ -381,30 +399,31 @@ function drawOverlay(extra) {
     const col = e.locked ? '#b93232' : C.accent;
     if (e.type === 'conn') {
       const gm = connGeom(e, E);
-      out.push(s('path', { d: gm.d, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-opacity': 0.6, 'pointer-events': 'none' }));
-      if (solo && !e.locked && !(mode && mode.k === 'connEnd')) for (const [n, at] of [['ca', gm.p], ['cb', gm.q]]) out.push(s('circle', { 'data-h': n, cx: at.x, cy: at.y, r: 5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:move' }, s('title', null, 'Drag to re-attach this end')));
+      out.push(s('path', { d: gm.d, fill: 'none', stroke: col, 'stroke-width': 1.25 * k, 'stroke-opacity': 0.7, 'pointer-events': 'none' }));
+      if (solo && !e.locked && !(mode && mode.k === 'connEnd')) for (const [n, at] of [['ca', gm.p], ['cb', gm.q]]) out.push(s('circle', { 'data-h': n, cx: at.x, cy: at.y, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.25 * k, style: 'cursor:move' }, s('title', null, 'Drag to re-attach this end')));
       continue;
     }
     const g = s('g', { transform: e.rot ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null },
-      s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
+      s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': 1.25 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
     if (solo && !e.locked) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
-      g.append(s('circle', { 'data-h': 'rot', cx: x1 + 12 * k, cy: e.y - 12 * k, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
+      g.append(s('circle', { 'data-h': 'rot', cx: x1 + 12 * k, cy: e.y - 12 * k, r: 4 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.25 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
       if (e.type === 'table') { const fr = colFractions(e); let acc = 0; fr.slice(0, -1).forEach((f, i) => { acc += f; g.append(s('rect', { 'data-h': 'col-' + i, class: 'colh', x: e.x + acc * e.w - 4 * k, y: e.y, width: 8 * k, height: e.h, fill: C.accent, 'fill-opacity': 0, style: 'cursor:col-resize' }, s('title', null, 'Drag to resize columns'))); }); }
       if (BOXY.includes(e.type)) {
-        for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew']]) g.append(handleSq(n, px, py, 3 * k, k, cur));
+        const gw = 8 * k;
+        g.append(edgeGrip('n', e.x, e.y - gw / 2, e.w, gw, 'ns'), edgeGrip('s', e.x, y1 - gw / 2, e.w, gw, 'ns'), edgeGrip('w', e.x - gw / 2, e.y, gw, e.h, 'ew'), edgeGrip('e', x1 - gw / 2, e.y, gw, e.h, 'ew'));
         for (const [n, px, py, cur] of [['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) g.append(handleSq(n, px, py, 4 * k, k, cur));
       }
     }
     out.push(g);
-    if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k));
+    if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k, !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode && !e.rot));
     // Quick connect: drag a + handle to another piece, or click it to add a connected piece on that side.
     if (solo && !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode) for (const sd of SIDES) {
-      const at = sidePoint(e, sd, 22 * k), r = 7 * k;
+      const at = sidePoint(e, sd, 20 * k), r = 6.5 * k;
       out.push(s('g', { 'data-h': 'qc-' + sd, class: 'qc', style: 'cursor:crosshair' },
         s('title', null, 'Drag to connect, or click to add a connected piece'),
-        s('circle', { 'data-h': 'qc-' + sd, cx: at.x, cy: at.y, r, fill: C.accentFill, stroke: '#ffffff', 'stroke-width': 1.5 * k }),
-        s('path', { 'data-h': 'qc-' + sd, d: `M${at.x - r * 0.45} ${at.y}H${at.x + r * 0.45}M${at.x} ${at.y - r * 0.45}V${at.y + r * 0.45}`, stroke: '#ffffff', 'stroke-width': 1.5 * k, 'stroke-linecap': 'round', 'pointer-events': 'none' })));
+        s('circle', { 'data-h': 'qc-' + sd, cx: at.x, cy: at.y, r, fill: C.frame, stroke: C.accent, 'stroke-width': 1.25 * k }),
+        s('path', { 'data-h': 'qc-' + sd, d: `M${at.x - r * 0.42} ${at.y}H${at.x + r * 0.42}M${at.x} ${at.y - r * 0.42}V${at.y + r * 0.42}`, stroke: C.accent, 'stroke-width': 1.4 * k, 'stroke-linecap': 'round', 'pointer-events': 'none' })));
     }
   }
   // Several pieces selected: one box around them all, with handles that turn or scale the whole selection.
@@ -599,8 +618,13 @@ function placeEditor() {
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
     padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px',
-    textAlign: e.align || (centered ? 'center' : 'left'), color: e.color || (onCanvas ? 'var(--ink)' : '#1d2530'), background: e.type === 'sticky' ? e.fill : onCanvas ? 'var(--frame)' : e.color === '#ffffff' ? '#2b2f3a' : '#ffffff',
+    textAlign: e.align || (centered ? 'center' : 'left'), ...editorPaint(e, onCanvas),
     transform: e.rot && !lab ? `rotate(${e.rot}deg)` : '', transformOrigin: lab ? '' : `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
+}
+/** Background and text color for the text editor, matching the piece as it is painted on screen. */
+function editorPaint(e, onCanvas) {
+  const bg = onCanvas ? C.frame : ['card', 'table'].includes(e.type) ? SURFACE[C.theme].card : paintFill(e.fill, C.theme) || C.frame;
+  return { background: bg, color: inkOn(bg, e.color, C.theme) };
 }
 function startEdit(id, cell) {
   const e = E(id); if (!e || e.locked || !TEXTY.includes(e.type)) return;
@@ -840,7 +864,10 @@ async function openBoard(id) {
   // Rebuild the properties once focus leaves them, so values typed into a field are not wiped mid-edit.
   $('#pdesign').addEventListener('focusout', () => setTimeout(() => { const p = $('#pdesign'); if (board && p && !p.contains(document.activeElement)) renderProps(); }, 0));
   cv = s('svg', { id: 'cv', role: 'application', 'aria-label': 'Board canvas' },
-    s('defs', null, s('filter', { id: 'sh', x: '-10%', y: '-10%', width: '120%', height: '130%' }, s('feDropShadow', { dx: 0, dy: 1, stdDeviation: 1.5, 'flood-color': '#17202d', 'flood-opacity': 0.18 }))));
+    s('defs', null, s('filter', { id: 'sh', x: '-20%', y: '-20%', width: '140%', height: '160%' },
+      // A tight contact shadow and a soft ambient one, like paper lifted a little off the board.
+      s('feDropShadow', { dx: 0, dy: 0.5, stdDeviation: 0.6, style: 'flood-color:var(--sh-c);flood-opacity:var(--sh-a1)' }),
+      s('feDropShadow', { dx: 0, dy: 3, stdDeviation: 4, style: 'flood-color:var(--sh-c);flood-opacity:var(--sh-a2)' }))));
   vp = s('g'); ov = s('g'); cv.append(vp, ov); $('.stage').prepend(cv);
   mini = s('svg', { width: 144, height: 96, 'aria-hidden': 'true' }); $('#mini').append(mini);
   mini.addEventListener('pointerdown', ev => { miniDrag = true; mini.setPointerCapture(ev.pointerId); miniGo(ev); });
@@ -921,11 +948,11 @@ function renderPages(force) {
 /* ---------- Outline and properties ---------- */
 function outlineIcon(e) {
   const chip = style => h('span', { class: 'oi', 'aria-hidden': 'true' }, h('span', { style }));
-  const fill = e.fill || '#ffffff';
-  if (e.type === 'sticky') return chip(`width:10px;height:10px;background:${fill};border:1px solid rgba(23,32,45,.25)`);
-  if (e.type === 'rect') return chip(`width:10px;height:8px;border-radius:2px;background:${fill};border:1px solid #2b3545`);
-  if (e.type === 'ellipse') return chip(`width:10px;height:8px;border-radius:50%;background:${fill};border:1px solid #2b3545`);
-  if (e.type === 'diamond') return chip(`width:7px;height:7px;transform:rotate(45deg);background:${fill};border:1px solid #2b3545`);
+  const fill = paintFill(e.fill || '#ffffff', C.theme), edge = e.type === 'sticky' ? 'rgba(23,32,45,.2)' : outlineFor(e.fill, C.theme);
+  if (e.type === 'sticky') return chip(`width:10px;height:10px;border-radius:2px;background:${fill};border:1px solid ${edge}`);
+  if (e.type === 'rect') return chip(`width:10px;height:8px;border-radius:2px;background:${fill};border:1px solid ${edge}`);
+  if (e.type === 'ellipse') return chip(`width:10px;height:8px;border-radius:50%;background:${fill};border:1px solid ${edge}`);
+  if (e.type === 'diamond') return chip(`width:7px;height:7px;transform:rotate(45deg);background:${fill};border:1px solid ${edge}`);
   if (e.type === 'card') return chip(`width:4px;height:12px;border-radius:2px;background:${STATUS[e.status || 'todo'][1]}`);
   if (e.type === 'tape') return chip(`width:12px;height:5px;background:${e.fill || '#2f6fed'};opacity:.8`);
   if (e.type === 'sticker') return h('span', { class: 'oi', 'aria-hidden': 'true', style: 'color:' + (e.fill || '#f5c518') }, icon(STAR, 12, { fill: 'currentColor', stroke: 'none' }));
@@ -933,7 +960,7 @@ function outlineIcon(e) {
 }
 function renderOutline() {
   const el = $('#olist'); if (!el) return;
-  const rows = outlineRows(all(), E), sig = rows.map(r => { const e = E(r.id); return [r.id, r.depth, r.label, e.locked ? 1 : 0, e.fill || '', e.status || ''].join('~'); }).join('|');
+  const rows = outlineRows(all(), E), sig = rows.map(r => { const e = E(r.id); return [r.id, r.depth, r.label, e.locked ? 1 : 0, e.fill || '', e.status || ''].join('~'); }).join('|') + C.theme;
   // Rebuild only when rows change, so a double-click on a row lands on the same element twice.
   if (sig !== outlineSig) {
     outlineSig = sig;

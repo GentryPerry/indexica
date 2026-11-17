@@ -2,11 +2,11 @@
    Docked panels divided by hairlines; only floating pieces cast a shadow.
    Chrome stays neutral: color belongs to board content, status, and the accent. */
 :root{
-  --panel:#ffffff; --field:#f5f6f8; --canvas:#e9ebef; --hover:#eef0f4; --picked:#e4eaff; --line:#e3e6eb;
+  --panel:#ffffff; --field:#f5f6f8; --canvas:#eef0f3; --hover:#eef0f4; --picked:#e4eaff; --line:#e3e6eb;
   --ink:#17202d; --muted:#5d697c; --faint:#aab3c2; --accent:#2447d6; --accent-fill:#2447d6; --accent-hi:#1f3cba; --accent-ink:#ffffff;
   --danger:#b93232; --danger-bg:#fbeaea; --danger-line:#f0c4c4; --swatch-ring:#ffffff;
   --todo:#7d8798; --doing:#2f6fed; --blocked:#d64545; --done:#2a9460;
-  --frame:#ffffff; --frame-line:#d3d8e0;
+  --frame:#ffffff; --frame-line:#dce1e8; --conn:#5b6679; --dot:#c9ced7; --sh-c:#17202d; --sh-a1:.16; --sh-a2:.07;
   --float:0 0 0 1px rgba(23,32,45,.08),0 4px 14px rgba(23,32,45,.14);
   --word:'Bricolage Grotesque','Trebuchet MS',sans-serif;
   --ui:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
@@ -19,7 +19,7 @@
     --panel:#1c2129; --field:#252c37; --canvas:#13171d; --hover:#2b3340; --picked:#25325c; --line:#2d3542;
     --ink:#e7ebf1; --muted:#9aa5b6; --faint:#5e6979; --accent:#7b96ff; --accent-fill:#3d5ce0; --accent-hi:#4d6bec;
     --danger:#ff8f8f; --danger-bg:#3a2226; --danger-line:#5a2f35; --swatch-ring:#1c2129;
-    --frame:#1f252e; --frame-line:#3a4350;
+    --frame:#1d232c; --frame-line:#323a47; --conn:#9aa5b6; --dot:#2e3540; --sh-c:#000000; --sh-a1:.55; --sh-a2:.35;
     --float:0 0 0 1px rgba(0,0,0,.45),0 6px 18px rgba(0,0,0,.45);
     --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%239aa5b6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
     color-scheme:dark;
@@ -29,7 +29,7 @@
   --panel:#1c2129; --field:#252c37; --canvas:#13171d; --hover:#2b3340; --picked:#25325c; --line:#2d3542;
   --ink:#e7ebf1; --muted:#9aa5b6; --faint:#5e6979; --accent:#7b96ff; --accent-fill:#3d5ce0; --accent-hi:#4d6bec;
   --danger:#ff8f8f; --danger-bg:#3a2226; --danger-line:#5a2f35; --swatch-ring:#1c2129;
-  --frame:#1f252e; --frame-line:#3a4350;
+  --frame:#1d232c; --frame-line:#323a47; --conn:#9aa5b6; --dot:#2e3540; --sh-c:#000000; --sh-a1:.55; --sh-a2:.35;
   --float:0 0 0 1px rgba(0,0,0,.45),0 6px 18px rgba(0,0,0,.45);
   --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%239aa5b6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
   color-scheme:dark;
