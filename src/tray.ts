@@ -14,6 +14,8 @@ export const LINE: Record<string, string> = {
   frame: 'M8 3.5v17M16 3.5v17M3.5 8h17M3.5 16h17',
   table: 'M4 5h16v14H4zM4 9.7h16M4 14.3h16M9.3 5v14M14.7 5v14',
   image: 'M4 5h16v14H4zM4 16l5-5 3.5 3.5 2.5-2.5 5 5M15.5 8.6a.8.8 0 1 0 .01 0',
+  // A pen nib, for the Bezier pen.
+  vpen: 'M12 3l6 6.5-3.2 8.5H9.2L6 9.5zM12 3v8M12 12.8a1.4 1.4 0 1 0 .01 0M9 21h6',
 };
 
 const line = (d: string) => s('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });

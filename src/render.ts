@@ -6,6 +6,7 @@ import { STATUS, type El, type Head, type Lookup } from './types';
 import { cellBox, colFractions, rowsOf } from './table';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
+import { pathD, scaleOf } from './vector';
 
 /** What the renderer needs to know about where it is drawing. */
 export interface RenderCtx {
@@ -159,6 +160,12 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const d = smoothPath(e.pts || [], x, y), sw = e.sw || (e.hl ? 16 : 2.5);
     g.append(s('path', { d, fill: 'none', stroke: e.hl ? (e.stroke || '#f5c518') : c.theme === 'dark' ? autoInkOr(e.stroke, c.ink) : e.stroke || c.ink, 'stroke-width': sw, 'stroke-opacity': e.hl ? 0.4 : null, 'stroke-linecap': e.hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': e.hl ? null : dashOf(e, sw) }));
     if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': Math.max(14, sw + 8) }));
+  } else if (e.type === 'path') {
+    const { sx, sy } = scaleOf(e), d = pathD(e.paths || [], x, y, sx, sy), sw = e.sw ?? 2;
+    const fill = e.fill && e.fill !== 'none' ? paintFill(e.fill, c.theme) : 'none';
+    const stroke = e.stroke === 'none' ? 'none' : c.theme === 'dark' ? autoInkOr(e.stroke, c.ink) : e.stroke || c.ink;
+    g.append(s('path', { d, fill, stroke, 'stroke-width': stroke === 'none' ? null : sw, 'fill-rule': e.rule || null, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': stroke === 'none' ? null : dashOf(e, sw) }));
+    if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': Math.max(12, sw + 8) }));
   } else if (e.type === 'sticker') {
     const def = STICKERS[e.shape || ''] || STICKERS.star, fill = e.fill || '#f5c518';
     const inner = s('g', { transform: `translate(${x} ${y}) scale(${w / 100} ${h / 100})` });

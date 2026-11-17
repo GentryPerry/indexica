@@ -23,6 +23,7 @@ import * as L from './library';
 import { paintFill, outlineFor, inkOn, SURFACE, adjust } from './palette';
 import { trayIcon } from './tray';
 import * as SL from './slides';
+import * as V from './vector';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -437,6 +438,7 @@ function sizeBadge(b, w, ht, k, below = false) {
     s('text', { x: b.x + b.w / 2, y: y + 12.6 * k, 'font-size': 11 * k, 'font-weight': 500, 'font-family': 'Inter,system-ui,sans-serif', fill: '#ffffff', 'text-anchor': 'middle' }, label));
 }
 function drawOverlay(extra) {
+  if (vedit && E(vedit.id)) { ov.replaceChildren(nodeMarks(E(vedit.id)), ...(extra ? [extra] : [])); return; }
   const k = 1 / cam.z, list = selEls(), out = [], solo = list.length === 1 && !editing;
   for (const e of list) {
     const col = e.locked ? '#b93232' : C.accent;
@@ -503,6 +505,7 @@ function guideMarks(guides) {
   return s('g', { 'pointer-events': 'none' }, guides.map(g => s('line', { ...(g.axis === 'x' ? { x1: g.pos, x2: g.pos, y1: g.from, y2: g.to } : { y1: g.pos, y2: g.pos, x1: g.from, x2: g.to }), stroke: '#e0409a', 'stroke-width': k })));
 }
 function refresh() {
+  if (vedit && !(sel.size === 1 && sel.has(vedit.id) && E(vedit.id))) vedit = null;
   draw(); renderRight(); renderPages(); renderOutline(); renderFly(); renderKanban();
   const u = $('#undo'), r = $('#redo'); if (u) { u.disabled = !hist.undo.length; r.disabled = !hist.redo.length; }
   if (cv) cv.style.cursor = tool === 'pen' ? (penMode === 'erase' ? 'cell' : 'crosshair') : tool === 'select' ? '' : 'crosshair';
@@ -693,6 +696,8 @@ function onDown(ev) {
   const dbl = now - lastDown.t < 350 && Math.hypot(ev.clientX - lastDown.x, ev.clientY - lastDown.y) < 6; lastDown = { t: dbl ? 0 : now, x: ev.clientX, y: ev.clientY };
   cv.setPointerCapture(ev.pointerId);
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
+  if (vedit && vEditDown(ev, p, id, dbl)) return;
+  if (tool === 'vpen') { vPenDown(ev, p, dbl); return; }
   if (tool === 'select') {
     if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; 
       if (hd.startsWith('gs-')) {
@@ -709,6 +714,7 @@ function onDown(ev) {
       }
       mode = { k: 'resize', hd, e, o: clone(e), p, others: otherBoxes(new Set([e.id])) }; return;
     }
+    if (dbl && id && E(id).type === 'path') { enterVedit(id); return; }
     if (dbl) { if (id) { sel = new Set([id]); refresh(); startEdit(id, E(id).type === 'table' ? cellAt(E(id), p.x, p.y) : null); } else makeBox('sticky', p.x, p.y, 0, 0); return; }
     if (id) {
       const had = sel.has(id);
@@ -743,10 +749,26 @@ function edgeScroll(ev) {
   edgeRaf = requestAnimationFrame(step);
 }
 function onMove(ev) {
+  if (!mode && vdraft && tool === 'vpen') { vdraft.hover = pt(ev); drawDraft(); return; }
   if (!mode) { if (tool === 'conn' && board) { const p = pt(ev), t = targetAt(p); drawOverlay(t ? s('g', null, targetMarks(t, sideAt(t, p))) : null); } return; }
   edgeScroll(ev);
   const p = pt(ev), k = 1 / cam.z;
   if (mode.k === 'pan') { cam.x = mode.cx + ev.clientX - mode.sx; cam.y = mode.cy + ev.clientY - mode.sy; draw(); }
+  else if (mode.k === 'vhandle') {
+    // Dragging while placing a node pulls out its handles; Alt pulls only the outgoing one.
+    const n = mode.n; if (Math.hypot(ev.clientX - mode.sx, ev.clientY - mode.sy) < 3 && n.ox == null) return;
+    n.ox = Math.round(p.x * 100) / 100; n.oy = Math.round(p.y * 100) / 100;
+    if (ev.altKey) delete n.s; else { n.ix = Math.round((2 * n.x - p.x) * 100) / 100; n.iy = Math.round((2 * n.y - p.y) * 100) / 100; n.s = true; }
+    drawDraft();
+  } else if (mode.k === 'vnode') {
+    let dx = p.x - mode.p.x, dy = p.y - mode.p.y; if (!mode.moved && Math.hypot(dx, dy) * cam.z < 2) return; mode.moved = true;
+    if (ev.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
+    const paths = clone(mode.start);
+    for (const key of vedit.nodes) { const [si, i] = key.split(':').map(Number), n = paths[si] && paths[si].nodes[i]; if (n) V.moveNode(n, dx, dy); }
+    mode.e.paths = paths; draw(); drawOverlay();
+  } else if (mode.k === 'vhand') {
+    const n = mode.e.paths[mode.si].nodes[mode.i]; V.dragHandle(n, mode.which, p.x - mode.e.x, p.y - mode.e.y, ev.altKey); draw(); drawOverlay();
+  }
   else if (mode.k === 'drag') {
     let dx = p.x - mode.p.x, dy = p.y - mode.p.y, guides = [], gaps = []; if (!mode.moved && Math.hypot(dx, dy) * cam.z < 3) return; mode.moved = true;
     if (ev.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
@@ -799,6 +821,8 @@ function onMove(ev) {
 }
 function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
+  if (m.k === 'vhandle') { drawDraft(); return; }
+  if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
   if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } else drawOverlay(); }
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
   else if (m.k === 'connEnd') commit();
@@ -829,6 +853,14 @@ function onKey(ev) {
   if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT');
   if (typing || (tgt && tgt.tagName === 'BUTTON' && (ev.key === 'Enter' || ev.key === ' ') && !(ev.ctrlKey || ev.metaKey))) return;
   const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let done = true;
+  if (vdraft) {
+    if (k === 'escape' || k === 'enter') { finishDraft(false); ev.preventDefault(); return; }
+    if (k === 'backspace' || k === 'delete') { vdraft.nodes.pop(); if (!vdraft.nodes.length) vdraft = null; drawDraft(); ev.preventDefault(); return; }
+  }
+  if (vedit && !mod) {
+    if (k === 'escape' || k === 'enter') { exitVedit(); ev.preventDefault(); return; }
+    if (k === 'backspace' || k === 'delete') { removeVNodes(); ev.preventDefault(); return; }
+  }
   if (kanban && !mod && !['delete', 'backspace', 'escape', '?'].includes(k)) return;
   if (k === ' ') { spaceDown = true; cv.classList.add('pan'); }
   else if (mod && k === 'z') ev.shiftKey ? travel('redo') : travel('undo');
@@ -852,18 +884,20 @@ function onKey(ev) {
   else if (k === 'm') { miniOn = !miniOn; draw(); }
   else if (k === ']') arrange('front'); else if (k === '[') arrange('back');
   else if (k === '=' || k === '+') zoomAt(1.2); else if (k === '-') zoomAt(1 / 1.2); else if (k === '1' && ev.shiftKey || k === '!') fit();
+  else if (k === 'enter' && sel.size === 1 && E([...sel][0]).type === 'path') enterVedit([...sel][0]);
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
-  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', g: 'table', h: 'pen', e: 'pen' }[k];
+  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', g: 'table', h: 'pen', e: 'pen', b: 'vpen' }[k];
+    if (t) endDraft();
     if (k === 'p') penMode = 'pen'; if (k === 'h') penMode = 'hl'; if (k === 'e') penMode = 'erase'; if (k === 'h' || k === 'e' || k === 'p') penWidth = 0;
     if (k === 'i') $('#img-file').click(); else if (t) { tool = t; refresh(); } else done = false; }
   if (done) ev.preventDefault();
 }
 
 /* ---------- Board chrome ---------- */
-const ICON = { select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
+const ICON = { path: 'M10 2.5l5 5.5-2.7 7H7.7L5 8zM10 2.5v6.5M10 10.5a1.2 1.2 0 1 0 .01 0', vpen: 'M10 2.5l5 5.5-2.7 7H7.7L5 8zM10 2.5v6.5M10 10.5a1.2 1.2 0 1 0 .01 0', select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
   diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z', table: 'M3 4h14v12H3zM3 8h14M3 12h14M8 4v12M13 4v12', image: 'M3 4h14v12H3zM3 13.5l4-4 3 3 2.5-2 4.5 4M13.2 7.6a.6.6 0 1 0 .01 0' };
-const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['table', 'Table (G)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
-const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'conn', 'pen', '|', 'card', 'table', 'frame', 'stamp', 'image'];
+const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['table', 'Table (G)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['vpen', 'Pen: curves and shapes (B)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
+const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'conn', 'pen', 'vpen', '|', 'card', 'table', 'frame', 'stamp', 'image'];
 async function openBoard(id) {
   const m = meta(id); if (!m) return;
   closeMenu(); $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
@@ -885,7 +919,7 @@ async function openBoard(id) {
       h('button', { class: 'o-foot', onclick: toggleHelp }, 'Keyboard shortcuts', h('kbd', null, '?'))),
     h('div', { class: 'stage' },
       h('nav', { class: 'toolbar', 'aria-label': 'Tools' }, BAR.map(t => t === '|' ? h('span', { class: 'tsep', 'aria-hidden': 'true' })
-        : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { tool = t; refresh(); } } }, trayIcon(t)))),
+        : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { endDraft(); tool = t; refresh(); } } }, trayIcon(t)))),
       h('div', { class: 'fly', id: 'fly', hidden: true }),
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
@@ -1102,6 +1136,27 @@ function renderProps() {
           pick('pen-width', 'Width', PEN_WIDTHS[hl ? 'hl' : 'pen'], same(drawn, 'sw') || (hl ? 18 : 2), v => setAll(drawn, 'sw', Number(v), true)),
           hl ? null : pick('pen-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(drawn, 'dash') || 'solid', v => setAll(drawn, 'dash', v === 'solid' ? '' : v, true)))));
     }
+    const vecs = of(['path']);
+    if (vecs.length) {
+      const widths = [[0.5, '0.5 px'], [1, '1 px'], [1.5, '1.5 px'], [2, '2 px'], [3, '3 px'], [4, '4 px'], [6, '6 px'], [8, '8 px'], [12, '12 px']];
+      const noFill = vecs.every(e => !e.fill || e.fill === 'none'), noStroke = vecs.every(e => e.stroke === 'none');
+      out.push(sec('Fill', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No fill', 'aria-label': 'No fill', 'aria-pressed': String(noFill), onclick: () => setAll(vecs, 'fill', '') }),
+        FILLS.map((c, i) => swatch(c, same(vecs, 'fill') === c, () => setAll(vecs, 'fill', c), FILL_NAMES[i])), VIVID.map(c => swatch(c, same(vecs, 'fill') === c, () => setAll(vecs, 'fill', c), null, true)))));
+      out.push(sec('Stroke', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No stroke', 'aria-label': 'No stroke', 'aria-pressed': String(noStroke), onclick: () => setAll(vecs, 'stroke', 'none') }),
+          swatch(C.ink, vecs.every(e => !e.stroke), () => setAll(vecs, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(vecs, 'stroke') === c, () => setAll(vecs, 'stroke', c)))),
+        h('div', { class: 'grid2' },
+          pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => setAll(vecs, 'sw', Number(v), true)),
+          pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true)))));
+      if (one && one.type === 'path') {
+        const subs = one.paths || [], n = subs.reduce((a, sp) => a + sp.nodes.length, 0);
+        out.push(sec('Vector',
+          h('div', { class: 'row' },
+            h('button', { class: 'fbtn', 'aria-pressed': String(!!vedit), disabled: !!one.locked, onclick: () => vedit ? exitVedit() : enterVedit(one.id) }, vedit ? 'Done editing' : 'Edit nodes'),
+            subs.length === 1 ? h('button', { class: 'fbtn', 'aria-pressed': String(!!subs[0].closed), disabled: !!one.locked, onclick: () => { if (subs[0].closed) delete subs[0].closed; else subs[0].closed = true; fitPath(one); commit(); } }, 'Closed shape') : null),
+          h('p', { class: 'hint' }, `${n} nodes${subs.length > 1 ? ' in ' + subs.length + ' parts' : ''}. ` + (vedit ? 'Drag nodes and handles. Click the outline to add a node; double-click a node to switch corner and smooth.' : 'Double-click the vector or press Enter to reshape it.'))));
+      }
+    }
+    if (free.some(vectorable)) out.push(sec('Vector', h('button', { class: 'fbtn', onclick: () => toVector(free) }, 'Convert to vector'), h('p', { class: 'hint' }, 'Turns shapes and drawings into paths you can reshape node by node.')));
     if (one && one.type === 'table') {
       const tb = one;
       const resize = (cells, dr, dc) => { const r0 = rowsOf(tb), c0 = colsOf(tb); if (dc && tb.colw) tb.colw = dc > 0 ? sharesWithCol(colFractions(tb), c0) : sharesWithoutCol(colFractions(tb), c0 - 1); tb.cells = cells; if (dr) tb.h = Math.round(tb.h / r0 * (r0 + dr)); if (dc) tb.w = Math.round(tb.w / c0 * (c0 + dc)); fitText(tb); commit(); };
@@ -1256,6 +1311,8 @@ function openMenu(ev) {
   const list = selEls();
   popupAt(ev.clientX, ev.clientY, id ? [
     list.length === 1 && TEXTY.includes(list[0].type) ? ['Edit text', () => startEdit(list[0].id)] : null,
+    list.length === 1 && list[0].type === 'path' && !list[0].locked ? ['Edit nodes', () => enterVedit(list[0].id)] : null,
+    list.some(vectorable) ? ['Convert to vector', () => toVector(list)] : null,
     list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
     list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
     ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
@@ -1272,6 +1329,7 @@ const KEYS = [
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
+  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes']]],
   ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {
@@ -1281,6 +1339,130 @@ function toggleHelp() {
       h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { class: 'btn', onclick: toggleHelp }, 'Close')),
       h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
       h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'))));
+}
+
+/* ---------- Vector pen and node editing ---------- */
+let vdraft = null, vedit = null;
+const r2 = v => Math.round(v * 100) / 100;
+/** Points within a few screen pixels of each other. */
+const nearPt = (a, b, px = 9) => Math.hypot(a.x - b.x, a.y - b.y) * cam.z < px;
+function vPenDown(ev, p, dbl) {
+  if (!vdraft) { vdraft = { nodes: [] }; sel.clear(); }
+  const ns = vdraft.nodes;
+  if (ns.length >= 2 && nearPt(ns[0], p)) { finishDraft(true); return; }
+  if (ns.length && (dbl || nearPt(ns[ns.length - 1], p))) { finishDraft(false); return; }
+  let q = p;
+  if (ev.shiftKey && ns.length) { const l = ns[ns.length - 1], a = Math.round(Math.atan2(p.y - l.y, p.x - l.x) / (Math.PI / 4)) * Math.PI / 4, d = Math.hypot(p.x - l.x, p.y - l.y); q = { x: l.x + Math.cos(a) * d, y: l.y + Math.sin(a) * d }; }
+  const n = { x: r2(q.x), y: r2(q.y) }; ns.push(n);
+  mode = { k: 'vhandle', n, sx: ev.clientX, sy: ev.clientY };
+  drawDraft();
+}
+/** The path being drawn: its curve so far, a preview of the next segment, its nodes, and the last node's handles. */
+function drawDraft() {
+  if (!vdraft) return drawOverlay();
+  const k = 1 / cam.z, ns = vdraft.nodes, hv = vdraft.hover, out = [];
+  if (ns.length) {
+    const l = ns[ns.length - 1];
+    out.push(s('path', { d: V.pathD([{ nodes: ns }]), fill: 'none', stroke: penColor || C.ink, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    const closing = hv && ns.length >= 2 && nearPt(ns[0], hv);
+    if (hv && !mode) { const end = closing ? ns[0] : hv; out.push(s('path', { d: `M${l.x} ${l.y}C${l.ox ?? l.x} ${l.oy ?? l.y} ${closing ? (ns[0].ix ?? end.x) : end.x} ${closing ? (ns[0].iy ?? end.y) : end.y} ${end.x} ${end.y}`, fill: 'none', stroke: C.accent, 'stroke-width': 1.25 * k, 'stroke-dasharray': `${4 * k} ${3 * k}` })); }
+    for (const w of ['i', 'o']) if (l[w + 'x'] != null) out.push(s('line', { x1: l.x, y1: l.y, x2: l[w + 'x'], y2: l[w + 'y'], stroke: C.accent, 'stroke-width': k }), s('circle', { cx: l[w + 'x'], cy: l[w + 'y'], r: 3.5 * k, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.25 * k }));
+    ns.forEach((n, i) => out.push(s('rect', { x: n.x - 3.5 * k, y: n.y - 3.5 * k, width: 7 * k, height: 7 * k, rx: k, fill: i === 0 && closing ? C.accent : '#ffffff', stroke: C.accent, 'stroke-width': 1.25 * k })));
+    if (closing) out.push(s('circle', { cx: ns[0].x, cy: ns[0].y, r: 8 * k, fill: 'none', stroke: C.accent, 'stroke-width': k }));
+  }
+  drawOverlay(s('g', { 'pointer-events': 'none' }, out));
+}
+/** Turns the path being drawn into a vector piece. */
+function finishDraft(closed, keepTool = false) {
+  const d = vdraft; vdraft = null; if (!d) return;
+  if (d.nodes.length >= 2) {
+    const e = { id: uid('e'), type: 'path', z: topZ() + 1, x: 0, y: 0, w: 0, h: 0, sw: 2 };
+    if (penColor) e.stroke = penColor;
+    V.setWorldPaths(e, [{ nodes: d.nodes, closed: closed || undefined }]);
+    board.els[e.id] = e; sel = new Set([e.id]);
+  }
+  if (!keepTool) tool = 'select';
+  commit();
+}
+const endDraft = () => { if (vdraft) finishDraft(false, true); };
+/** Refits a path's box to its curves after its nodes change. */
+const fitPath = e => V.setWorldPaths(e, V.worldPaths(e));
+function enterVedit(id) {
+  const e = E(id); if (!e || e.type !== 'path' || e.locked) return;
+  if (editing) endEdit();
+  sel = new Set([id]);
+  if (e.rot || (e.vw && Math.abs(e.vw - e.w) > 0.01) || (e.vh && Math.abs(e.vh - e.h) > 0.01)) { V.normalize(e); commit(); }
+  vedit = { id, nodes: new Set() }; refresh();
+}
+function exitVedit() { if (!vedit) return; vedit = null; refresh(); }
+function removeVNodes() {
+  const e = E(vedit.id); if (!e || !vedit.nodes.size) return;
+  e.paths = V.removeNodes(e.paths, [...vedit.nodes].map(key => key.split(':').map(Number))); vedit.nodes.clear();
+  if (!e.paths.length) { delete board.els[e.id]; sel.delete(e.id); vedit = null; } else fitPath(e);
+  commit();
+}
+/** Handles a press while editing nodes. Returns false when it should fall through to normal selection. */
+function vEditDown(ev, p, id, dbl) {
+  const e = E(vedit.id); if (!e) { vedit = null; return false; }
+  const t = (ev.target && ev.target.dataset) || {};
+  if (t.vh) { const [si, i, which] = t.vh.split(':'); mode = { k: 'vhand', e, si: Number(si), i: Number(i), which }; return true; }
+  if (t.vn) {
+    const key = t.vn, [si, i] = key.split(':').map(Number), sp = e.paths[si], n = sp.nodes[i];
+    if (dbl) { V.setSmooth(sp, i, !(n.ix != null || n.ox != null)); vedit.nodes = new Set([key]); fitPath(e); commit(); return true; }
+    if (ev.shiftKey) { if (vedit.nodes.has(key)) vedit.nodes.delete(key); else vedit.nodes.add(key); drawOverlay(); return true; }
+    if (!vedit.nodes.has(key)) vedit.nodes = new Set([key]);
+    mode = { k: 'vnode', e, p, start: clone(e.paths), moved: false }; drawOverlay(); return true;
+  }
+  if (id === e.id) {
+    const hit = V.nearest(e.paths, p.x - e.x, p.y - e.y);
+    if (hit && hit.d * cam.z < 10) {
+      const ni = V.splitSegment(e.paths, hit.si, hit.i, hit.t); vedit.nodes = new Set([hit.si + ':' + ni]);
+      mode = { k: 'vnode', e, p, start: clone(e.paths), moved: true }; draw(); drawOverlay(); return true;
+    }
+    vedit.nodes.clear(); drawOverlay(); return true;
+  }
+  exitVedit(); return false;
+}
+/** Node editing marks: the outline, every node, and handles on the selected nodes and their neighbors. */
+function nodeMarks(e) {
+  const k = 1 / cam.z, out = [s('path', { d: V.pathD(e.paths || [], e.x, e.y), fill: 'none', stroke: C.accent, 'stroke-width': 1.25 * k, 'pointer-events': 'none' })];
+  const chosen = vedit.nodes, near = (si, i, len, closed) => [i - 1, i + 1].some(j => chosen.has(si + ':' + (closed ? (j + len) % len : j)));
+  const hand = [], dots = [];
+  (e.paths || []).forEach((sp, si) => sp.nodes.forEach((n, i) => {
+    const key = si + ':' + i, on = chosen.has(key), x = e.x + n.x, y = e.y + n.y;
+    if (on || near(si, i, sp.nodes.length, sp.closed)) for (const w of ['i', 'o']) if (n[w + 'x'] != null) {
+      const hx = e.x + n[w + 'x'], hy = e.y + n[w + 'y'];
+      hand.push(s('line', { x1: x, y1: y, x2: hx, y2: hy, stroke: C.accent, 'stroke-width': k, 'pointer-events': 'none' }),
+        s('circle', { 'data-vh': key + ':' + w, cx: hx, cy: hy, r: 3.5 * k, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.25 * k, style: 'cursor:pointer' }));
+    }
+    dots.push(s('rect', { 'data-vn': key, x: x - 3.5 * k, y: y - 3.5 * k, width: 7 * k, height: 7 * k, rx: n.ix != null || n.ox != null ? 3.5 * k : k, fill: on ? C.accent : '#ffffff', stroke: C.accent, 'stroke-width': 1.25 * k, style: 'cursor:move' }));
+  }));
+  return s('g', null, out, hand, dots);
+}
+const vectorable = e => !e.locked && (['rect', 'ellipse', 'diamond'].includes(e.type) || (e.type === 'pen' && !e.hl && (e.pts || []).length > 1));
+/** Turns shapes and drawings into vector paths in place, keeping their id, layer, colors, and rotation. */
+function toVector(list) {
+  if (editing) endEdit();
+  for (const o of list) {
+    const e = E(o.id); if (!e || !vectorable(e)) continue;
+    const subs = e.type === 'rect' ? V.rectPath(e.w, e.h, Math.min(10, e.w / 4, e.h / 4)) : e.type === 'ellipse' ? V.ellipsePath(e.w, e.h) : e.type === 'diamond' ? V.diamondPath(e.w, e.h) : [V.smoothThrough(V.simplify(e.pts, 1.2))];
+    const nv = { id: e.id, type: 'path', z: e.z, x: e.x, y: e.y, w: e.w, h: e.h };
+    for (const key of ['rot', 'g', 'dash']) if (e[key] != null) nv[key] = e[key];
+    if (e.type === 'pen') { if (e.stroke) nv.stroke = e.stroke; nv.sw = e.sw || 2.5; }
+    else { nv.fill = e.fill || '#ffffff'; nv.stroke = e.stroke || outlineFor(e.fill, 'light'); nv.sw = 1.5; }
+    const rot = nv.rot; delete nv.rot;
+    V.setWorldPaths(nv, V.mapPaths(subs, (x, y) => [e.x + x, e.y + y]));
+    if (rot) nv.rot = rot;
+    // Text inside a shape stays on the board as its own text piece.
+    if (e.type !== 'pen' && e.text && e.text.trim()) {
+      const tx = { id: uid('e'), type: 'text', z: topZ() + 1, x: e.x + 8, y: e.y, w: Math.max(40, e.w - 16), h: 30, text: e.text, align: 'center' };
+      for (const key of ['font', 'weight', 'size', 'italic', 'color', 'rot']) if (e[key] != null) tx[key] = e[key];
+      tx.size = tx.size || G.textStyle(e).size; fitText(tx); tx.y = Math.round(e.y + e.h / 2 - tx.h / 2);
+      board.els[tx.id] = tx;
+    }
+    board.els[e.id] = nv;
+  }
+  commit();
 }
 
 /* ---------- Slides and presenting ---------- */

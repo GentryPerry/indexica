@@ -7,7 +7,7 @@ export interface OutlineRow { id: string; depth: 0 | 1; label: string; kind: El[
 
 export const TYPE_NAMES: Record<El['type'], string> = {
   sticky: 'Sticky note', text: 'Text', rect: 'Rectangle', ellipse: 'Ellipse', diamond: 'Diamond', card: 'Task card',
-  frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture', table: 'Table',
+  frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture', table: 'Table', path: 'Vector',
 };
 
 /** A short name for a piece: the first line of its text, or what kind of piece it is. */

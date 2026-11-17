@@ -1,4 +1,4 @@
-export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image' | 'table';
+export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image' | 'table' | 'path';
 /** Arrowhead shapes for connector ends. */
 export type Head = 'none' | 'arrow' | 'triangle' | 'circle' | 'bar';
 export type ConnStyle = 'straight' | 'curve' | 'elbow' | 'cable';
@@ -26,6 +26,12 @@ export interface El {
   notes?: string;
   /** On a frame: its position in the page's slide deck, starting at 1. Unset means not a slide. */
   slide?: number;
+  /** On a vector path: its subpaths, in its own box of vw by vh, drawn stretched to w by h. */
+  paths?: import('./vector').SubPath[];
+  vw?: number;
+  vh?: number;
+  /** Fill rule for paths with holes. */
+  rule?: 'nonzero' | 'evenodd';
   pts?: number[][];
   a?: string | null;
   b?: string | null;
