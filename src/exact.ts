@@ -35,6 +35,12 @@ export function offset(subs: SubPath[], delta: number, join: Join = 'round', mit
   return parse(run('offset', [delta, JOINS.indexOf(join), miter], [{ d: pathD(subs) }]));
 }
 
+/**
+ * VectorCraft's Simplify slider: level 50 keeps within 1 point of the outline, each 10 levels lower
+ * doubles that (fewer nodes) and each 10 higher halves it (closer to the original).
+ */
+export const simplifyTolerance = (level: number) => Math.pow(2, (50 - Math.max(0, Math.min(100, level))) / 10);
+
 /** Fewer nodes, staying within the tolerance of the original outline. */
 export function simplify(subs: SubPath[], tolerance = 1): SubPath[] | null {
   if (!subs.length) return null;

@@ -37,6 +37,16 @@ describe('VectorCraft engine', () => {
   it('simplifies and smooths', () => {
     const wobbly = [{ nodes: [0, 10, 20, 30, 40].map((x, i) => ({ x, y: i % 2 ? 0.1 : 0 })) }];
     expect(X.simplify(wobbly, 1)![0].nodes.length).toBe(2);
-    expect(X.smooth(sq(0, 0), 100)![0].nodes.every(n => n.ix != null || n.ox != null)).toBe(true);
+    const jag = [{ nodes: [0, 10, 20, 30, 40, 50, 60].map((x, i) => ({ x, y: i % 2 ? 3 : 0 })) }];
+    const sm = X.smooth(jag, 50)![0].nodes;
+    expect(sm.length).toBeLessThanOrEqual(7); expect(sm.some(n => n.ox != null)).toBe(true);
+    // VectorCraft's Smooth leaves shapes it cannot round, such as a square, as they are.
+    expect(X.smooth(sq(0, 0), 50)![0].nodes.length).toBe(sq(0, 0)[0].nodes.length);
+  });
+  it('maps simplify levels like VectorCraft', () => {
+    expect(X.simplifyTolerance(50)).toBe(1);
+    expect(X.simplifyTolerance(40)).toBe(2);
+    expect(X.simplifyTolerance(0)).toBe(32);
+    expect(X.simplifyTolerance(100)).toBeCloseTo(1 / 32);
   });
 });

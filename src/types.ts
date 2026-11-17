@@ -39,6 +39,13 @@ export interface El {
   masking?: boolean;
   /** On a drawing: the brush it was drawn with (pen when unset). */
   brush?: 'pen' | 'brush' | 'pencil' | 'marker';
+  /** A live boolean result: recomputed from its operands with this operation. */
+  live?: 'union' | 'subtract' | 'intersect' | 'exclude';
+  /** An operand of the live boolean result with this id: not drawn on its own. */
+  boolIn?: string;
+  /** Vector stroke ends and corners (round when unset). */
+  cap?: 'butt' | 'round' | 'square';
+  join?: 'miter' | 'round' | 'bevel';
   /** Fill rule for paths with holes. */
   rule?: 'nonzero' | 'evenodd';
   pts?: number[][];

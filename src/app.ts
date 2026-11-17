@@ -10,7 +10,7 @@ import { renderEl } from './render';
 import { STICKERS, TAPES } from './stickers';
 import { monthGrid, shiftMonth, monthPrefix } from './calendar';
 import { miniFit, miniToWorld, union } from './layout';
-import { outlineRows, TYPE_NAMES } from './outline';
+import { outlineRows, TYPE_NAMES, LIVE_NAMES } from './outline';
 import { migrateBoard, clonePages, nextPageName, TEMPLATES } from './templates';
 import { groupTasks } from './tasks';
 import { emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol } from './table';
@@ -29,6 +29,7 @@ import { BRUSHES, brushOutline, outlineD, shaped, eraseStroke, touches } from '.
 import * as PT from './paint';
 import * as PO from './pathops';
 import * as X from './exact';
+import * as LB from './livebool';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -313,6 +314,7 @@ const group = id => { const e = E(id); return e && e.g ? all().filter(x => x.g =
 function commit() { if (hist.commit(board.els)) queueSave(); refresh(); }
 function travel(dir) {
   const gone = hist.step(board.els, dir); if (!gone) return;
+  LB.trust(board.els, liveSeen);
   gone.forEach(id => sel.delete(id)); edFor = null; queueSave(); refresh();
 }
 function queueSave() { clearTimeout(saveT); saveT = setTimeout(saveNow, 600); }
@@ -391,6 +393,20 @@ function swing(now) {
   for (const [id, sp] of [...sways]) { const n = step(sp, dt); if (atRest(n)) sways.delete(id); else sways.set(id, n); }
   draw();
 }
+/** What each live boolean result was last computed from (see livebool.ts). */
+const liveSeen = new Map();
+/** The selection as the panel and commands see it: the operands of a selected live result belong to it. */
+const panelEls = () => selEls().filter(e => !(e.boolIn && sel.has(e.boolIn)));
+/** A single selected live result. */
+const liveOne = () => { const l = panelEls(); return l.length === 1 && l[0].live && !l[0].locked ? l[0] : null; };
+/** Selecting a piece inside a live boolean: the piece, plus everything under it when it is a result itself. */
+const withKids = id => { const e = E(id); return e && e.live ? [id, ...LB.descendantsOf(board.els, id).map(d => d.id)] : [id]; };
+/** A lone selected operand under the pointer, which stays the target for dragging and double-clicks. */
+function selectedOperandAt(p) {
+  if (!sel.size) return null;
+  const roots = panelEls(); if (roots.length !== 1 || !roots[0].boolIn || roots[0].locked) return null;
+  return LB.contains(roots[0], p.x, p.y) ? roots[0] : null;
+}
 function draw() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
   C = { theme: v('color-scheme') === 'dark' ? 'dark' : 'light', ink: v('--ink'), muted: v('--muted'), line: v('--conn'), accent: v('--accent'), accentFill: v('--accent-fill'), canvas: v('--canvas'), frame: v('--frame'), frameLine: v('--frame-line'), dot: v('--dot') };
@@ -398,6 +414,7 @@ function draw() {
   const t = `translate(${cam.x},${cam.y}) scale(${cam.z})`;
   vp.setAttribute('transform', t); ov.setAttribute('transform', t);
   dotGrid();
+  LB.syncLive(board.els, liveSeen);
   const rc = rctx(false); vp.replaceChildren(...sorted().map(e => renderEl(e, rc)));
   drawOverlay();
   const zv = $('#zoomt'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
@@ -449,9 +466,17 @@ function sizeBadge(b, w, ht, k, below = false) {
 }
 function drawOverlay(extra) {
   if (vedit && E(vedit.id)) { ov.replaceChildren(nodeMarks(E(vedit.id)), ...(extra ? [extra] : [])); return; }
-  const k = 1 / cam.z, list = selEls(), out = [], solo = list.length === 1 && !editing;
+  const k = 1 / cam.z, list = selEls(), out = [], solo = panelEls().length === 1 && list.length === 1 && !editing;
   for (const e of list) {
     const col = e.locked ? '#b93232' : C.accent;
+    // Operands are not drawn, so their outlines are: hairlines while the boolean is selected, a full
+    // outline (with the usual box and handles) when an operand is selected on its own.
+    if (e.boolIn) {
+      const inside = sel.has(e.boolIn);
+      out.push(s('path', { d: V.pathD(B.outlineOf(e)), fill: 'none', stroke: col, 'stroke-width': (inside ? 1 : 1.5) * k, 'stroke-opacity': inside ? 0.5 : 0.9, 'pointer-events': 'none' }));
+      if (inside) continue;
+    }
+    if (e.live && list.some(x => x.boolIn === e.id)) continue;
     if (e.type === 'conn') {
       const gm = connGeom(e, E);
       out.push(s('path', { d: gm.d, fill: 'none', stroke: col, 'stroke-width': 1.25 * k, 'stroke-opacity': 0.7, 'pointer-events': 'none' }));
@@ -484,7 +509,8 @@ function drawOverlay(extra) {
   // Several pieces selected: one box around them all, with handles that turn or scale the whole selection.
   const free = list.filter(e => !e.locked);
   if (list.length > 1 && free.filter(e => e.type !== 'conn').length > 1 && !editing) {
-    const turning = mode && mode.k === 'grotate' ? mode : null, b = turning ? turning.box0 : bounds(free), pad = 6 * k;
+    // A boolean's box is its result's, not the (hidden) shapes inside it.
+    const turning = mode && mode.k === 'grotate' ? mode : null, b = turning ? turning.box0 : bounds(panelEls().filter(e => !e.locked)), pad = 6 * k;
     const box = { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 };
     out.push(s('g', { transform: turning && turning.ang ? `rotate(${turning.ang} ${b.x + b.w / 2} ${b.y + b.h / 2})` : null },
       s('rect', { x: box.x, y: box.y, width: box.w, height: box.h, fill: 'none', stroke: C.accent, 'stroke-width': k, 'pointer-events': 'none' }),
@@ -525,6 +551,8 @@ function refresh() {
 /* ---------- Actions ---------- */
 function removeSel() {
   const ids = new Set(selEls().filter(e => !e.locked).map(e => e.id)); if (!ids.size) return;
+  for (const id of [...ids]) if (E(id) && E(id).live) for (const d of LB.descendantsOf(board.els, id)) ids.add(d.id);
+  for (let i = 0; i < 8; i++) { const gone = LB.orphans(Object.fromEntries(all().filter(e => !ids.has(e.id)).map(e => [e.id, e]))); if (!gone.length) break; gone.forEach(r => ids.add(r.id)); }
   for (const e of all()) if (ids.has(e.id) || (e.type === 'conn' && (ids.has(e.a) || ids.has(e.b)))) delete board.els[e.id];
   sel.clear(); commit();
 }
@@ -535,9 +563,11 @@ function pasteEls(src, dx, dy = dx, quiet = false) {
     const e = clone(o); e.id = map[o.id]; e.z = ++z; delete e.locked;
     if (e.g) e.g = gmap[e.g] || (gmap[e.g] = uid('g'));
     if (e.mask) { if (map[e.mask]) e.mask = map[e.mask]; else delete e.mask; }
+    if (e.boolIn) { if (map[e.boolIn]) e.boolIn = map[e.boolIn]; else delete e.boolIn; }
     if (e.type === 'conn') { e.a = map[e.a] || null; e.b = map[e.b] || null; e.ax += dx; e.ay += dy; e.bx += dx; e.by += dy; } else { e.x += dx; e.y += dy; }
     board.els[e.id] = e; sel.add(e.id);
   }
+  for (const id of sel) { const e = board.els[id]; if (e.live && !all().some(o => o.boolIn === id)) delete e.live; }
   if (!quiet) commit();
 }
 // Copies of the selection that stand on their own: connector ends are stored as points in case their piece is not copied.
@@ -583,7 +613,17 @@ function arrange(kind) {
   if (kind === 'front') { let z = topZ(); list.sort((a, b) => a.z - b.z).forEach(e => { e.z = ++z; }); }
   if (kind === 'back') { let z = all().reduce((m, e) => Math.min(m, e.z), 0) - list.length; list.sort((a, b) => a.z - b.z).forEach(e => { e.z = z++; }); }
   if (kind === 'group' && list.length > 1) { const g = uid('g'); list.forEach(e => { e.g = g; }); }
-  if (kind === 'ungroup') list.forEach(e => { delete e.g; });
+  if (kind === 'ungroup') {
+    const freed = [];
+    for (const r of panelEls().filter(e => e.live && !e.locked)) {
+      const ops = LB.release(board.els, r.id, () => uid('g')), top = ops[ops.length - 1];
+      for (const c of all()) if (c.type === 'conn') { if (c.a === r.id) c.a = top ? top.id : null; if (c.b === r.id) c.b = top ? top.id : null; }
+      freed.push(...ops);
+    }
+    for (const e of list) if (board.els[e.id] && !e.live && !e.boolIn) delete e.g;
+    for (const e of freed) if (!e.live) delete e.g;
+    sel = new Set([...sel].filter(id => board.els[id]));
+  }
   if (kind === 'lock') list.forEach(e => { e.locked = true; });
   if (kind === 'unlock') list.forEach(e => { delete e.locked; });
   commit();
@@ -721,7 +761,7 @@ function onDown(ev) {
   closeMenu(); if (ev.button === 2) return;
   const act = document.activeElement; if (act && act !== document.body && act.blur) act.blur();
   if (editing) endEdit();
-  const p = pt(ev), id = idAt(ev.target), now = Date.now();
+  const p = pt(ev), now = Date.now(); let id = idAt(ev.target);
   const dbl = now - lastDown.t < 350 && Math.hypot(ev.clientX - lastDown.x, ev.clientY - lastDown.y) < 6; lastDown = { t: dbl ? 0 : now, x: ev.clientX, y: ev.clientY };
   cv.setPointerCapture(ev.pointerId);
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
@@ -731,24 +771,35 @@ function onDown(ev) {
     if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; 
       if (hd.startsWith('gs-')) {
         // Scale the whole selection away from the corner opposite the one being dragged.
-        const b = bounds(selEls().filter(x => !x.locked)), c = hd.slice(3), ax = c.includes('w') ? b.x + b.w : b.x, ay = c.includes('n') ? b.y + b.h : b.y;
+        const b = bounds(panelEls().filter(x => !x.locked)), c = hd.slice(3), ax = c.includes('w') ? b.x + b.w : b.x, ay = c.includes('n') ? b.y + b.h : b.y;
         mode = { k: 'gscale', start: [...moveSet()].map(i => clone(E(i))), ax, ay, vx: (c.includes('w') ? b.x : b.x + b.w) - ax, vy: (c.includes('n') ? b.y : b.y + b.h) - ay }; return;
       }
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
       if (hd.startsWith('col-')) { mode = { k: 'colsz', e, i: Number(hd.slice(4)), fr: colFractions(e), p }; return; }
       if (hd.startsWith('qc-')) { const side = hd.slice(3); mode = { k: 'conn', quick: true, a: e.id, as: side, p: sidePoint(e, side), sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
       if (hd === 'rot') {
-        const one = sel.size === 1, b = one ? e : bounds(selEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+        const one = sel.size === 1, b = one ? e : bounds(panelEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
         mode = { k: 'grotate', start: [...moveSet()].map(i => clone(E(i))), c, a0: Math.atan2(p.y - c.y, p.x - c.x), ang: 0, base: one ? e.rot || 0 : 0, box0: { x: b.x, y: b.y, w: b.w, h: b.h } }; return;
       }
       mode = { k: 'resize', hd, e, o: clone(e), p, others: otherBoxes(new Set([e.id])) }; return;
     }
+    // Live booleans: double-click steps in to the operand under the pointer (and into its nodes on a
+    // second double-click); a selected operand stays the drag target wherever the pointer is over it.
+    const inner = selectedOperandAt(p);
+    if (dbl && (inner || (id && E(id).live))) {
+      if (inner && inner.type === 'path' && !inner.live) { enterVedit(inner.id); return; }
+      const level = inner ? (inner.live ? inner : E(inner.boolIn)) : E(id);
+      const hit = LB.operandAt(board.els, level.id, p.x, p.y);
+      if (hit) { sel = new Set(withKids(hit.id)); refresh(); return; }
+      if (inner) return;
+    }
+    if (inner) id = inner.id;
     if (dbl && id && E(id).type === 'path') { enterVedit(id); return; }
     if (dbl) { if (id) { sel = new Set([id]); refresh(); startEdit(id, E(id).type === 'table' ? cellAt(E(id), p.x, p.y) : null); } else makeBox('sticky', p.x, p.y, 0, 0); return; }
     if (id) {
       const had = sel.has(id);
       if (ev.shiftKey) { group(id).forEach(i => had ? sel.delete(i) : sel.add(i)); refresh(); return; }
-      if (!had) sel = new Set(group(id));
+      if (!had) sel = new Set(E(id).boolIn ? withKids(id) : group(id));
       // Alt-drag pulls a copy off the selection and leaves the original in place.
       if (ev.altKey) pasteEls(snapSel(), 0, 0, true);
       const move = moveSet();
@@ -854,7 +905,7 @@ function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
   if (m.k === 'vhandle') { drawDraft(); return; }
   if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
-  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } else drawOverlay(); }
+  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else drawOverlay(); }
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
@@ -892,11 +943,13 @@ function onKey(ev) {
     if (k === 'escape' || k === 'enter') { exitVedit(); ev.preventDefault(); return; }
     if (k === 'backspace' || k === 'delete') { removeVNodes(); ev.preventDefault(); return; }
   }
+  if (adj && adj.kind !== 'offset' && (k === 'enter' || k === 'escape')) { ev.preventDefault(); adjFinish(k === 'enter'); return; }
   if (kanban && !mod && !['delete', 'backspace', 'escape', '?'].includes(k)) return;
   if (k === ' ') { spaceDown = true; cv.classList.add('pan'); }
   else if (mod && k === 'z') ev.shiftKey ? travel('redo') : travel('undo');
   else if (mod && k === 'y') travel('redo');
   else if (mod && k === 'e') flattenSel();
+  else if (mod && ev.altKey && ['u', 's', 'i', 'x'].includes(k)) boolOp({ u: 'union', s: 'subtract', i: 'intersect', x: 'exclude' }[k]);
   else if (mod && ev.altKey && k === 'm') selEls().some(e => e.mask || e.masking) ? releaseMask() : useAsMask();
   else if (mod && ev.shiftKey && k === 'o') outlineStroke();
   else if (mod && k === 'enter') { const f = selEls().find(e => e.slide); present(f ? SL.slidesOf(board.els).indexOf(f) : 0); }
@@ -908,7 +961,14 @@ function onKey(ev) {
   else if (mod && ev.shiftKey && k === 'l') arrange(selEls().some(e => !e.locked) ? 'lock' : 'unlock');
   else if (mod) done = false;
   else if (k === 'delete' || k === 'backspace') removeSel();
-  else if (k === 'escape') { closeMenu(); const hp = $('#help'); if (hp) hp.remove(); else if (kanban) kanban = false; else { sel.clear(); tool = 'select'; } refresh(); }
+  else if (k === 'escape') {
+    closeMenu(); const hp = $('#help'), roots = panelEls(), up = roots.length === 1 && roots[0].boolIn ? E(roots[0].boolIn) : null;
+    if (hp) hp.remove(); else if (kanban) kanban = false;
+    // Esc on a piece inside a live boolean selects the boolean around it, as in Figma.
+    else if (up) sel = new Set(up.boolIn ? withKids(up.id) : group(up.id));
+    else { sel.clear(); tool = 'select'; }
+    refresh();
+  }
   else if (k.startsWith('arrow')) {
     const d = ev.shiftKey ? 10 : 1, dx = k === 'arrowleft' ? -d : k === 'arrowright' ? d : 0, dy = k === 'arrowup' ? -d : k === 'arrowdown' ? d : 0;
     for (const e of selEls()) if (!e.locked) { if (e.type === 'conn') { e.ax += dx; e.bx += dx; e.ay += dy; e.by += dy; } else { e.x += dx; e.y += dy; } } commit();
@@ -918,7 +978,8 @@ function onKey(ev) {
   else if (k === 'm') { miniOn = !miniOn; draw(); }
   else if (k === ']') arrange('front'); else if (k === '[') arrange('back');
   else if (k === '=' || k === '+') zoomAt(1.2); else if (k === '-') zoomAt(1 / 1.2); else if (k === '1' && ev.shiftKey || k === '!') fit();
-  else if (k === 'enter' && sel.size === 1 && E([...sel][0]).type === 'path') enterVedit([...sel][0]);
+  else if (k === 'enter' && liveOne()) { sel = new Set(LB.operandsOf(board.els, liveOne().id).flatMap(o => withKids(o.id))); refresh(); }
+  else if (k === 'enter' && panelEls().length === 1 && panelEls()[0].type === 'path' && !panelEls()[0].live) enterVedit(panelEls()[0].id);
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
   else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', g: 'table', h: 'pen', e: 'pen', b: 'vpen' }[k];
     if (t) endDraft();
@@ -936,7 +997,7 @@ async function openBoard(id) {
   const m = meta(id); if (!m) return;
   closeMenu(); $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
   const doc = migrateBoard(await Store.get('b_' + id), uid);
-  board = { id, pages: doc.pages, page: doc.pages[0].id, els: doc.pages[0].els }; hists.clear(); pagesSig = ''; hist = new History(); hist.reset(board.els); hists.set(board.page, hist); mids.clear(); sways.clear(); kanban = false; miniState = null; outlineSig = ''; outlineKey = '';
+  board = { id, pages: doc.pages, page: doc.pages[0].id, els: doc.pages[0].els }; hists.clear(); pagesSig = ''; hist = new History(); hist.reset(board.els); hists.set(board.page, hist); LB.trust(board.els, liveSeen); mids.clear(); sways.clear(); kanban = false; miniState = null; outlineSig = ''; outlineKey = '';
   sel = new Set(); tool = 'select'; editing = null; edFor = null; taskFilter = 'all'; rightTab = 'design';
   const proj = index.projects.find(p => p.id === m.projectId), [sc, st] = statParts(), label = Object.fromEntries(TOOLS);
   const tab = (k, text) => h('button', { role: 'tab', id: 'tab-' + k, 'aria-controls': 'p' + k, onclick: () => { rightTab = k; edFor = null; renderRight(); } }, text);
@@ -1019,7 +1080,7 @@ function scopeSwitch() {
 function switchPage(id) {
   if (!board || id === board.page) return; if (editing) endEdit();
   const pg = board.pages.find(p => p.id === id); if (!pg) return;
-  board.page = id; board.els = pg.els;
+  board.page = id; board.els = pg.els; LB.trust(board.els, liveSeen);
   if (!hists.has(id)) { const h2 = new History(); h2.reset(pg.els); hists.set(id, h2); }
   hist = hists.get(id); sel = new Set(); edFor = null; outlineSig = ''; mids.clear(); sways.clear(); fit(); refresh(); loadImages();
 }
@@ -1086,13 +1147,13 @@ function renderOutline() {
     outlineSig = sig;
     el.replaceChildren(...(rows.length ? rows.map(r => {
       const e = E(r.id);
-      return h('button', { class: 'orow' + (r.depth ? ' sub' : '') + (r.kind === 'frame' ? ' fr' : '') + (r.kind === 'conn' ? ' dim' : ''), 'data-id': r.id, title: r.label,
-        onclick: ev => { if (editing) endEdit(); if (ev.shiftKey) { const had = sel.has(r.id); group(r.id).forEach(i => had ? sel.delete(i) : sel.add(i)); } else sel = new Set(group(r.id)); refresh(); },
+      return h('button', { class: 'orow' + (r.depth ? ' sub' : '') + (r.kind === 'frame' ? ' fr' : '') + (r.kind === 'conn' ? ' dim' : '') + (e.boolIn ? ' op' : ''), 'data-id': r.id, title: r.label, style: r.depth > 1 ? `padding-left:${8 + r.depth * 20}px` : null,
+        onclick: ev => { if (editing) endEdit(); if (ev.shiftKey) { const had = sel.has(r.id); group(r.id).forEach(i => had ? sel.delete(i) : sel.add(i)); } else sel = new Set(E(r.id).boolIn ? withKids(r.id) : group(r.id)); refresh(); },
         ondblclick: () => { const x = E(r.id); if (x) { if (x.type === 'frame') fit([x]); else centerOn(x); draw(); } } },
         outlineIcon(e), h('span', { class: 'ol' }, r.label), e.locked ? h('span', { class: 'olock', title: 'Locked' }, icon(LOCK, 12)) : null);
     }) : [h('p', { class: 'o-empty' }, 'Nothing on this board yet.')]));
   }
-  el.querySelectorAll('.orow').forEach(b => { const on = sel.has(b.dataset.id); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  el.querySelectorAll('.orow').forEach(b => { const x = E(b.dataset.id), on = sel.has(b.dataset.id) && !(x && x.boolIn && sel.has(x.boolIn)); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
   const key = [...sel].join();
   if (key !== outlineKey) { outlineKey = key; const on = el.querySelector('.orow.on'); if (on) on.scrollIntoView({ block: 'nearest' }); }
 }
@@ -1126,8 +1187,9 @@ const ALIGN = [['l', 'Align left edges', 'M3 3v14M6 6h10M6 13h6'], ['c', 'Align 
 function renderProps() {
   const el = $('#pdesign'); if (!el || rightTab !== 'design') return;
   if (panelHold) { fieldSync.forEach(f => { if (document.activeElement !== f.el) f.el.value = f.get(); }); return; }
+  if (adj && adj.key !== selKey()) adjEnd(true);
   fieldSync = [];
-  const list = selEls(), free = list.filter(e => !e.locked), one = list.length === 1 ? list[0] : null;
+  const list = panelEls(), free = list.filter(e => !e.locked), one = list.length === 1 ? list[0] : null;
   const of = types => free.filter(e => types.includes(e.type));
   const same = (els, key) => els.length && els.every(e => e[key] === els[0][key]) ? els[0][key] ?? '' : '';
   const sec = (title, ...kids) => h('section', { class: 'psec' }, title ? h('h3', null, title) : null, ...kids);
@@ -1148,16 +1210,16 @@ function renderProps() {
         h('button', { class: 'fbtn', onclick: () => fit() }, 'Fit everything on screen')),
       sec(null, h('p', { class: 'hint' }, 'Select a piece to change it here. Double-click empty space to add a sticky note, or pick a tool from the bar under the board.')));
   } else {
-    out.push(h('div', { class: 'psec p-top' }, h('div', { class: 'p-title' }, one ? TYPE_NAMES[one.type] : `${list.length} pieces selected`,
+    out.push(h('div', { class: 'psec p-top' }, h('div', { class: 'p-title' }, one ? (one.live ? LIVE_NAMES[one.live] : TYPE_NAMES[one.type]) : `${list.length} pieces selected`,
       list.some(e => e.locked) ? h('span', { class: 'lockchip' }, list.every(e => e.locked) ? 'Locked' : 'Some locked') : null)));
     if (one && one.type !== 'conn') {
       const e = one, lock = !!e.locked, keep = e.type === 'image' || e.type === 'sticker', pen = e.type === 'pen';
       out.push(sec('Position and size', h('div', { class: 'grid2' },
-        num('prop-x', 'X', 'X position', () => String(Math.round(e.x)), v => { e.x = Math.round(v); }, lock),
-        num('prop-y', 'Y', 'Y position', () => String(Math.round(e.y)), v => { e.y = Math.round(v); }, lock),
-        num('prop-w', 'W', 'Width', () => String(Math.round(e.w)), v => { const r = e.w / e.h; e.w = Math.max(10, Math.round(v)); if (keep) e.h = Math.round(e.w / r); fitText(e); }, lock || pen),
-        num('prop-h', 'H', 'Height', () => String(Math.round(e.h)), v => { const r = e.w / e.h; e.h = Math.max(10, Math.round(v)); if (keep) e.w = Math.round(e.h * r); fitText(e); }, lock || pen || e.type === 'text'),
-        num('prop-rot', 'Turn', 'Rotation in degrees', () => Math.round(e.rot || 0) + '°', v => { const a = G.normAngle(Math.round(v)); if (a) e.rot = a; else delete e.rot; }, lock))));
+        num('prop-x', 'X', 'X position', () => String(Math.round(e.x)), v => { if (e.live) liveEdit(e, 'move', Math.round(v) - e.x, 0); else e.x = Math.round(v); }, lock),
+        num('prop-y', 'Y', 'Y position', () => String(Math.round(e.y)), v => { if (e.live) liveEdit(e, 'move', 0, Math.round(v) - e.y); else e.y = Math.round(v); }, lock),
+        num('prop-w', 'W', 'Width', () => String(Math.round(e.w)), v => { if (e.live) return liveEdit(e, 'scale', Math.max(10, v) / e.w); const r = e.w / e.h; e.w = Math.max(10, Math.round(v)); if (keep) e.h = Math.round(e.w / r); fitText(e); }, lock || pen),
+        num('prop-h', 'H', 'Height', () => String(Math.round(e.h)), v => { if (e.live) return liveEdit(e, 'scale', Math.max(10, v) / e.h); const r = e.w / e.h; e.h = Math.max(10, Math.round(v)); if (keep) e.w = Math.round(e.h * r); fitText(e); }, lock || pen || e.type === 'text'),
+        num('prop-rot', 'Turn', 'Rotation in degrees', () => Math.round(e.rot || 0) + '°', v => { if (e.live) return liveEdit(e, 'turn', G.normAngle(Math.round(v))); const a = G.normAngle(Math.round(v)); if (a) e.rot = a; else delete e.rot; }, lock))));
     }
     const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']);
     if (fillable.length) out.push(sec('Fill', h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => setAll(fillable, 'fill', c), FILL_NAMES[i])))));
@@ -1190,14 +1252,18 @@ function renderProps() {
           swatch(C.ink, vecs.every(e => !e.stroke && !e.strokes), () => plain('stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(vecs, 'stroke') === c && vecs.every(e => !e.strokes), () => plain('stroke', c)))),
         h('div', { class: 'grid2' },
           pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => plain('sw', Number(v), true)),
-          pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true))),
+          pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true)),
+          pick('vec-cap', 'Stroke ends (cap)', [['round', 'Round cap'], ['butt', 'Flat cap'], ['square', 'Square cap']], same(vecs, 'cap') || 'round', v => setAll(vecs, 'cap', v === 'round' ? '' : v, true)),
+          pick('vec-join', 'Stroke corners (join)', CORNERS, same(vecs, 'join') || 'round', v => setAll(vecs, 'join', v === 'round' ? '' : v, true))),
         solo ? layerEditor(solo, 'stroke', num) : null));
     }
-    const combinable = free.filter(e => B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl));
-    if (combinable.length >= 2) out.push(sec('Combine',
-      h('div', { class: 'irow four' }, Object.entries(B.BOOL_LABELS).map(([op, label]) => h('button', { class: 'ibtn', title: label + (op === 'subtract' ? ': cut the upper shapes out of the bottom one' : ''), 'aria-label': label, onclick: () => boolOp(op) }, boolIcon(op)))),
-      h('div', { class: 'row' }, h('button', { class: 'fbtn', title: 'Join into one vector without merging the shapes', onclick: flattenSel }, 'Flatten'),
-        h('button', { class: 'fbtn', title: 'The bottom piece clips the others to its outline (Ctrl+Alt+M)', onclick: useAsMask }, 'Use as mask'))));
+    const combinable = free.filter(e => B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl)), lv = liveOne();
+    if (combinable.length >= 2 || lv) out.push(sec(lv ? 'Boolean' : 'Combine',
+      h('div', { class: 'irow four' }, Object.entries(B.BOOL_LABELS).map(([op, label]) => h('button', { class: 'ibtn', title: label + (op === 'subtract' ? ': cut the upper shapes out of the bottom one' : '') + ` (Ctrl+Alt+${{ union: 'U', subtract: 'S', intersect: 'I', exclude: 'X' }[op]})`, 'aria-label': label, 'aria-pressed': lv ? String(lv.live === op) : null, onclick: () => boolOp(op) }, boolIcon(op)))),
+      h('div', { class: 'row' }, h('button', { class: 'fbtn', title: lv ? 'Bake into one plain vector (Ctrl+E)' : 'Join into one vector without merging the shapes (Ctrl+E)', onclick: flattenSel }, 'Flatten'),
+        lv ? h('button', { class: 'fbtn', title: 'Put the shapes back on the board on their own (Ctrl+Shift+G)', onclick: () => arrange('ungroup') }, 'Release')
+          : h('button', { class: 'fbtn', title: 'The bottom piece clips the others to its outline (Ctrl+Alt+M)', onclick: useAsMask }, 'Use as mask')),
+      lv ? h('p', { class: 'hint' }, 'The shapes stay editable. Double-click one to select it, or press Enter to select them all.') : null));
     if (free.some(e => e.mask || e.masking)) out.push(sec('Mask', h('p', { class: 'hint' }, free.some(e => e.masking) ? 'This piece is a mask: its outline clips the pieces grouped with it.' : 'Clipped by a mask.'), h('button', { class: 'fbtn', onclick: releaseMask }, 'Release mask')));
     const vsec = vectorSection(free, one, num);
     if (vsec) out.push(vsec);
@@ -1251,9 +1317,9 @@ function renderProps() {
       act(locked ? 'Unlock' : 'Lock', MI.lock, () => arrange(locked ? 'unlock' : 'lock'), locked ? ' on' : ''),
       act('Duplicate (Ctrl+D)', MI.copy, () => { copySel(); pasteEls(clip, 24); }),
       act(list.length > 1 ? 'Delete selection' : 'Delete', MI.trash, removeSel, ' danger', !free.length)),
-      list.length > 1 || list.some(e => e.g) ? h('div', { class: 'row' },
+      list.length > 1 || list.some(e => e.g && !e.boolIn) ? h('div', { class: 'row' },
         list.length > 1 ? h('button', { class: 'fbtn', onclick: () => arrange('group') }, 'Group') : null,
-        list.some(e => e.g) ? h('button', { class: 'fbtn', onclick: () => arrange('ungroup') }, 'Ungroup') : null) : null));
+        list.some(e => e.g && !e.boolIn) ? h('button', { class: 'fbtn', onclick: () => arrange('ungroup') }, liveOne() ? 'Release' : 'Ungroup') : null) : null));
   }
   el.replaceChildren(...out);
 }
@@ -1350,25 +1416,25 @@ function renderKanban() {
 }
 function openMenu(ev) {
   ev.preventDefault(); if (editing) endEdit();
-  const p = pt(ev), id = idAt(ev.target);
+  const p = pt(ev), inner = selectedOperandAt(p), id = inner ? inner.id : idAt(ev.target);
   if (id && !sel.has(id)) { sel = new Set(group(id)); refresh(); } else if (!id && sel.size) { sel.clear(); refresh(); }
-  const list = selEls();
+  const list = panelEls(), lv = liveOne();
   popupAt(ev.clientX, ev.clientY, id ? [
     list.length === 1 && TEXTY.includes(list[0].type) ? ['Edit text', () => startEdit(list[0].id)] : null,
-    list.length === 1 && list[0].type === 'path' && !list[0].locked ? ['Edit nodes', () => enterVedit(list[0].id)] : null,
+    list.length === 1 && list[0].type === 'path' && !list[0].locked && !list[0].live ? ['Edit nodes', () => enterVedit(list[0].id)] : null,
+    lv ? ['Select shapes inside', () => { sel = new Set(LB.operandsOf(board.els, lv.id).flatMap(o => withKids(o.id))); refresh(); }] : null,
     list.some(vectorable) ? ['Convert to vector', () => toVector(list)] : null,
-    boolPieces().length >= 2 ? ['Union', () => boolOp('union')] : null, boolPieces().length >= 2 ? ['Subtract', () => boolOp('subtract')] : null,
-    boolPieces().length >= 2 ? ['Intersect', () => boolOp('intersect')] : null, boolPieces().length >= 2 ? ['Exclude', () => boolOp('exclude')] : null,
-    boolPieces().length >= 2 ? ['Flatten', flattenSel] : null,
+    ...(boolPieces().length >= 2 || lv ? Object.entries(B.BOOL_LABELS).filter(([op]) => !lv || lv.live !== op).map(([op, label]) => [lv ? 'Change to ' + label.toLowerCase() : label, () => boolOp(op)]) : []),
+    boolPieces().length >= 2 || lv ? ['Flatten', flattenSel] : null,
     selEls().length >= 2 ? ['Use as mask', useAsMask] : null, selEls().some(e => e.mask || e.masking) ? ['Release mask', releaseMask] : null,
     list.some(strokable) ? ['Outline stroke', outlineStroke] : null,
-    PO.ready() && list.some(e => e.type === 'path') ? ['Simplify', () => pathEdit('simplify')] : null,
-    PO.ready() && list.some(e => e.type === 'path') ? ['Smooth', () => pathEdit('smooth')] : null,
+    PO.ready() && list.some(e => e.type === 'path') ? ['Simplify', () => adjOpen('simplify')] : null,
+    PO.ready() && list.some(e => e.type === 'path') ? ['Smooth', () => adjOpen('smooth')] : null,
     list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
     list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
     ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
     ['Bring to front', () => arrange('front')], ['Send to back', () => arrange('back')],
-    list.length > 1 ? ['Group', () => arrange('group')] : null, list.some(e => e.g) ? ['Ungroup', () => arrange('ungroup')] : null,
+    list.length > 1 ? ['Group', () => arrange('group')] : null, list.some(e => e.g) ? [lv ? 'Release shapes' : 'Ungroup', () => arrange('ungroup')] : null,
     list.every(e => e.locked) ? ['Unlock', () => arrange('unlock')] : ['Lock', () => arrange('lock')], '-',
     ['Delete', removeSel, 'danger']]
   : [clip.length ? ['Paste here', () => pasteAt(p)] : null,
@@ -1380,7 +1446,7 @@ const KEYS = [
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
-  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+E', 'Flatten the selection into one vector'], ['Ctrl+Shift+O', 'Outline stroke'], ['Ctrl+Alt+M', 'Use the bottom piece as a mask, or release it']]],
+  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+Alt+U / S / I / X', 'Union, subtract, intersect, exclude'], ['Double-click a boolean', 'Select the shape under the pointer'], ['Enter on a boolean', 'Select the shapes inside it'], ['Esc on a shape inside', 'Back to the boolean'], ['Ctrl+E', 'Flatten the selection, or bake a boolean'], ['Ctrl+Shift+O', 'Outline stroke'], ['Ctrl+Alt+M', 'Use the bottom piece as a mask, or release it']]],
   ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {
@@ -1508,34 +1574,63 @@ function styleFrom(base) {
   if (['rect', 'ellipse', 'diamond'].includes(base.type)) return { fill: base.fill || '#ffffff', stroke: base.stroke || outlineFor(base.fill, 'light'), sw: 1.5 };
   return { fill: '#ffffff', stroke: outlineFor('#ffffff', 'light'), sw: 1.5 };
 }
-const boolPieces = () => selEls().filter(e => !e.locked && (B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl))).sort((a, b) => a.z - b.z);
+const boolPieces = () => panelEls().filter(e => !e.locked && (B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl))).sort((a, b) => a.z - b.z);
 /** Replaces pieces with one vector, moving connectors that were attached to them onto it. */
 function replaceWith(list, e) {
   const ids = new Set(list.map(x => x.id));
+  for (const x of list) if (x.live) for (const d of LB.descendantsOf(board.els, x.id)) delete board.els[d.id];
   list.forEach(liftText);
   for (const x of list) delete board.els[x.id];
   if (e) { board.els[e.id] = e; for (const c of all()) if (c.type === 'conn') { if (ids.has(c.a)) c.a = e.id; if (ids.has(c.b)) c.b = e.id; } }
   else for (const c of all()) if (c.type === 'conn' && (ids.has(c.a) || ids.has(c.b))) delete board.els[c.id];
   sel = new Set(e ? [e.id] : []);
 }
-/** Union, subtract, intersect, or exclude the selected shapes. Subtract cuts the upper pieces out of the bottom one. */
+/**
+ * Union, subtract, intersect, or exclude the selected shapes. The result is live: the shapes stay
+ * inside it as operands and it updates as they change. Subtract cuts the upper pieces out of the
+ * bottom one. With one live result selected, this switches its operation instead.
+ */
 function boolOp(op) {
   if (editing) endEdit(); vedit = null;
+  const one = liveOne();
+  if (one) { if (one.live !== op) { one.live = op; commit(); } return; }
   const list = boolPieces(); if (list.length < 2) return toast('Select two or more shapes to combine.');
-  // VectorCraft's engine keeps curves exact; the polygon version is the fallback.
-  let subs = X.combine(op, list.map(e => ({ subs: B.outlineOf(e), evenodd: e.type === 'path' && e.rule === 'evenodd' })));
-  if (!subs) {
-    try { subs = B.subsOfRegion(B.combine(op, list.map(e => B.regionOf(B.outlineOf(e))))); } catch (err) { return toast('Those shapes could not be combined.'); }
+  const subs = LB.liveGeometry(op, list);
+  if (!subs.length) return toast(op === 'intersect' ? 'Those shapes do not overlap, so nothing would be left.' : 'Nothing would be left after ' + B.BOOL_LABELS[op].toLowerCase() + '.');
+  const base = list[0], g = uid('g'), ids = new Set(list.map(x => x.id));
+  const r = { id: uid('e'), type: 'path', z: base.z, x: 0, y: 0, w: 0, h: 0, live: op, rule: 'evenodd', g, ...styleFrom(base) };
+  if (!r.fill || r.fill === 'none') r.fill = '#ffffff';
+  V.setWorldPaths(r, subs);
+  for (const e of list) { e.boolIn = r.id; for (const d of withKids(e.id)) E(d).g = g; }
+  board.els[r.id] = r;
+  for (const c of all()) if (c.type === 'conn') { if (ids.has(c.a)) c.a = r.id; if (ids.has(c.b)) c.b = r.id; }
+  sel = new Set(group(r.id)); commit();
+}
+/**
+ * Position fields on a boolean move, scale (keeping proportions), or turn the shapes inside it; the
+ * result follows on the next draw.
+ */
+function liveEdit(r, how, a, b) {
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  for (const k of LB.descendantsOf(board.els, r.id)) {
+    const o = clone(k);
+    if (how === 'move') { k.x += a; k.y += b; }
+    else if (how === 'scale') Object.assign(k, G.scaleEl(o, r.x, r.y, a));
+    else if (a) { delete k.rot; Object.assign(k, G.rotateEl(o, cx, cy, a)); }
   }
-  if (!subs.length) { replaceWith(list, null); commit(); return toast('Nothing is left after ' + B.BOOL_LABELS[op].toLowerCase() + '. Undo to bring the shapes back.'); }
-  const base = list[0], e = { id: uid('e'), type: 'path', z: base.z, x: 0, y: 0, w: 0, h: 0, rule: 'evenodd', ...styleFrom(base) };
-  if (!e.fill || e.fill === 'none') e.fill = '#ffffff';
-  if (base.g) e.g = base.g;
-  V.setWorldPaths(e, subs); replaceWith(list, e); commit();
+  liveSeen.delete(r.id);
+  LB.syncLive(board.els, liveSeen);
+}
+/** Bakes a live result into a plain vector (Flatten on a boolean). */
+function bakeLive(r) {
+  LB.bake(board.els, r.id);
+  if (r.g && !all().some(x => x !== r && x.g === r.g)) delete r.g;
 }
 /** Joins the selected pieces into one vector without merging their shapes. */
 function flattenSel() {
   if (editing) endEdit(); vedit = null;
+  const one = liveOne();
+  if (one) { bakeLive(one); sel = new Set([one.id]); commit(); return; }
   const list = boolPieces(); if (!list.length) return;
   const subs = list.flatMap(e => B.outlineOf(e)); if (!subs.length) return;
   const base = list[0], e = { id: list.length === 1 ? base.id : uid('e'), type: 'path', z: base.z, x: 0, y: 0, w: 0, h: 0, ...styleFrom(base) };
@@ -1545,7 +1640,8 @@ function flattenSel() {
 /** Turns strokes into filled shapes. A filled vector keeps its fill and gets its outline as a separate piece. */
 function outlineStroke() {
   if (editing) endEdit(); vedit = null;
-  const list = selEls().filter(e => !e.locked && strokable(e)); if (!list.length) return;
+  const list = panelEls().filter(e => !e.locked && strokable(e)); if (!list.length) return;
+  list.forEach(e => { if (e.live) bakeLive(e); });
   const made = [];
   for (const e of list) {
     const width = e.type === 'pen' ? e.sw || 2.5 : e.sw ?? 2, color = e.stroke && e.stroke !== 'none' ? e.stroke : '#1d2530';
@@ -1553,7 +1649,7 @@ function outlineStroke() {
     try {
       if (e.type === 'pen' && shaped(e.brush)) { const sp = B.refitRing(brushOutline(e.pts, e.sw || BRUSHES[e.brush].width, e.brush).map(q => [e.x + q[0], e.y + q[1]])); subs = sp ? [sp] : []; }
       else {
-        exact = X.outlineStroke(B.outlineOf(e), width, 'round', 'round');
+        exact = X.outlineStroke(B.outlineOf(e), width, e.type === 'path' ? e.cap || 'round' : 'round', e.type === 'path' ? e.join || 'round' : 'round');
         subs = exact || B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75));
       }
     } catch (err) { continue; }
@@ -1569,62 +1665,96 @@ function outlineStroke() {
   sel = new Set(made); commit();
 }
 const strokable = e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl);
-const pathSel = () => selEls().filter(e => !e.locked && e.type === 'path');
+const pathSel = () => panelEls().filter(e => !e.locked && e.type === 'path');
 const allClosed = e => (e.paths || []).length > 0 && e.paths.every(sp => sp.closed);
-/** Simplify or smooth the selected vectors. Rotated vectors stay where they are. */
-function pathEdit(kind) {
-  if (editing) endEdit(); vedit = null;
-  const list = pathSel(); if (!list.length) return;
-  let changed = 0;
-  for (const e of list) {
-    const before = JSON.stringify(e.paths);
-    const out = kind === 'simplify' ? X.simplify(V.worldPaths(e), 1.5) : X.smooth(V.worldPaths(e), 50);
-    if (!out || !out.length) continue;
-    V.placeWorldPaths(e, out);
-    if (JSON.stringify(e.paths) !== before) changed++;
-  }
-  if (!changed) return toast(kind === 'simplify' ? 'Already as simple as it can be without changing shape.' : 'Already smooth.');
-  commit();
-}
 /**
- * Offset is live: each value is applied to the shapes as they were when editing began, so typing or
- * stepping with the arrow keys previews the result. Enter or leaving the field keeps it; Esc puts
- * the shapes back.
+ * Simplify, Smooth, and Offset adjust live, as in Illustrator: every value is applied to the shapes as
+ * they were when adjusting began, so the board previews each step. Apply (Enter) keeps the result as
+ * one undo step; Cancel (Esc) puts the shapes back. A live boolean is flattened first, and that is
+ * undone by Cancel too. Rotated vectors stay where they are.
  */
-let offsetSnap = null;
-function offsetPreview(dist) {
-  const list = pathSel().filter(allClosed); if (!list.length) return;
-  if (!offsetSnap) offsetSnap = new Map(list.map(e => [e.id, clone({ x: e.x, y: e.y, w: e.w, h: e.h, vw: e.vw, vh: e.vh, paths: e.paths })]));
-  for (const e of list) {
-    const snap = offsetSnap.get(e.id); if (!snap) continue;
-    Object.assign(e, clone(snap));
-    if (dist) { const out = X.offset(V.worldPaths(e), dist); if (out && out.length) V.placeWorldPaths(e, out); }
+const ADJ = {
+  simplify: { label: 'Simplify', start: 50, left: 'Fewer nodes', right: 'More detail', run: (subs, v) => X.simplify(subs, X.simplifyTolerance(v)) },
+  smooth: { label: 'Smooth', start: 50, left: 'Gentle', right: 'Strong', run: (subs, v) => X.smooth(subs, v) },
+  offset: { run: (subs, v) => (v ? X.offset(subs, v, offsetJoin) : null) },
+};
+const CORNERS = [['round', 'Round join'], ['miter', 'Miter join'], ['bevel', 'Bevel join']];
+let adj = null, adjRaf = 0, adjNext = null, offsetJoin = 'round';
+const nodeCount = list => list.reduce((a, e) => a + (e.paths || []).reduce((b, sp) => b + sp.nodes.length, 0), 0);
+const selKey = () => [...sel].sort().join();
+function adjBegin(kind) {
+  if (adj && adj.kind === kind) return true;
+  if (adj) adjEnd(true);
+  if (editing) endEdit(); vedit = null;
+  const list = pathSel().filter(e => kind !== 'offset' || e.live || allClosed(e)); if (!list.length) return false;
+  const baked = [];
+  for (const e of list) if (e.live) { baked.push({ id: e.id, live: e.live, g: e.g, kids: LB.descendantsOf(board.els, e.id).map(clone) }); bakeLive(e); }
+  adj = { kind, key: selKey(), baked, ids: list.map(e => e.id), before: nodeCount(list), value: kind === 'offset' ? 0 : ADJ[kind].start,
+    snap: new Map(list.map(e => [e.id, clone({ x: e.x, y: e.y, w: e.w, h: e.h, vw: e.vw, vh: e.vh, paths: e.paths })])) };
+  return true;
+}
+function adjApply(v) {
+  if (!adj) return;
+  adj.value = v;
+  for (const id of adj.ids) {
+    const e = board.els[id]; if (!e) continue;
+    Object.assign(e, clone(adj.snap.get(id)));
+    const out = ADJ[adj.kind].run(V.worldPaths(e), v);
+    if (out && out.length) V.placeWorldPaths(e, out);
   }
   draw();
+  const n = $('#adj-n'); if (n) n.textContent = `${nodeCount(adj.ids.map(E).filter(Boolean))} of ${adj.before} nodes`;
 }
-function offsetEnd(keep) {
-  if (!offsetSnap) return;
-  if (!keep) for (const [id, snap] of offsetSnap) if (board.els[id]) Object.assign(board.els[id], snap);
-  offsetSnap = null;
-  if (keep) holdCommit(); else draw();
+/** Slider moves are applied once per frame, so dragging stays smooth on big paths. */
+function adjQueue(v) {
+  adjNext = v;
+  if (!adjRaf) adjRaf = requestAnimationFrame(() => { adjRaf = 0; adjApply(adjNext); });
+}
+function adjEnd(keep) {
+  if (!adj) return;
+  if (adjRaf) { cancelAnimationFrame(adjRaf); adjRaf = 0; adjApply(adjNext); }
+  const a = adj; adj = null;
+  if (keep) { holdCommit(); return; }
+  for (const [id, snap] of a.snap) if (board.els[id]) Object.assign(board.els[id], snap);
+  for (const b of a.baked) { const e = board.els[b.id]; if (!e) continue; e.live = b.live; if (b.g) e.g = b.g; for (const k of b.kids) board.els[k.id] = k; }
+  draw();
+}
+/** Opens the Simplify or Smooth slider and previews its starting value. */
+function adjOpen(kind) {
+  if (!adjBegin(kind)) return;
+  adjApply(adj.value); renderProps();
+  const r = $('#adj-range'); if (r) { r.focus({ preventScroll: true }); r.closest('.adj').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+}
+function adjFinish(keep) { adjEnd(keep); renderProps(); }
+function adjuster() {
+  const d = ADJ[adj.kind];
+  return h('div', { class: 'adj' },
+    h('div', { class: 'adj-h' }, h('span', null, d.label), h('span', { class: 'adj-n', id: 'adj-n' }, `${nodeCount(adj.ids.map(E).filter(Boolean))} of ${adj.before} nodes`)),
+    h('input', { type: 'range', id: 'adj-range', min: 0, max: 100, step: 1, value: adj.value, 'aria-label': d.label + ' amount', oninput: ev => adjQueue(Number(ev.target.value)),
+      onkeydown: ev => { if (ev.key === 'Enter' || ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); adjFinish(ev.key === 'Enter'); } } }),
+    h('div', { class: 'adj-l' }, h('span', null, d.left), h('span', null, d.right)),
+    h('div', { class: 'grid2' }, h('button', { class: 'fbtn', onclick: () => adjFinish(false) }, 'Cancel'), h('button', { class: 'fbtn primary', onclick: () => adjFinish(true) }, 'Apply')));
 }
 function offsetField() {
-  const closed = pathSel().every(allClosed);
-  const title = closed ? 'Grow the shape by a distance, or shrink it with a negative one. Arrow keys step by 1 (Shift for 10).' : 'Offset works on closed shapes';
+  const ok = pathSel().every(e => e.live || allClosed(e));
+  const title = ok ? 'Grow the shape by a distance, or shrink it with a negative one. Arrow keys step by 1 (Shift for 10).' : 'Offset works on closed shapes';
   const val = el => { const v = parseFloat(String(el.value).replace(/[^0-9.\-]/g, '')); return Number.isFinite(v) ? v : 0; };
-  const inp = h('input', { type: 'text', inputmode: 'decimal', id: 'vec-offset', value: '0', 'aria-label': 'Offset', disabled: !closed,
-    oninput: ev => offsetPreview(val(ev.target)),
+  const go = v => { if (adjBegin('offset')) adjApply(v); };
+  const inp = h('input', { type: 'text', inputmode: 'decimal', id: 'vec-offset', value: adj && adj.kind === 'offset' ? String(adj.value) : '0', 'aria-label': 'Offset', disabled: !ok,
+    oninput: ev => go(val(ev.target)),
     onkeydown: ev => {
-      if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') { ev.preventDefault(); const v = r2(val(ev.target) + (ev.key === 'ArrowUp' ? 1 : -1) * (ev.shiftKey ? 10 : 1)); ev.target.value = String(v); offsetPreview(v); }
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') { ev.preventDefault(); const v = r2(val(ev.target) + (ev.key === 'ArrowUp' ? 1 : -1) * (ev.shiftKey ? 10 : 1)); ev.target.value = String(v); go(v); }
       else if (ev.key === 'Enter') ev.target.blur();
-      else if (ev.key === 'Escape') { ev.stopPropagation(); offsetEnd(false); ev.target.value = '0'; ev.target.blur(); }
+      else if (ev.key === 'Escape') { ev.stopPropagation(); ev.target.value = '0'; adjEnd(false); ev.target.blur(); }
     },
-    onblur: ev => { offsetEnd(true); ev.target.value = '0'; } });
-  return h('label', { class: 'field' + (closed ? '' : ' off'), title }, h('span', null, 'Offset'), inp);
+    onblur: ev => { if (adj && adj.kind === 'offset') adjEnd(true); ev.target.value = '0'; } });
+  return [h('label', { class: 'field' + (ok ? '' : ' off'), title }, h('span', null, 'Offset'), inp),
+    h('select', { class: 'sel', id: 'vec-offset-join', 'aria-label': 'Offset corners', title: 'Corners made by offset', disabled: !ok, onchange: ev => { offsetJoin = ev.target.value; if (adj && adj.kind === 'offset') adjApply(adj.value); } },
+      CORNERS.map(([v, l]) => h('option', { value: v, selected: v === offsetJoin }, l)))];
 }
 /** One Vector section for everything that reshapes paths: node editing, path tools, and conversion. */
 function vectorSection(free, one, num) {
-  const paths = free.filter(e => e.type === 'path'), solo = one && one.type === 'path' && !one.locked ? one : null;
+  const paths = free.filter(e => e.type === 'path'), solo = one && one.type === 'path' && !one.locked && !one.live ? one : null;
   const canStroke = free.some(strokable), canConvert = free.some(vectorable), exact = PO.ready() && paths.length > 0;
   if (!paths.length && !canStroke && !canConvert) return null;
   const btn = (label, title, fn, extra) => h('button', { class: 'fbtn', title, onclick: fn, ...extra }, label);
@@ -1636,10 +1766,16 @@ function vectorSection(free, one, num) {
       subs.length === 1 ? btn('Closed shape', 'Join the last node to the first', () => { if (subs[0].closed) delete subs[0].closed; else subs[0].closed = true; fitPath(solo); commit(); }, { 'aria-pressed': String(!!subs[0].closed) }) : h('span')));
     kids.push(h('p', { class: 'hint' }, `${n} nodes${subs.length > 1 ? ' in ' + subs.length + ' parts' : ''}. ` + (vedit ? 'Drag nodes and handles. Click the outline to add a node; double-click a node to switch corner and smooth.' : 'Double-click the vector or press Enter to reshape it.')));
   }
+  if (exact) {
+    const open = adj && adj.kind !== 'offset' ? adj.kind : null;
+    kids.push(h('div', { class: 'grid2' },
+      btn('Simplify', 'Fewer nodes, same outline', () => open === 'simplify' ? adjFinish(true) : adjOpen('simplify'), { 'aria-pressed': String(open === 'simplify') }),
+      btn('Smooth', 'Even out bumps and jags', () => open === 'smooth' ? adjFinish(true) : adjOpen('smooth'), { 'aria-pressed': String(open === 'smooth') })));
+    if (open) kids.push(adjuster());
+    kids.push(h('div', { class: 'grid2' }, offsetField()));
+  }
   const tools = [];
-  if (exact) tools.push(btn('Simplify', 'Fewer nodes, same outline', () => pathEdit('simplify')), btn('Smooth', 'Even out bumps and jags; click again for more', () => pathEdit('smooth')));
   if (canStroke) tools.push(btn('Outline stroke', 'Turn the stroke into a filled shape you can edit and combine (Ctrl+Shift+O)', outlineStroke));
-  if (exact) tools.push(offsetField());
   if (canConvert) tools.push(btn('Convert to vector', 'Turn shapes and drawings into paths you can reshape node by node', () => toVector(free)));
   if (tools.length) kids.push(h('div', { class: 'grid2' }, tools));
   return h('section', { class: 'psec' }, h('h3', null, 'Vector'), ...kids);

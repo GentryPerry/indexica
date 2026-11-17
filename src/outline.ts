@@ -3,12 +3,14 @@ import { STICKERS } from './stickers';
 import type { El, Lookup } from './types';
 
 /** One line in the board outline. Pieces inside a frame sit one level in, under it. */
-export interface OutlineRow { id: string; depth: 0 | 1; label: string; kind: El['type'] }
+export interface OutlineRow { id: string; depth: number; label: string; kind: El['type'] }
 
 export const TYPE_NAMES: Record<El['type'], string> = {
   sticky: 'Sticky note', text: 'Text', rect: 'Rectangle', ellipse: 'Ellipse', diamond: 'Diamond', card: 'Task card',
   frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture', table: 'Table', path: 'Vector',
 };
+
+export const LIVE_NAMES = { union: 'Union', subtract: 'Subtract', intersect: 'Intersect', exclude: 'Exclude' } as const;
 
 /** A short name for a piece: the first line of its text, or what kind of piece it is. */
 export function elLabel(e: El, get: Lookup, depth = 0): string {
@@ -19,13 +21,15 @@ export function elLabel(e: El, get: Lookup, depth = 0): string {
     if (a && b) return `${elLabel(a, get, 1)} to ${elLabel(b, get, 1)}`;
   }
   if (e.type === 'sticker') return `${(STICKERS[e.shape || ''] || STICKERS.star).label} sticker`;
+  if (e.live) return LIVE_NAMES[e.live];
   return TYPE_NAMES[e.type];
 }
 
 /**
  * The outline: frames from top to bottom, each followed by the pieces whose center sits inside it
  * (the smallest frame wins when frames overlap), then the pieces that are in no frame.
- * Within a group, pieces read top to bottom, left to right, with connectors last.
+ * Within a group, pieces read top to bottom, left to right, with connectors last. The operands of a
+ * live boolean follow it, one level further in, top first as in a layer list.
  */
 export function outlineRows(els: El[], get: Lookup): OutlineRow[] {
   const frames = els.filter(e => e.type === 'frame').sort((a, b) => a.y - b.y || a.x - b.x);
@@ -36,8 +40,10 @@ export function outlineRows(els: El[], get: Lookup): OutlineRow[] {
     return best;
   };
   const kids = new Map<string, El[]>(), loose: El[] = [];
+  const operands = new Map<string, El[]>();
+  for (const e of els) if (e.boolIn) { if (operands.has(e.boolIn)) operands.get(e.boolIn)!.push(e); else operands.set(e.boolIn, [e]); }
   for (const e of els) {
-    if (e.type === 'frame') continue;
+    if (e.type === 'frame' || e.boolIn) continue;
     const f = homeOf(e);
     if (!f) loose.push(e);
     else if (kids.has(f.id)) kids.get(f.id)!.push(e);
@@ -48,9 +54,12 @@ export function outlineRows(els: El[], get: Lookup): OutlineRow[] {
     if (ac !== bc) return ac ? 1 : -1;
     return ac ? a.z - b.z : a.y - b.y || a.x - b.x;
   };
-  const row = (e: El, depth: 0 | 1): OutlineRow => ({ id: e.id, depth, label: elLabel(e, get), kind: e.type });
+  const rows = (e: El, depth: number): OutlineRow[] => [
+    { id: e.id, depth, label: elLabel(e, get), kind: e.type },
+    ...(operands.get(e.id) || []).sort((a, b) => b.z - a.z).flatMap(o => rows(o, depth + 1)),
+  ];
   return [
-    ...frames.flatMap(f => [row(f, 0), ...(kids.get(f.id) || []).sort(order).map(e => row(e, 1))]),
-    ...loose.sort(order).map(e => row(e, 0)),
+    ...frames.flatMap(f => [...rows(f, 0), ...(kids.get(f.id) || []).sort(order).flatMap(e => rows(e, 1))]),
+    ...loose.sort(order).flatMap(e => rows(e, 0)),
   ];
 }

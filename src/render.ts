@@ -118,6 +118,8 @@ const autoInkOr = (color: string | undefined, fallback: string) => !color || INK
 
 /** Draw one element as an SVG group tagged with its id. */
 export function renderEl(e: El, c: RenderCtx): SVGElement {
+  // Operands of a live boolean are not drawn: the result shows what they make together.
+  if (e.boolIn) return s('g', { 'data-op': e.id });
   const g = s('g', { 'data-id': e.id }), hide = c.hideId === e.id, shadow = c.exp ? null : 'url(#sh)';
   const { x, y, w, h } = e, st = textStyle(e), lh = st.size * 1.3;
   if (e.type === 'sticky') {
@@ -182,7 +184,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       };
       const layers = [
         ...fillLayers(e).map(p => s('path', { d, fill: paint(p, c.ink), 'fill-rule': e.rule || null, stroke: 'none' })),
-        ...strokes.map(l => s('path', { d, fill: 'none', stroke: paint(l.paint, c.ink), 'stroke-width': l.width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, l.width) })),
+        ...strokes.map(l => s('path', { d, fill: 'none', stroke: paint(l.paint, c.ink), 'stroke-width': l.width, 'stroke-linecap': e.cap || 'round', 'stroke-linejoin': e.join || 'round', 'stroke-miterlimit': e.join === 'miter' ? 4 : null, 'stroke-dasharray': dashOf(e, l.width) })),
       ];
       if (gi) g.append(defs);
       g.append(...layers);
