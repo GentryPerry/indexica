@@ -24,6 +24,7 @@ import { paintFill, outlineFor, inkOn, SURFACE, adjust } from './palette';
 import { trayIcon } from './tray';
 import * as SL from './slides';
 import * as V from './vector';
+import * as B from './boolean';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -865,6 +866,8 @@ function onKey(ev) {
   if (k === ' ') { spaceDown = true; cv.classList.add('pan'); }
   else if (mod && k === 'z') ev.shiftKey ? travel('redo') : travel('undo');
   else if (mod && k === 'y') travel('redo');
+  else if (mod && k === 'e') flattenSel();
+  else if (mod && ev.shiftKey && k === 'o') outlineStroke();
   else if (mod && k === 'enter') { const f = selEls().find(e => e.slide); present(f ? SL.slidesOf(board.els).indexOf(f) : 0); }
   else if (mod && k === 'd') { copySel(); const c = clip; pasteEls(c, 24); }
   else if (mod && k === 'c') copySel();
@@ -1038,6 +1041,10 @@ function outlineIcon(e) {
   if (e.type === 'card') return chip(`width:4px;height:12px;border-radius:2px;background:${STATUS[e.status || 'todo'][1]}`);
   if (e.type === 'tape') return chip(`width:12px;height:5px;background:${e.fill || '#2f6fed'};opacity:.8`);
   if (e.type === 'sticker') return h('span', { class: 'oi', 'aria-hidden': 'true', style: 'color:' + (e.fill || '#f5c518') }, icon(STAR, 12, { fill: 'currentColor', stroke: 'none' }));
+  // A vector shows a tiny copy of its own shape.
+  if (e.type === 'path') { const vw = Math.max(1, e.vw || e.w), vh = Math.max(1, e.vh || e.h), pad = Math.max(vw, vh) * 0.08;
+    return h('span', { class: 'oi', 'aria-hidden': 'true' }, s('svg', { width: 12, height: 12, viewBox: `${-pad} ${-pad} ${vw + pad * 2} ${vh + pad * 2}`, style: 'overflow:visible' },
+      s('path', { d: V.pathD(e.paths || []), fill: e.fill && e.fill !== 'none' ? paintFill(e.fill, C.theme) : 'none', 'fill-rule': e.rule || null, stroke: e.stroke === 'none' ? 'none' : 'currentColor', 'stroke-width': 1.3, 'vector-effect': 'non-scaling-stroke' }))); }
   return h('span', { class: 'oi', 'aria-hidden': 'true' }, icon(ICON[{ conn: 'conn', pen: 'pen', image: 'image', frame: 'frame', table: 'table' }[e.type] || 'text'], 12, { 'stroke-width': 2 }));
 }
 function renderOutline() {
@@ -1156,6 +1163,11 @@ function renderProps() {
           h('p', { class: 'hint' }, `${n} nodes${subs.length > 1 ? ' in ' + subs.length + ' parts' : ''}. ` + (vedit ? 'Drag nodes and handles. Click the outline to add a node; double-click a node to switch corner and smooth.' : 'Double-click the vector or press Enter to reshape it.'))));
       }
     }
+    const combinable = free.filter(e => B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl));
+    if (combinable.length >= 2) out.push(sec('Combine',
+      h('div', { class: 'irow four' }, Object.entries(B.BOOL_LABELS).map(([op, label]) => h('button', { class: 'ibtn', title: label + (op === 'subtract' ? ': cut the upper shapes out of the bottom one' : ''), 'aria-label': label, onclick: () => boolOp(op) }, boolIcon(op)))),
+      h('div', { class: 'row' }, h('button', { class: 'fbtn', title: 'Join into one vector without merging the shapes', onclick: flattenSel }, 'Flatten'))));
+    if (free.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl))) out.push(sec('Stroke to shape', h('button', { class: 'fbtn', onclick: outlineStroke }, 'Outline stroke'), h('p', { class: 'hint' }, 'Turns the stroke into a filled shape you can edit and combine.')));
     if (free.some(vectorable)) out.push(sec('Vector', h('button', { class: 'fbtn', onclick: () => toVector(free) }, 'Convert to vector'), h('p', { class: 'hint' }, 'Turns shapes and drawings into paths you can reshape node by node.')));
     if (one && one.type === 'table') {
       const tb = one;
@@ -1313,6 +1325,10 @@ function openMenu(ev) {
     list.length === 1 && TEXTY.includes(list[0].type) ? ['Edit text', () => startEdit(list[0].id)] : null,
     list.length === 1 && list[0].type === 'path' && !list[0].locked ? ['Edit nodes', () => enterVedit(list[0].id)] : null,
     list.some(vectorable) ? ['Convert to vector', () => toVector(list)] : null,
+    boolPieces().length >= 2 ? ['Union', () => boolOp('union')] : null, boolPieces().length >= 2 ? ['Subtract', () => boolOp('subtract')] : null,
+    boolPieces().length >= 2 ? ['Intersect', () => boolOp('intersect')] : null, boolPieces().length >= 2 ? ['Exclude', () => boolOp('exclude')] : null,
+    boolPieces().length >= 2 ? ['Flatten', flattenSel] : null,
+    list.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl)) ? ['Outline stroke', outlineStroke] : null,
     list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
     list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
     ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
@@ -1329,7 +1345,7 @@ const KEYS = [
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
-  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes']]],
+  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+E', 'Flatten the selection into one vector'], ['Ctrl+Shift+O', 'Outline stroke']]],
   ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {
@@ -1440,6 +1456,77 @@ function nodeMarks(e) {
   return s('g', null, out, hand, dots);
 }
 const vectorable = e => !e.locked && (['rect', 'ellipse', 'diamond'].includes(e.type) || (e.type === 'pen' && !e.hl && (e.pts || []).length > 1));
+/** Text inside a shape that is being turned into a vector stays on the board as its own text piece. */
+function liftText(e) {
+  if (e.type === 'pen' || e.type === 'path' || !e.text || !e.text.trim() || !TEXTY.includes(e.type)) return;
+  const tx = { id: uid('e'), type: 'text', z: topZ() + 1, x: e.x + 8, y: e.y, w: Math.max(40, e.w - 16), h: 30, text: e.text, align: 'center' };
+  for (const key of ['font', 'weight', 'size', 'italic', 'color', 'rot']) if (e[key] != null) tx[key] = e[key];
+  tx.size = tx.size || G.textStyle(e).size; fitText(tx); tx.y = Math.round(e.y + e.h / 2 - tx.h / 2);
+  board.els[tx.id] = tx;
+}
+/** The look a combined vector takes from the bottom piece it was made from. */
+function styleFrom(base) {
+  if (base.type === 'path') { const o = {}; for (const k of ['fill', 'stroke', 'sw', 'dash']) if (base[k] != null) o[k] = base[k]; return o; }
+  if (base.type === 'pen') return { stroke: base.stroke, sw: base.sw || 2.5 };
+  if (base.type === 'sticky') return { fill: base.fill || FILLS[0], stroke: 'none' };
+  if (['rect', 'ellipse', 'diamond'].includes(base.type)) return { fill: base.fill || '#ffffff', stroke: base.stroke || outlineFor(base.fill, 'light'), sw: 1.5 };
+  return { fill: '#ffffff', stroke: outlineFor('#ffffff', 'light'), sw: 1.5 };
+}
+const boolPieces = () => selEls().filter(e => !e.locked && (B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl))).sort((a, b) => a.z - b.z);
+/** Replaces pieces with one vector, moving connectors that were attached to them onto it. */
+function replaceWith(list, e) {
+  const ids = new Set(list.map(x => x.id));
+  list.forEach(liftText);
+  for (const x of list) delete board.els[x.id];
+  if (e) { board.els[e.id] = e; for (const c of all()) if (c.type === 'conn') { if (ids.has(c.a)) c.a = e.id; if (ids.has(c.b)) c.b = e.id; } }
+  else for (const c of all()) if (c.type === 'conn' && (ids.has(c.a) || ids.has(c.b))) delete board.els[c.id];
+  sel = new Set(e ? [e.id] : []);
+}
+/** Union, subtract, intersect, or exclude the selected shapes. Subtract cuts the upper pieces out of the bottom one. */
+function boolOp(op) {
+  if (editing) endEdit(); vedit = null;
+  const list = boolPieces(); if (list.length < 2) return toast('Select two or more shapes to combine.');
+  let region;
+  try { region = B.combine(op, list.map(e => B.regionOf(B.outlineOf(e)))); } catch (err) { return toast('Those shapes could not be combined.'); }
+  const subs = B.subsOfRegion(region);
+  if (!subs.length) { replaceWith(list, null); commit(); return toast('Nothing is left after ' + B.BOOL_LABELS[op].toLowerCase() + '. Undo to bring the shapes back.'); }
+  const base = list[0], e = { id: uid('e'), type: 'path', z: base.z, x: 0, y: 0, w: 0, h: 0, rule: 'evenodd', ...styleFrom(base) };
+  if (!e.fill || e.fill === 'none') e.fill = '#ffffff';
+  if (base.g) e.g = base.g;
+  V.setWorldPaths(e, subs); replaceWith(list, e); commit();
+}
+/** Joins the selected pieces into one vector without merging their shapes. */
+function flattenSel() {
+  if (editing) endEdit(); vedit = null;
+  const list = boolPieces(); if (!list.length) return;
+  const subs = list.flatMap(e => B.outlineOf(e)); if (!subs.length) return;
+  const base = list[0], e = { id: list.length === 1 ? base.id : uid('e'), type: 'path', z: base.z, x: 0, y: 0, w: 0, h: 0, ...styleFrom(base) };
+  if (base.g) e.g = base.g;
+  V.setWorldPaths(e, subs); replaceWith(list, e); commit();
+}
+/** Turns strokes into filled shapes. A filled vector keeps its fill and gets its outline as a separate piece. */
+function outlineStroke() {
+  if (editing) endEdit(); vedit = null;
+  const list = selEls().filter(e => !e.locked && ((e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl))); if (!list.length) return;
+  const made = [];
+  for (const e of list) {
+    const width = e.type === 'pen' ? e.sw || 2.5 : e.sw ?? 2, color = e.stroke && e.stroke !== 'none' ? e.stroke : '#1d2530';
+    let subs; try { subs = B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75)); } catch (err) { continue; }
+    if (!subs.length) continue;
+    const o = { id: uid('e'), type: 'path', z: e.z, x: 0, y: 0, w: 0, h: 0, rule: 'evenodd', fill: color, stroke: 'none' };
+    V.setWorldPaths(o, subs);
+    if (e.type === 'path' && e.fill && e.fill !== 'none') { e.stroke = 'none'; o.z = topZ() + 1; const g = e.g || uid('g'); e.g = o.g = g; board.els[o.id] = o; made.push(e.id, o.id); }
+    else { o.id = e.id; if (e.g) o.g = e.g; board.els[e.id] = o; made.push(o.id); }
+  }
+  sel = new Set(made); commit();
+}
+/** Small two-square pictures for the combine buttons, filled where the result has area. */
+function boolIcon(op) {
+  const A = 'M3 3h10v10H3z', Bq = 'M7 7h10v10H7z', line = { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.2 };
+  const fill = { union: s('path', { d: 'M3 3h10v4h4v10H7v-4H3z', fill: 'currentColor' }), subtract: s('path', { d: 'M3 3h10v4H7v6H3z', fill: 'currentColor' }),
+    intersect: s('path', { d: 'M7 7h6v6H7z', fill: 'currentColor' }), exclude: s('path', { d: 'M3 3h10v10H3zM7 7h10v10H7z', fill: 'currentColor', 'fill-rule': 'evenodd' }) }[op];
+  return s('svg', { width: 18, height: 18, viewBox: '0 0 20 20', 'aria-hidden': 'true' }, s('g', { opacity: 0.32 }, fill), fill.cloneNode(true), s('path', { d: A, ...line }), s('path', { d: Bq, ...line, 'stroke-dasharray': op === 'subtract' ? '2 1.6' : null }));
+}
 /** Turns shapes and drawings into vector paths in place, keeping their id, layer, colors, and rotation. */
 function toVector(list) {
   if (editing) endEdit();
@@ -1453,13 +1540,7 @@ function toVector(list) {
     const rot = nv.rot; delete nv.rot;
     V.setWorldPaths(nv, V.mapPaths(subs, (x, y) => [e.x + x, e.y + y]));
     if (rot) nv.rot = rot;
-    // Text inside a shape stays on the board as its own text piece.
-    if (e.type !== 'pen' && e.text && e.text.trim()) {
-      const tx = { id: uid('e'), type: 'text', z: topZ() + 1, x: e.x + 8, y: e.y, w: Math.max(40, e.w - 16), h: 30, text: e.text, align: 'center' };
-      for (const key of ['font', 'weight', 'size', 'italic', 'color', 'rot']) if (e[key] != null) tx[key] = e[key];
-      tx.size = tx.size || G.textStyle(e).size; fitText(tx); tx.y = Math.round(e.y + e.h / 2 - tx.h / 2);
-      board.els[tx.id] = tx;
-    }
+    liftText(e);
     board.els[e.id] = nv;
   }
   commit();

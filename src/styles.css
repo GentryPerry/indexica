@@ -411,3 +411,4 @@ input.h-title:focus{background:var(--field);box-shadow:inset 0 0 0 1.5px var(--a
 .pz-count{min-width:66px;text-align:center;font-weight:600;font-variant-numeric:tabular-nums}
 .pz-sep{width:1px;height:20px;margin:0 4px;background:rgba(255,255,255,.14)}
 @media (prefers-reduced-motion:reduce){.pz-slide{animation:none}}
+.irow.four{grid-template-columns:repeat(4,minmax(0,1fr))}
