@@ -63,7 +63,7 @@ function renderConn(g: SVGElement, e: El, c: RenderCtx) {
   if (!c.exp) g.append(s('path', { d: geom.d, fill: 'none', stroke: 'transparent', 'stroke-width': 16 }));
   if (e.text && c.hideId !== e.id) {
     const st = textStyle(e), w = measure(e.text, st.size, st.weight, st.family, st.italic) + 14, h = st.size * 1.3 + 6;
-    g.append(s('rect', { x: geom.label.x - w / 2, y: geom.label.y - h / 2, width: w, height: h, rx: 5, fill: '#ffffff', stroke: color, 'stroke-opacity': 0.25 }),
+    g.append(s('rect', { x: geom.label.x - w / 2, y: geom.label.y - h / 2, width: w, height: h, rx: 5, fill: c.frame, stroke: color, 'stroke-opacity': 0.25 }),
       textBlock([e.text], geom.label.x, geom.label.y + st.size * 0.35, st, c.ink, 'middle'));
   }
 }
@@ -96,9 +96,9 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const extra = [e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
     if (extra) g.append(textBlock([extra], x + 26 + pw, y + h - 15, { ...pill, weight: late ? 600 : 400 }, late ? '#b93232' : '#5d697c'));
   } else if (e.type === 'frame') {
-    g.append(s('rect', { x, y, width: w, height: h, fill: '#ffffff', stroke: '#d3d8e0', 'stroke-width': 1, 'pointer-events': 'none' }));
+    g.append(s('rect', { x, y, width: w, height: h, fill: c.frame, stroke: c.frameLine, 'stroke-width': 1, 'pointer-events': 'none' }));
     if (!c.exp) g.append(s('rect', { x, y, width: w, height: h, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
-    if (!hide) { const t = textBlock([e.text || 'Frame'], x, y - 7, st, e.color || '#5d697c'); t.removeAttribute('pointer-events'); g.append(t); }
+    if (!hide) { const t = textBlock([e.text || 'Frame'], x, y - 7, st, e.color || c.muted); t.removeAttribute('pointer-events'); g.append(t); }
   } else if (e.type === 'pen') {
     const d = 'M' + (e.pts || []).map(p => (x + p[0]) + ' ' + (y + p[1])).join('L');
     g.append(s('path', { d, fill: 'none', stroke: e.stroke || c.ink, 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
