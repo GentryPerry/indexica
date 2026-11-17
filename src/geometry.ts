@@ -132,7 +132,7 @@ export function scaleEl(o: El, ox: number, oy: number, f: number): El {
   e.h = round2(o.h * f);
   e.x = round2(ox + (o.x + o.w / 2 - ox) * f - e.w / 2);
   e.y = round2(oy + (o.y + o.h / 2 - oy) * f - e.h / 2);
-  if (o.pts) e.pts = o.pts.map(p => [Math.round(p[0] * f * 10) / 10, Math.round(p[1] * f * 10) / 10]);
+  if (o.pts) e.pts = o.pts.map(p => [Math.round(p[0] * f * 10) / 10, Math.round(p[1] * f * 10) / 10, ...p.slice(2)]);
   if (['sticky', 'text', 'rect', 'ellipse', 'diamond'].includes(o.type)) e.size = Math.min(400, Math.max(4, Math.round(textStyle(o).size * f * 10) / 10));
   return e;
 }

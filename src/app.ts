@@ -25,6 +25,7 @@ import { trayIcon } from './tray';
 import * as SL from './slides';
 import * as V from './vector';
 import * as B from './boolean';
+import { BRUSHES, brushOutline, outlineD, shaped, eraseStroke, touches } from './brush';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -290,7 +291,12 @@ let rightTab = 'design', panelHold = false, fieldSync = [], outlineSig = '', out
 let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight', connColor = '';
 let taskScope = 'page', penMode = 'pen', penColor = '', penWidth = 0, editCell = null;
-const PEN_WIDTHS = { pen: [[2, 'Thin'], [4, 'Medium'], [8, 'Thick']], hl: [[12, 'Thin'], [18, 'Medium'], [28, 'Thick']] };
+const PEN_WIDTHS = { ...Object.fromEntries(Object.entries(BRUSHES).map(([k, v]) => [k, v.widths])), hl: [[12, 'Thin'], [18, 'Medium'], [28, 'Thick']] };
+/** The width each drawing tool starts with. */
+const PEN_DEFAULT = { pen: 2, brush: 10, pencil: 2.5, marker: 7, hl: 18 };
+const penW = () => penWidth || (penMode === 'hl' ? 18 : (BRUSHES[penMode] || BRUSHES.pen).width);
+/** Pen pressure when drawing with a stylus; nothing for a mouse or finger, so the brush simulates it. */
+const pressure = ev => ev.pointerType === 'pen' && ev.pressure > 0 ? [Math.round(ev.pressure * 100) / 100] : [];
 const HL_COLORS = ['#f5c518', '#7ee0a1', '#8fc7ff', '#ff9ec7', '#ffb27a'];
 let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = null;
 let cv, vp, ov, C = {};
@@ -608,13 +614,31 @@ function makeBox(type, x, y, w, ht) {
 
 /* ---------- Eraser ---------- */
 /** Remove any drawing under the pointer, checking a small ring around it so quick strokes still catch. */
+/**
+ * The eraser cuts through drawings where it passes, leaving the rest of each stroke. Alt (or a turned
+ * drawing) removes whole strokes instead.
+ */
 function eraseAt(ev) {
-  let hit = false;
-  for (const [dx, dy] of [[0, 0], [5, 0], [-5, 0], [0, 5], [0, -5]]) for (const node of document.elementsFromPoint(ev.clientX + dx, ev.clientY + dy)) {
-    const id = idAt(node), e = id && E(id);
-    if (e && e.type === 'pen' && !e.locked) { delete board.els[id]; sel.delete(id); hit = true; }
+  const p = pt(ev), r = 9 / cam.z; let hit = false;
+  for (const e of all()) {
+    if (e.type !== 'pen' || e.locked || !e.pts) continue;
+    const b = bbox(e), rr = r + (e.sw || 4) / 2;
+    if (p.x < b.x - rr || p.x > b.x + b.w + rr || p.y < b.y - rr || p.y > b.y + b.h + rr) continue;
+    let lx = p.x, ly = p.y;
+    if (e.rot) { const cx = e.x + e.w / 2, cy = e.y + e.h / 2, a = -e.rot * Math.PI / 180; lx = cx + (p.x - cx) * Math.cos(a) - (p.y - cy) * Math.sin(a); ly = cy + (p.x - cx) * Math.sin(a) + (p.y - cy) * Math.cos(a); }
+    lx -= e.x; ly -= e.y;
+    if (ev.altKey || e.rot) { if (touches(e.pts, lx, ly, rr)) { delete board.els[e.id]; sel.delete(e.id); hit = true; } continue; }
+    const runs = eraseStroke(e.pts, lx, ly, rr);
+    if (runs.reduce((a, run) => a + run.length, 0) === e.pts.length) continue;
+    hit = true; delete board.els[e.id]; sel.delete(e.id);
+    runs.forEach((run, i) => {
+      const xs = run.map(q => q[0]), ys = run.map(q => q[1]), mx = Math.min(...xs), my = Math.min(...ys);
+      const n = { ...e, id: i === 0 ? e.id : uid('e'), x: Math.round((e.x + mx) * 10) / 10, y: Math.round((e.y + my) * 10) / 10, w: Math.round(Math.max(...xs) - mx), h: Math.round(Math.max(...ys) - my), pts: run.map(q => [Math.round((q[0] - mx) * 10) / 10, Math.round((q[1] - my) * 10) / 10, ...q.slice(2)]) };
+      board.els[n.id] = n;
+    });
   }
   if (hit) draw();
+  drawOverlay(s('circle', { cx: p.x, cy: p.y, r, fill: C.accent, 'fill-opacity': 0.08, stroke: C.accent, 'stroke-width': 1 / cam.z, 'pointer-events': 'none' }));
 }
 
 /* ---------- Connecting ---------- */
@@ -729,7 +753,7 @@ function onDown(ev) {
     if (!ev.shiftKey) sel.clear(); mode = { k: 'marquee', p, keep: new Set(sel) }; refresh(); return;
   }
   if (tool === 'pen' && penMode === 'erase') { mode = { k: 'erase' }; eraseAt(ev); return; }
-  if (tool === 'pen') { mode = { k: 'pen', pts: [[p.x, p.y]] }; return; }
+  if (tool === 'pen') { mode = { k: 'pen', pts: [[p.x, p.y, ...pressure(ev)]] }; return; }
   if (tool === 'conn') { const a = targetAt(p); mode = { k: 'conn', a, as: sideAt(a, p), p, sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
   mode = { k: 'create', p };
 }
@@ -751,6 +775,7 @@ function edgeScroll(ev) {
 }
 function onMove(ev) {
   if (!mode && vdraft && tool === 'vpen') { vdraft.hover = pt(ev); drawDraft(); return; }
+  if (!mode && tool === 'pen' && penMode === 'erase' && board) { const p = pt(ev); drawOverlay(s('circle', { cx: p.x, cy: p.y, r: 9 / cam.z, fill: 'none', stroke: C.muted, 'stroke-width': 1 / cam.z, 'pointer-events': 'none' })); return; }
   if (!mode) { if (tool === 'conn' && board) { const p = pt(ev), t = targetAt(p); drawOverlay(t ? s('g', null, targetMarks(t, sideAt(t, p))) : null); } return; }
   edgeScroll(ev);
   const p = pt(ev), k = 1 / cam.z;
@@ -805,8 +830,9 @@ function onMove(ev) {
     sel = new Set(mode.keep); for (const e of all()) { const b = bbox(e); if (b.x < x + w && b.x + b.w > x && b.y < y + ht && b.y + b.h > y) sel.add(e.id); }
     drawOverlay(s('rect', { x, y, width: w, height: ht, fill: C.accent, 'fill-opacity': 0.08, stroke: C.accent, 'stroke-width': k, 'pointer-events': 'none' }));
   } else if (mode.k === 'pen') {
-    const l = mode.pts[mode.pts.length - 1]; if (Math.hypot(p.x - l[0], p.y - l[1]) * cam.z > 2) mode.pts.push([p.x, p.y]);
-    const hl = penMode === 'hl', sw = penWidth || (hl ? 18 : 2.5);
+    const l = mode.pts[mode.pts.length - 1]; if (Math.hypot(p.x - l[0], p.y - l[1]) * cam.z > 2) mode.pts.push([p.x, p.y, ...pressure(ev)]);
+    const hl = penMode === 'hl', sw = penW();
+    if (shaped(penMode)) { drawOverlay(s('path', { d: outlineD(brushOutline(mode.pts, sw, penMode, false)), fill: penColor || C.ink, opacity: penMode === 'pencil' ? 0.9 : null, 'pointer-events': 'none' })); return; }
     drawOverlay(s('path', { d: 'M' + mode.pts.map(q => q[0] + ' ' + q[1]).join('L'), fill: 'none', stroke: penColor || (hl ? HL_COLORS[0] : C.ink), 'stroke-opacity': hl ? 0.4 : null, 'stroke-width': sw, 'stroke-linecap': hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' }));
   } else if (mode.k === 'colsz') {
     const e = mode.e, r = (e.rot || 0) * Math.PI / 180, along = (p.x - mode.p.x) * Math.cos(r) + (p.y - mode.p.y) * Math.sin(r);
@@ -832,8 +858,8 @@ function onUp(ev) {
   else if (m.k === 'pen') {
     if (m.pts.length > 1) {
       const x = Math.min(...m.pts.map(q => q[0])), y = Math.min(...m.pts.map(q => q[1]));
-      const e = { id: uid('e'), type: 'pen', z: topZ() + 1, x: Math.round(x), y: Math.round(y), w: Math.round(Math.max(...m.pts.map(q => q[0])) - x), h: Math.round(Math.max(...m.pts.map(q => q[1])) - y), pts: m.pts.map(q => [Math.round((q[0] - x) * 10) / 10, Math.round((q[1] - y) * 10) / 10]) };
-      if (penMode === 'hl') { e.hl = true; e.stroke = penColor || HL_COLORS[0]; if (penWidth) e.sw = penWidth; } else { if (penColor) e.stroke = penColor; if (penWidth) e.sw = penWidth; }
+      const e = { id: uid('e'), type: 'pen', z: topZ() + 1, x: Math.round(x), y: Math.round(y), w: Math.round(Math.max(...m.pts.map(q => q[0])) - x), h: Math.round(Math.max(...m.pts.map(q => q[1])) - y), pts: m.pts.map(q => [Math.round((q[0] - x) * 10) / 10, Math.round((q[1] - y) * 10) / 10, ...q.slice(2)]) };
+      if (penMode === 'hl') { e.hl = true; e.stroke = penColor || HL_COLORS[0]; if (penWidth) e.sw = penWidth; } else { if (penColor) e.stroke = penColor; if (penWidth) e.sw = penWidth; if (penMode !== 'pen') e.brush = penMode; }
       board.els[e.id] = e;
     }
     commit();
@@ -1140,7 +1166,7 @@ function renderProps() {
       const hl = drawn.every(e => e.hl), cols = hl ? HL_COLORS : ['', ...VIVID];
       out.push(sec(hl ? 'Highlighter' : 'Stroke', h('div', { class: 'swatches' }, cols.map(c => swatch(c || C.ink, c ? same(drawn, 'stroke') === c : drawn.every(e => !e.stroke), () => setAll(drawn, 'stroke', c), c ? null : 'Default'))),
         h('div', { class: 'grid2' },
-          pick('pen-width', 'Width', PEN_WIDTHS[hl ? 'hl' : 'pen'], same(drawn, 'sw') || (hl ? 18 : 2), v => setAll(drawn, 'sw', Number(v), true)),
+          pick('pen-width', 'Width', PEN_WIDTHS[hl ? 'hl' : same(drawn, 'brush') || 'pen'], same(drawn, 'sw') || PEN_DEFAULT[hl ? 'hl' : same(drawn, 'brush') || 'pen'], v => setAll(drawn, 'sw', Number(v), true)),
           hl ? null : pick('pen-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(drawn, 'dash') || 'solid', v => setAll(drawn, 'dash', v === 'solid' ? '' : v, true)))));
     }
     const vecs = of(['path']);
@@ -1228,16 +1254,16 @@ function renderProps() {
 function renderFly() {
   const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp' && tool !== 'conn' && tool !== 'pen'; if (el.hidden) return;
   if (tool === 'pen') {
-    const modes = [['pen', 'Pen', ICON.pen], ['hl', 'Highlighter', 'M5 15l7-7 3 3-7 7H5zM12 8l2-2 3 3-2 2M4 18h12'], ['erase', 'Eraser', 'M8 16l-4-4 7-7 6 6-5 5zM8 16h9M7.5 9.5l5 5']];
+    const modes = [['pen', 'Pen', ICON.pen], ['brush', 'Brush', 'M15 3l2 2-6.2 6.2-2-2zM8.3 9.7l2 2c0 3-2.6 4.8-5.8 4.8 1-1 1.1-2.3 1.1-3.4 0-1.9 1.2-3.4 2.7-3.4z'], ['pencil', 'Pencil', 'M4 16l1-4 8.5-8.5 3 3L8 15zM12 5l3 3M5 12l3 3'], ['marker', 'Marker', 'M7.5 12.5l5.5-8.5 3 2-5.5 8.5zM7.5 12.5L6 16.5l3.5-1.5M4 18h12'], ['hl', 'Highlighter', 'M5 15l7-7 3 3-7 7H5zM12 8l2-2 3 3-2 2M4 18h12'], ['erase', 'Eraser', 'M8 16l-4-4 7-7 6 6-5 5zM8 16h9M7.5 9.5l5 5']];
     const colors = penMode === 'hl' ? HL_COLORS.map(c => [c, c, 'Color ' + c]) : [['', C.ink, 'Default'], ...VIVID.map(c => [c, c, 'Color ' + c])];
     el.replaceChildren(...[
       h('div', { class: 'fly-h' }, 'Drawing'),
       h('div', { class: 'seg wide three', role: 'group', 'aria-label': 'Drawing tool' }, modes.map(([k, label, d]) => h('button', { 'aria-pressed': String(penMode === k), title: label, 'aria-label': label, onclick: () => { penMode = k; penWidth = 0; if (k === 'hl' && !HL_COLORS.includes(penColor)) penColor = ''; if (k === 'pen' && HL_COLORS.includes(penColor)) penColor = ''; refresh(); } }, icon(d, 18), h('span', null, label)))),
-      penMode === 'erase' ? h('p', { class: 'fly-n' }, 'Drag across drawings to erase them. Notes and shapes are not affected.') : [
+      penMode === 'erase' ? h('p', { class: 'fly-n' }, 'Drag across drawings to erase. It cuts through strokes and keeps the rest; hold Alt to remove whole strokes. Notes and shapes are not affected.') : [
         h('div', { class: 'fly-h' }, 'Color'),
         h('div', { class: 'fly-c' }, colors.map(([v, c, label]) => h('button', { class: 'sw', style: 'background:' + c + (penMode === 'hl' ? ';opacity:.7' : ''), title: label, 'aria-label': label, 'aria-pressed': String(penColor === v || (penMode === 'hl' && !penColor && v === HL_COLORS[0])), onclick: () => { penColor = v; renderFly(); } }))),
         h('div', { class: 'fly-h' }, 'Width'),
-        h('div', { class: 'seg', role: 'group', 'aria-label': 'Width' }, PEN_WIDTHS[penMode].map(([w, label]) => h('button', { 'aria-pressed': String(penWidth ? penWidth === w : w === (penMode === 'hl' ? 18 : 2)), onclick: () => { penWidth = w; renderFly(); } }, label)))]].flat());
+        h('div', { class: 'seg', role: 'group', 'aria-label': 'Width' }, PEN_WIDTHS[penMode].map(([w, label]) => h('button', { 'aria-pressed': String(penWidth ? penWidth === w : w === PEN_DEFAULT[penMode]), onclick: () => { penWidth = w; renderFly(); } }, label)))]].flat());
     return;
   }
   if (tool === 'conn') {
@@ -1511,10 +1537,15 @@ function outlineStroke() {
   const made = [];
   for (const e of list) {
     const width = e.type === 'pen' ? e.sw || 2.5 : e.sw ?? 2, color = e.stroke && e.stroke !== 'none' ? e.stroke : '#1d2530';
-    let subs; try { subs = B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75)); } catch (err) { continue; }
+    let subs;
+    try {
+      if (e.type === 'pen' && shaped(e.brush)) { const sp = B.refitRing(brushOutline(e.pts, e.sw || BRUSHES[e.brush].width, e.brush).map(q => [e.x + q[0], e.y + q[1]])); subs = sp ? [sp] : []; }
+      else subs = B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75));
+    } catch (err) { continue; }
     if (!subs.length) continue;
     const o = { id: uid('e'), type: 'path', z: e.z, x: 0, y: 0, w: 0, h: 0, rule: 'evenodd', fill: color, stroke: 'none' };
     V.setWorldPaths(o, subs);
+    if (e.type === 'pen' && shaped(e.brush) && e.rot) o.rot = e.rot;
     if (e.type === 'path' && e.fill && e.fill !== 'none') { e.stroke = 'none'; o.z = topZ() + 1; const g = e.g || uid('g'); e.g = o.g = g; board.els[o.id] = o; made.push(e.id, o.id); }
     else { o.id = e.id; if (e.g) o.g = e.g; board.els[e.id] = o; made.push(o.id); }
   }

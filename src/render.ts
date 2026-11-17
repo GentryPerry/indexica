@@ -7,6 +7,7 @@ import { cellBox, colFractions, rowsOf } from './table';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
 import { pathD, scaleOf } from './vector';
+import { BRUSHES, brushOutline, outlineD, shaped } from './brush';
 
 /** What the renderer needs to know about where it is drawing. */
 export interface RenderCtx {
@@ -157,8 +158,11 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     }
     if (!hide) { const t = textBlock([e.text || 'Frame'], lx, y - 9 * k, ls, autoInkOr(e.color, c.muted)); t.removeAttribute('pointer-events'); g.append(t); }
   } else if (e.type === 'pen') {
-    const d = smoothPath(e.pts || [], x, y), sw = e.sw || (e.hl ? 16 : 2.5);
-    g.append(s('path', { d, fill: 'none', stroke: e.hl ? (e.stroke || '#f5c518') : c.theme === 'dark' ? autoInkOr(e.stroke, c.ink) : e.stroke || c.ink, 'stroke-width': sw, 'stroke-opacity': e.hl ? 0.4 : null, 'stroke-linecap': e.hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': e.hl ? null : dashOf(e, sw) }));
+    const brush = e.brush || 'pen', d = smoothPath(e.pts || [], x, y), sw = e.sw || (e.hl ? 16 : (BRUSHES[brush] || BRUSHES.pen).width);
+    const col = e.hl ? (e.stroke || '#f5c518') : c.theme === 'dark' ? autoInkOr(e.stroke, c.ink) : e.stroke || c.ink;
+    // Brush and pencil strokes are filled outlines shaped by pressure; the others are plain strokes.
+    if (!e.hl && shaped(brush)) g.append(s('path', { d: outlineD(brushOutline(e.pts || [], sw, brush), x, y), fill: col, opacity: brush === 'pencil' ? 0.9 : null }));
+    else g.append(s('path', { d, fill: 'none', stroke: col, 'stroke-width': sw, 'stroke-opacity': e.hl ? 0.4 : null, 'stroke-linecap': e.hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': e.hl ? null : dashOf(e, sw) }));
     if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': Math.max(14, sw + 8) }));
   } else if (e.type === 'path') {
     const { sx, sy } = scaleOf(e), d = pathD(e.paths || [], x, y, sx, sy), sw = e.sw ?? 2;

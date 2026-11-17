@@ -30,6 +30,8 @@ export interface El {
   paths?: import('./vector').SubPath[];
   vw?: number;
   vh?: number;
+  /** On a drawing: the brush it was drawn with (pen when unset). */
+  brush?: 'pen' | 'brush' | 'pencil' | 'marker';
   /** Fill rule for paths with holes. */
   rule?: 'nonzero' | 'evenodd';
   pts?: number[][];
