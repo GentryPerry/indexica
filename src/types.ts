@@ -39,6 +39,11 @@ export interface El {
   masking?: boolean;
   /** On a drawing: the brush it was drawn with (pen when unset). */
   brush?: 'pen' | 'brush' | 'pencil' | 'marker';
+  /** Sticky notes: the text size picked to fit the note (when no size is set), who made it (an
+   *  opaque user id), and whether their name is hidden. */
+  fit?: number;
+  author?: string;
+  noAuthor?: boolean;
   /** A live boolean result: recomputed from its operands with this operation. */
   live?: 'union' | 'subtract' | 'intersect' | 'exclude';
   /** An operand of the live boolean result with this id: not drawn on its own. */

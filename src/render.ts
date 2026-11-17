@@ -2,7 +2,7 @@ import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
 import { measure, textStyle, wrapEl, type TextStyle } from './geometry';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
-import { STATUS, type El, type Head, type Lookup } from './types';
+import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
 import { cellBox, colFractions, rowsOf } from './table';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
@@ -13,6 +13,8 @@ import { outlineOf } from './boolean';
 
 /** What the renderer needs to know about where it is drawing. */
 export interface RenderCtx {
+  /** A sticky author's display name, or '' while unknown. */
+  nameOf?: (id: string) => string;
   /** True when drawing for export: fixed light colors, no shadows, no invisible hit areas. */
   exp: boolean;
   /** Which palette to paint with. Exports are always light. */
@@ -118,14 +120,30 @@ const autoInkOr = (color: string | undefined, fallback: string) => !color || INK
 
 /** Draw one element as an SVG group tagged with its id. */
 export function renderEl(e: El, c: RenderCtx): SVGElement {
-  // Operands of a live boolean are not drawn: the result shows what they make together.
-  if (e.boolIn) return s('g', { 'data-op': e.id });
+  // Operands of a live boolean are not drawn: the result shows what they make together. Text on them
+  // stays, drawn over the result, so a note or labeled shape keeps its words inside a boolean.
+  if (e.boolIn) {
+    const g0 = s('g', { 'data-op': e.id });
+    if (e.text && e.text.trim() && ['sticky', 'rect', 'ellipse', 'diamond', 'card'].includes(e.type)) {
+      const full = renderEl({ ...e, boolIn: undefined, mask: undefined }, c);
+      for (const t of [...full.querySelectorAll('text')]) g0.append(t);
+      const turn = full.getAttribute('transform'); if (turn) g0.setAttribute('transform', turn);
+    }
+    return g0;
+  }
   const g = s('g', { 'data-id': e.id }), hide = c.hideId === e.id, shadow = c.exp ? null : 'url(#sh)';
   const { x, y, w, h } = e, st = textStyle(e), lh = st.size * 1.3;
   if (e.type === 'sticky') {
     const fill = paintFill(e.fill, c.theme);
     g.append(s('rect', { x, y, width: w, height: h, rx: 3, fill, filter: shadow }));
-    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 14, 'left'); g.append(textBlock(wrapEl(e, w - 28), tx, y + 14 + st.size, st, inkOn(fill, e.color, c.theme), anchor)); }
+    const ink = inkOn(fill, e.color, c.theme);
+    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 14, 'left'); g.append(textBlock(wrapEl(e, w - 28), tx, y + 14 + st.size, st, ink, anchor)); }
+    // The author's name sits small at the foot of the note, as in FigJam.
+    const who = e.author && !e.noAuthor && c.nameOf ? c.nameOf(e.author) : '';
+    if (who) {
+      const t = textBlock([who.length > 32 ? who.slice(0, 31) + '…' : who], x + 14, y + h - 12, { size: 11, weight: 500, family: FONTS.sans.stack, italic: false }, ink);
+      t.setAttribute('fill-opacity', '0.6'); g.append(t);
+    }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
     const fill = paintFill(e.fill, c.theme), line = outline(e, c);
     const a = e.sketch ? { fill, stroke: 'none' } : { fill, stroke: line, 'stroke-width': 1.5, 'stroke-dasharray': dashOf(e, 1.5) };

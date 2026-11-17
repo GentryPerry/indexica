@@ -30,6 +30,17 @@ export const Store = {
     return null;
   },
 
+  /** The viewer, when the page runs as a Claude artifact: an opaque id stored on sticky notes they make. */
+  user: null as null | { profiles(ids: string[]): Promise<Record<string, { name?: string }>> },
+  uid: '' as string,
+  /** Display names for user ids, looked up fresh (names are never stored). Missing names come back empty. */
+  async names(ids: string[]): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    if (!this.user || !ids.length) return out;
+    try { const ps = await this.user.profiles(ids); for (const id of ids) out[id] = (ps && ps[id] && ps[id].name) || ''; } catch { /* no names */ }
+    return out;
+  },
+
   async init() {
     let framed = false;
     try { framed = window.self !== window.top; } catch { framed = true; }
@@ -38,6 +49,7 @@ export const Store = {
     try {
       const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
       const id = user && await user.id();
+      if (user && id) { this.user = user; this.uid = id; }
       if (db && id) { this.base = db.collection('data/users/' + id); this.mode = 'cloud'; }
     } catch { /* stay local */ }
   },

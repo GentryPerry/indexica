@@ -306,7 +306,7 @@ let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = nu
 let cv, vp, ov, C = {};
 const E = id => board.els[id];
 const all = () => Object.values(board.els);
-const sorted = () => all().sort((a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - b.z : a.type === 'frame' ? -1 : 1);
+const sorted = () => all().sort((a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - b.z || (a.boolIn ? 1 : 0) - (b.boolIn ? 1 : 0) : a.type === 'frame' ? -1 : 1);
 const topZ = () => all().reduce((m, e) => Math.max(m, e.z), 0);
 const selEls = () => [...sel].map(E).filter(Boolean);
 const group = id => { const e = E(id); return e && e.g ? all().filter(x => x.g === e.g).map(x => x.id) : [id]; };
@@ -339,7 +339,15 @@ function underFn(els, theme) {
   if (!frames.length) return undefined;
   return e => { if (e.type !== 'text') return undefined; const cx = e.x + e.w / 2, cy = e.y + e.h / 2, f = frames.find(f => cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h); return f ? paintFill(f.fill, theme) : undefined; };
 }
-const rctx = (exp, els = board ? board.els : {}) => ({ exp, zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
+/** Display names for sticky authors, looked up once per id and redrawn when they arrive. */
+const names = new Map();
+function nameOf(id) {
+  if (names.has(id)) return names.get(id);
+  names.set(id, '');
+  Store.names([id]).then(r => { if (r[id]) { names.set(id, r[id]); if (board) draw(); } });
+  return '';
+}
+const rctx = (exp, els = board ? board.els : {}) => ({ exp, nameOf, zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
 async function loadImages(els = all()) {
@@ -520,6 +528,7 @@ function drawOverlay(extra) {
     if (!turning) out.push(sizeBadge(box, b.w, b.h, k));
   }
   if (extra) out.push(extra);
+  const hm = hoverMark(k); if (hm) out.unshift(hm);
   ov.replaceChildren(...out);
 }
 /** Ids that move together: the unlocked selection plus everything sitting inside a selected frame. */
@@ -581,7 +590,8 @@ function pasteAt(p) {
 }
 function nextSticky(id) {
   const o = E(id); if (!o || o.type !== 'sticky') return;
-  const e = { ...clone(o), id: uid('e'), z: topZ() + 1, x: o.x + o.w + 20, text: '' }; delete e.g; delete e.locked;
+  const e = { ...clone(o), id: uid('e'), z: topZ() + 1, x: o.x + o.w + 20, text: '' }; delete e.g; delete e.locked; delete e.boolIn; delete e.fit;
+  if (Store.uid) e.author = Store.uid; else delete e.author;
   // Keep stepping right until the new note is not sitting on top of another piece.
   const hits = () => all().some(x => x.type !== 'frame' && x.type !== 'conn' && x.x < e.x + e.w && x.x + x.w > e.x && x.y < e.y + e.h && x.y + x.h > e.y);
   for (let i = 0; i < 40 && hits(); i++) e.x += 20;
@@ -639,10 +649,12 @@ function fit(list) {
   const z = Math.min(1.25, Math.max(0.1, Math.min((r.width - 100) / Math.max(b.w, 1), (r.height - 120) / Math.max(b.h, 1))));
   cam = { z, x: r.width / 2 - (b.x + b.w / 2) * z, y: r.height / 2 - (b.y + b.h / 2) * z + 14 }; draw();
 }
+/** The color of the last sticky note colored by hand, used for the next new one (as FigJam does). */
+let lastSticky = null;
 function makeBox(type, x, y, w, ht) {
-  const d = { sticky: [180, 150], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320], sticker: [84, 84], tape: [220, 32], table: [360, 120] }[type];
+  const d = { sticky: [G.STICKY_SIDE, G.STICKY_SIDE], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320], sticker: [84, 84], tape: [220, 32], table: [360, 120] }[type];
   const drawn = w > 8 && ht > 8, e = { id: uid('e'), type, z: topZ() + 1, x: Math.round(drawn ? x : x - d[0] / 2), y: Math.round(drawn ? y : y - d[1] / 2), w: Math.round(drawn && type !== 'card' ? Math.max(w, 30) : d[0]), h: Math.round(drawn && type !== 'card' && type !== 'text' ? Math.max(ht, 30) : d[1]), text: '' };
-  if (type === 'sticky') e.fill = FILLS[0];
+  if (type === 'sticky') { e.fill = lastSticky || FILLS[0]; if (Store.uid) e.author = Store.uid; }
   if (['rect', 'ellipse', 'diamond'].includes(type)) e.fill = '#ffffff';
   if (type === 'card') Object.assign(e, { text: 'New task', status: 'todo', due: '', notes: '' });
   if (type === 'frame') e.text = 'Frame';
@@ -761,7 +773,7 @@ function onDown(ev) {
   closeMenu(); if (ev.button === 2) return;
   const act = document.activeElement; if (act && act !== document.body && act.blur) act.blur();
   if (editing) endEdit();
-  const p = pt(ev), now = Date.now(); let id = idAt(ev.target);
+  const p = pt(ev), now = Date.now(); let id = idAt(ev.target); hoverId = null;
   const dbl = now - lastDown.t < 350 && Math.hypot(ev.clientX - lastDown.x, ev.clientY - lastDown.y) < 6; lastDown = { t: dbl ? 0 : now, x: ev.clientX, y: ev.clientY };
   cv.setPointerCapture(ev.pointerId);
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
@@ -788,6 +800,7 @@ function onDown(ev) {
     const inner = selectedOperandAt(p);
     if (dbl && (inner || (id && E(id).live))) {
       if (inner && inner.type === 'path' && !inner.live) { enterVedit(inner.id); return; }
+      if (inner && !inner.live && TEXTY.includes(inner.type)) { startEdit(inner.id); return; }
       const level = inner ? (inner.live ? inner : E(inner.boolIn)) : E(id);
       const hit = LB.operandAt(board.els, level.id, p.x, p.y);
       if (hit) { sel = new Set(withKids(hit.id)); refresh(); return; }
@@ -828,10 +841,32 @@ function edgeScroll(ev) {
   };
   edgeRaf = requestAnimationFrame(step);
 }
+/**
+ * Hover outlines, as in Figma: the piece under the pointer gets a thin outline, and inside a selected
+ * boolean the shape a double-click would pick is outlined.
+ */
+let hoverId = null;
+function hoverAt(ev) {
+  let id = null;
+  if (board && tool === 'select' && !vedit && !editing) {
+    const p = pt(ev), roots = panelEls(), one = roots.length === 1 ? roots[0] : null;
+    const level = one && one.live ? one : one && one.boolIn && sel.size ? E(one.boolIn) : null;
+    if (level) { const o = LB.operandAt(board.els, level.id, p.x, p.y); if (o && !sel.has(o.id) || (o && o.live)) id = o.id; }
+    if (!id) { const d = idAt(ev.target); if (d && !sel.has(d)) id = d; }
+  }
+  if (id !== hoverId) { hoverId = id; drawOverlay(); }
+}
+function hoverMark(k) {
+  const e = hoverId && E(hoverId); if (!e || mode || (sel.has(e.id) && !e.boolIn)) return null;
+  const col = C.accent, w = 1.5 * k;
+  if (e.type === 'conn') return s('path', { d: connGeom(e, E).d, fill: 'none', stroke: col, 'stroke-width': w, 'pointer-events': 'none' });
+  if (B.BOOLEABLE.has(e.type) || e.type === 'pen') return s('path', { d: V.pathD(B.outlineOf(e)), fill: 'none', stroke: col, 'stroke-width': w, 'pointer-events': 'none' });
+  return s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': w, 'pointer-events': 'none', transform: e.rot ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null });
+}
 function onMove(ev) {
   if (!mode && vdraft && tool === 'vpen') { vdraft.hover = pt(ev); drawDraft(); return; }
   if (!mode && tool === 'pen' && penMode === 'erase' && board) { const p = pt(ev); drawOverlay(s('circle', { cx: p.x, cy: p.y, r: 9 / cam.z, fill: 'none', stroke: C.muted, 'stroke-width': 1 / cam.z, 'pointer-events': 'none' })); return; }
-  if (!mode) { if (tool === 'conn' && board) { const p = pt(ev), t = targetAt(p); drawOverlay(t ? s('g', null, targetMarks(t, sideAt(t, p))) : null); } return; }
+  if (!mode) { if (tool === 'conn' && board) { const p = pt(ev), t = targetAt(p); drawOverlay(t ? s('g', null, targetMarks(t, sideAt(t, p))) : null); } else hoverAt(ev); return; }
   edgeScroll(ev);
   const p = pt(ev), k = 1 / cam.z;
   if (mode.k === 'pan') { cam.x = mode.cx + ev.clientX - mode.sx; cam.y = mode.cy + ev.clientY - mode.sy; draw(); }
@@ -997,7 +1032,8 @@ async function openBoard(id) {
   const m = meta(id); if (!m) return;
   closeMenu(); $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
   const doc = migrateBoard(await Store.get('b_' + id), uid);
-  board = { id, pages: doc.pages, page: doc.pages[0].id, els: doc.pages[0].els }; hists.clear(); pagesSig = ''; hist = new History(); hist.reset(board.els); hists.set(board.page, hist); LB.trust(board.els, liveSeen); mids.clear(); sways.clear(); kanban = false; miniState = null; outlineSig = ''; outlineKey = '';
+  board = { id, pages: doc.pages, page: doc.pages[0].id, els: doc.pages[0].els }; hists.clear(); pagesSig = ''; for (const pg of board.pages) for (const x of Object.values(pg.els)) if (x.type === 'sticky' && !x.size && !x.fit) fitText(x);
+  hist = new History(); hist.reset(board.els); hists.set(board.page, hist); LB.trust(board.els, liveSeen); mids.clear(); sways.clear(); kanban = false; miniState = null; outlineSig = ''; outlineKey = '';
   sel = new Set(); tool = 'select'; editing = null; edFor = null; taskFilter = 'all'; rightTab = 'design';
   const proj = index.projects.find(p => p.id === m.projectId), [sc, st] = statParts(), label = Object.fromEntries(TOOLS);
   const tab = (k, text) => h('button', { role: 'tab', id: 'tab-' + k, 'aria-controls': 'p' + k, onclick: () => { rightTab = k; edFor = null; renderRight(); } }, text);
@@ -1019,7 +1055,9 @@ async function openBoard(id) {
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
       h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { for (const f of [...e.target.files]) await addImage(f); e.target.value = ''; } }),
-      h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
+      h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit,
+        oninput: ev => { const e = editing && E(editing); if (e && e.type === 'sticky') { e.text = ev.target.value; const h0 = e.h; fitText(e); placeEditor(); if (e.h !== h0) draw(); } },
+        onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
           if (e.key === 'Enter' && !e.shiftKey && editing && E(editing).type === 'table') { e.preventDefault(); e.target.blur(); return; }
           if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
     h('aside', { class: 'props', 'aria-label': 'Properties' },
@@ -1053,7 +1091,7 @@ async function openBoard(id) {
   cv.addEventListener('contextmenu', openMenu);
   cv.addEventListener('dragover', ev => ev.preventDefault());
   cv.addEventListener('drop', async ev => { ev.preventDefault(); const p = pt(ev); let i = 0; for (const f of [...ev.dataTransfer.files]) await addImage(f, { x: p.x + i * 24, y: p.y + i++ * 24 }); });
-  cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
+  cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerleave', () => { if (hoverId) { hoverId = null; drawOverlay(); } }); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; draw(); placeEditor(); } }, { passive: false });
   fit(); refresh(); loadImages();
 }
@@ -1222,7 +1260,19 @@ function renderProps() {
         num('prop-rot', 'Turn', 'Rotation in degrees', () => Math.round(e.rot || 0) + '°', v => { if (e.live) return liveEdit(e, 'turn', G.normAngle(Math.round(v))); const a = G.normAngle(Math.round(v)); if (a) e.rot = a; else delete e.rot; }, lock))));
     }
     const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']);
-    if (fillable.length) out.push(sec('Fill', h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => setAll(fillable, 'fill', c), FILL_NAMES[i])))));
+    if (fillable.length) out.push(sec('Fill', h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => { if (fillable.every(e => e.type === 'sticky')) lastSticky = c; setAll(fillable, 'fill', c); }, FILL_NAMES[i])))));
+    const notes = of(['sticky']);
+    if (notes.length && notes.length === free.length) {
+      const wide = notes.every(e => e.w > e.h * 1.5), square = notes.every(e => e.w <= e.h * 1.5), auto = notes.every(e => !e.size), authored = notes.some(e => e.author);
+      const shape = w2 => { notes.forEach(e => { e.w = w2 ? Math.round(e.h * 2) : e.h; fitText(e); }); commit(); };
+      out.push(sec('Sticky note',
+        h('div', { class: 'grid2' },
+          h('button', { class: 'fbtn', 'aria-pressed': String(square), title: 'Square note', onclick: () => shape(false) }, 'Square'),
+          h('button', { class: 'fbtn', 'aria-pressed': String(wide), title: 'Twice as wide', onclick: () => shape(true) }, 'Wide'),
+          h('button', { class: 'fbtn', 'aria-pressed': String(auto), title: 'Text gets smaller as you write more, so it always fits the note', onclick: () => { notes.forEach(e => { delete e.size; fitText(e); }); commit(); } }, 'Fit text'),
+          authored ? h('button', { class: 'fbtn', 'aria-pressed': String(notes.every(e => !e.noAuthor)), title: 'Show who wrote the note', onclick: () => { const on = notes.every(e => !e.noAuthor); notes.forEach(e => { if (on) e.noAuthor = true; else delete e.noAuthor; fitText(e); }); commit(); } }, 'Show author') : null),
+        h('p', { class: 'hint' }, 'Tab adds the next note beside this one.')));
+    }
     const bordered = of(['rect', 'ellipse', 'diamond']);
     if (bordered.length) out.push(sec('Border', h('div', { class: 'swatches' }, swatch('#2b3545', bordered.every(e => !e.stroke), () => setAll(bordered, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(bordered, 'stroke') === c, () => setAll(bordered, 'stroke', c)))),
       h('div', { class: 'grid2' },

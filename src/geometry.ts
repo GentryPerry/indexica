@@ -26,7 +26,7 @@ const DEFAULTS: Partial<Record<El['type'], [size: number, weight: number]>> = {
 /** The text style an element is drawn with: its own font choices on top of its type's defaults. */
 export function textStyle(e: El): TextStyle {
   const [size, weight] = DEFAULTS[e.type] || [15, 400];
-  return { size: e.size || size, weight: e.weight || weight, family: (FONTS[e.font || ''] || FONTS.sans).stack, italic: !!e.italic };
+  return { size: e.size || (e.type === 'sticky' && e.fit) || size, weight: e.weight || weight, family: (FONTS[e.font || ''] || FONTS.sans).stack, italic: !!e.italic };
 }
 
 /** Word-wrap text to a pixel width. Long words are split; blank lines are kept. */
@@ -152,9 +152,33 @@ export function bounds(list: El[], get: Lookup): Box | null {
 }
 
 /** Grow an element's height so its text is never clipped. */
+/** Sticky note text sizes, largest first: a short note reads big, and text shrinks as it grows (as in FigJam). */
+export const STICKY_SIZES = [24, 20, 17, 15, 13, 12, 11];
+/** Default sticky note sides: square, or twice as wide. */
+export const STICKY_SIDE = 200;
+/** Room kept at the foot of a sticky for its author's name. */
+export const stickyFoot = (e: El) => (e.author && !e.noAuthor ? 18 : 0);
+
+/**
+ * Sticky notes keep their size and pick the largest text size that fits; only when even the smallest
+ * does not fit does the note grow taller. A size chosen by hand turns this off and the note grows.
+ */
+export function fitSticky(e: El) {
+  const room = (h: number) => h - 28 - stickyFoot(e);
+  if (!e.size) {
+    for (const size of STICKY_SIZES) {
+      const lines = wrapEl({ ...e, size }, e.w - 28);
+      if (lines.length * size * 1.3 <= room(e.h)) { e.fit = size; return; }
+    }
+    e.fit = STICKY_SIZES[STICKY_SIZES.length - 1];
+  } else delete e.fit;
+  const lh = textStyle(e).size * 1.3;
+  e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 28).length * lh + 28 + stickyFoot(e)));
+}
+
 export function fitText(e: El) {
   const lh = textStyle(e).size * 1.3;
-  if (e.type === 'sticky') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 24));
+  if (e.type === 'sticky') fitSticky(e);
   else if (e.type === 'text') e.h = Math.ceil(wrapEl(e, e.w - 4).length * lh + 8);
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
   else if (e.type === 'table' && e.cells) {
