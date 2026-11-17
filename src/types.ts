@@ -22,7 +22,10 @@ export interface El {
   stroke?: string;
   status?: Status;
   due?: string;
+  /** Task notes, or presenter notes on a slide. */
   notes?: string;
+  /** On a frame: its position in the page's slide deck, starting at 1. Unset means not a slide. */
+  slide?: number;
   pts?: number[][];
   a?: string | null;
   b?: string | null;

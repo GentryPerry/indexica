@@ -29,6 +29,12 @@ export interface RenderCtx {
   editCell?: [number, number] | null;
   /** Data URL of a stored picture, once it has loaded. */
   image?: (id: string) => string | undefined;
+  /** The painted surface under a piece (its frame's background), so default text stays readable. */
+  under?: (e: El) => string | undefined;
+  /** Accent color, for slide numbers. */
+  accent?: string;
+  /** Screen zoom. Frame names keep a steady size on screen when zoomed out. */
+  zoom?: number;
 }
 
 /** Stored colors that mean "the ink color": they follow the theme instead of vanishing on a dark canvas. */
@@ -124,7 +130,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (!hide) { const ls = wrapEl(e, w - 24); const [tx, anchor] = lineStart(e, x, w, 12, 'center'); g.append(textBlock(ls, tx, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, inkOn(fill, e.color, c.theme), anchor)); }
   } else if (e.type === 'text') {
     g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
-    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(wrapEl(e, w - 4), tx, y + 4 + st.size * 0.95, st, inkOn(undefined, e.color, c.theme), anchor)); }
+    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(wrapEl(e, w - 4), tx, y + 4 + st.size * 0.95, st, inkOn(c.under?.(e), e.color, c.theme), anchor)); }
   } else if (e.type === 'card') {
     const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';
     const sf = SURFACE[c.theme], ch = chip(col, c.theme), done = status === 'done';
@@ -140,7 +146,15 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
   } else if (e.type === 'frame') {
     g.append(s('rect', { x, y, width: w, height: h, rx: 12, fill: paintFill(e.fill, c.theme) || c.frame, stroke: c.frameLine, 'stroke-width': 1, 'pointer-events': 'none' }));
     if (!c.exp) g.append(s('rect', { x, y, width: w, height: h, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
-    if (!hide) { const t = textBlock([e.text || 'Frame'], x + 2, y - 9, st, autoInkOr(e.color, c.muted)); t.removeAttribute('pointer-events'); g.append(t); }
+    // A slide shows its number in a small accent chip before its name.
+    const k = c.exp ? 1 : 1 / Math.min(1, Math.max(0.2, c.zoom || 1)), ls: TextStyle = { ...st, size: st.size * k };
+    let lx = x + 2 * k;
+    if (e.slide) {
+      const n = String(e.slide), cw = (measure(n, 11, 600) + 12) * k, chip: TextStyle = { size: 11 * k, weight: 600, family: st.family, italic: false };
+      g.append(s('rect', { x, y: y - 24 * k, width: cw, height: 18 * k, rx: 5 * k, fill: c.accent || '#2447d6' }), textBlock([n], x + cw / 2, y - 11 * k, chip, '#ffffff', 'middle'));
+      lx = x + cw + 6 * k;
+    }
+    if (!hide) { const t = textBlock([e.text || 'Frame'], lx, y - 9 * k, ls, autoInkOr(e.color, c.muted)); t.removeAttribute('pointer-events'); g.append(t); }
   } else if (e.type === 'pen') {
     const d = smoothPath(e.pts || [], x, y), sw = e.sw || (e.hl ? 16 : 2.5);
     g.append(s('path', { d, fill: 'none', stroke: e.hl ? (e.stroke || '#f5c518') : c.theme === 'dark' ? autoInkOr(e.stroke, c.ink) : e.stroke || c.ink, 'stroke-width': sw, 'stroke-opacity': e.hl ? 0.4 : null, 'stroke-linecap': e.hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': e.hl ? null : dashOf(e, sw) }));

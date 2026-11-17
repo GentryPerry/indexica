@@ -22,6 +22,7 @@ import { snapMove, snapPoint } from './snap';
 import * as L from './library';
 import { paintFill, outlineFor, inkOn, SURFACE, adjust } from './palette';
 import { trayIcon } from './tray';
+import * as SL from './slides';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -319,7 +320,13 @@ const sways = new Map(), mids = new Map(); let swayRaf = 0, swayT = 0;
 const calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 // Exports always use the light look, whatever the theme on screen.
 const LIGHT = { theme: 'light', ink: '#17202d', muted: '#5d697c', line: '#5b6679', canvas: '#eef0f3', frame: '#ffffff', frameLine: '#dce1e8' };
-const rctx = exp => ({ exp, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
+/** For text sitting on a frame with a background: that background as painted, so default text reads on it. */
+function underFn(els, theme) {
+  const frames = Object.values(els || {}).filter(f => f.type === 'frame' && f.fill).sort((a, b) => a.w * a.h - b.w * b.h);
+  if (!frames.length) return undefined;
+  return e => { if (e.type !== 'text') return undefined; const cx = e.x + e.w / 2, cy = e.y + e.h / 2, f = frames.find(f => cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h); return f ? paintFill(f.fill, theme) : undefined; };
+}
+const rctx = (exp, els = board ? board.els : {}) => ({ exp, zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
 async function loadImages(els = all()) {
@@ -648,18 +655,19 @@ function quickAdd(src, side) {
 function placeEditor() {
   const ed = $('#ed'), e = editing && E(editing); if (!e) return;
   const onCanvas = ['text', 'frame', 'conn'].includes(e.type), z = cam.z, st = G.textStyle(e), lab = e.type === 'conn' ? connGeom(e, E).label : null, centered = !!lab || ['rect', 'ellipse', 'diamond'].includes(e.type);
-  const cb = e.type === 'table' && editCell ? cellBox(e, editCell[0], editCell[1]) : null;
-  const box = cb ? [cb.x, cb.y, cb.w, cb.h] : lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 12, e.y + 4, e.w - 20, 44] : e.type === 'frame' ? [e.x - 2, e.y - 22, Math.max(e.w, 160), 20]
+  const cb = e.type === 'table' && editCell ? cellBox(e, editCell[0], editCell[1]) : null, fk = e.type === 'frame' ? 1 / Math.min(1, Math.max(0.2, cam.z)) : 1, chipW = e.slide ? (G.measure(String(e.slide), 11, 600) + 18) * fk : 0;
+  const box = cb ? [cb.x, cb.y, cb.w, cb.h] : lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 12, e.y + 4, e.w - 20, 44] : e.type === 'frame' ? [e.x - 2 + chipW, e.y - 22 * fk, Math.max(e.w - chipW, 160), 20 * fk]
     : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
-    fontSize: st.size * z + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
+    fontSize: st.size * z * fk + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
     padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px',
     textAlign: e.align || (centered ? 'center' : 'left'), ...editorPaint(e, onCanvas),
     transform: e.rot && !lab ? `rotate(${e.rot}deg)` : '', transformOrigin: lab ? '' : `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
 }
 /** Background and text color for the text editor, matching the piece as it is painted on screen. */
 function editorPaint(e, onCanvas) {
-  const bg = onCanvas ? C.frame : ['card', 'table'].includes(e.type) ? SURFACE[C.theme].card : paintFill(e.fill, C.theme) || C.frame;
+  const under = e.type === 'text' ? (underFn(board.els, C.theme) || (() => undefined))(e) : undefined;
+  const bg = under || (onCanvas ? C.frame : ['card', 'table'].includes(e.type) ? SURFACE[C.theme].card : paintFill(e.fill, C.theme) || C.frame);
   return { background: bg, color: inkOn(bg, e.color, C.theme) };
 }
 function startEdit(id, cell) {
@@ -815,15 +823,17 @@ function onUp(ev) {
   }
 }
 function onKey(ev) {
+  if (show) { showKey(ev); return; }
   if (menuKeys(ev)) return;
   if (ev.key === 'Escape' && $('#tpl')) { $('#tpl').remove(); return; }
   if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT');
-  if (typing || (tgt && tgt.tagName === 'BUTTON' && (ev.key === 'Enter' || ev.key === ' '))) return;
+  if (typing || (tgt && tgt.tagName === 'BUTTON' && (ev.key === 'Enter' || ev.key === ' ') && !(ev.ctrlKey || ev.metaKey))) return;
   const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let done = true;
   if (kanban && !mod && !['delete', 'backspace', 'escape', '?'].includes(k)) return;
   if (k === ' ') { spaceDown = true; cv.classList.add('pan'); }
   else if (mod && k === 'z') ev.shiftKey ? travel('redo') : travel('undo');
   else if (mod && k === 'y') travel('redo');
+  else if (mod && k === 'enter') { const f = selEls().find(e => e.slide); present(f ? SL.slidesOf(board.els).indexOf(f) : 0); }
   else if (mod && k === 'd') { copySel(); const c = clip; pasteEls(c, 24); }
   else if (mod && k === 'c') copySel();
   else if (mod && k === 'v') done = false; // handled by the paste event, so pictures and text can come in too
@@ -892,11 +902,13 @@ async function openBoard(id) {
           [miniOn ? 'Hide minimap' : 'Show minimap', () => { miniOn = !miniOn; draw(); }], '-',
           ...THEMES.map(([k, label]) => [(k === 'auto' ? 'Match system theme' : label + ' theme'), () => setTheme(k), themePref() === k ? 'cur' : ''])]) }, h('span', { id: 'zoomt' }, '100%'), icon('M6 8l4 4 4-4', 10, { 'stroke-width': 2 })),
         h('span', { class: 'grow' }),
-        h('button', { class: 'btn', id: 'kanban-toggle', 'aria-pressed': 'false', title: 'Show task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
-        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [{ head: 'Export' }, ['PNG image', () => exportAs('png'), '', MI.image], ['SVG vector', () => exportAs('svg'), '', MI.code], ['PDF, this page', () => exportPdf(false), '', MI.pdf], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true), '', MI.pdf] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
-      h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks')),
+        h('button', { class: 'icon-btn', id: 'present-btn', title: 'Present (Ctrl+Enter)', 'aria-label': 'Present', onclick: e => presentMenu(e.currentTarget) }, icon('M7 4.5l8.5 5.5L7 15.5z', 16)),
+        h('button', { class: 'icon-btn', id: 'kanban-toggle', 'aria-pressed': 'false', 'aria-label': 'Kanban', title: 'Kanban: task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, icon('M3.5 4h3.5v12H3.5zM8.25 4h3.5v8h-3.5zM13 4h3.5v10H13z', 16)),
+        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [{ head: 'Export' }, ['PNG image', () => exportAs('png'), '', MI.image], ['SVG vector', () => exportAs('svg'), '', MI.code], ['PDF, this page', () => exportPdf(false), '', MI.pdf], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true), '', MI.pdf] : null, deckOf('all').length ? ['PDF, slides', () => exportSlides(), '', MI.pdf] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
+      h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks'), tab('slides', 'Slides')),
       h('div', { class: 'p-body', id: 'pdesign', role: 'tabpanel' }),
-      h('div', { class: 'p-body', id: 'ptasks', role: 'tabpanel', hidden: true }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
+      h('div', { class: 'p-body', id: 'ptasks', role: 'tabpanel', hidden: true }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })),
+      h('div', { class: 'p-body', id: 'pslides', role: 'tabpanel', hidden: true }))));
   // Rebuild the properties once focus leaves them, so values typed into a field are not wiped mid-edit.
   $('#pdesign').addEventListener('focusout', () => setTimeout(() => { const p = $('#pdesign'); if (board && p && !p.contains(document.activeElement)) renderProps(); }, 0));
   cv = s('svg', { id: 'cv', role: 'application', 'aria-label': 'Board canvas' },
@@ -1015,10 +1027,12 @@ function renderOutline() {
 function renderRight() {
   const d = $('#pdesign'); if (!d) return;
   const n = all().filter(e => e.type === 'card').length;
-  for (const k of ['design', 'tasks']) $('#tab-' + k).setAttribute('aria-selected', String(rightTab === k));
+  for (const k of ['design', 'tasks', 'slides']) $('#tab-' + k).setAttribute('aria-selected', String(rightTab === k));
   $('#tab-tasks').replaceChildren(...['Tasks', n ? h('span', { class: 'num' }, String(n)) : null].filter(Boolean));
-  d.hidden = rightTab !== 'design'; $('#ptasks').hidden = rightTab !== 'tasks';
-  if (rightTab === 'design') renderProps(); else renderTasks();
+  const ns = SL.slidesOf(board.els).length;
+  $('#tab-slides').replaceChildren(...['Slides', ns ? h('span', { class: 'num' }, String(ns)) : null].filter(Boolean));
+  d.hidden = rightTab !== 'design'; $('#ptasks').hidden = rightTab !== 'tasks'; $('#pslides').hidden = rightTab !== 'slides';
+  if (rightTab === 'design') renderProps(); else if (rightTab === 'tasks') renderTasks(); else renderSlides();
 }
 /** Commit an edit made in a panel field without rebuilding the panel under the cursor. */
 function holdCommit() { panelHold = true; try { commit(); } finally { panelHold = false; } }
@@ -1113,6 +1127,7 @@ function renderProps() {
         h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.flow)), title: 'Show dots moving from start to end', onclick: () => setAll(conns, 'flow', !conns.every(e => e.flow)) }, 'Animate flow'),
         conns.some(e => e.style !== 'cable') ? h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.sketch)), title: 'Rough, hand-drawn line', onclick: () => setAll(conns, 'sketch', !conns.every(e => e.sketch)) }, 'Hand-drawn') : null,
         conns.some(e => e.as || e.bs) ? h('button', { class: 'fbtn', title: 'Let both ends pick the best side again', onclick: () => { conns.forEach(e => { delete e.as; delete e.bs; }); commit(); } }, 'Unpin ends') : null)));
+    if (one && one.type === 'frame') out.push(slideSection(one, sec, swatch));
     const texty = free.filter(e => TEXTY.includes(e.type));
     if (texty.length) {
       const st0 = G.textStyle(texty[0]), al = same(texty, 'align'), col = same(texty, 'color'), ital = texty.every(e => e.italic);
@@ -1241,6 +1256,8 @@ function openMenu(ev) {
   const list = selEls();
   popupAt(ev.clientX, ev.clientY, id ? [
     list.length === 1 && TEXTY.includes(list[0].type) ? ['Edit text', () => startEdit(list[0].id)] : null,
+    list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
+    list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
     ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
     ['Bring to front', () => arrange('front')], ['Send to back', () => arrange('back')],
     list.length > 1 ? ['Group', () => arrange('group')] : null, list.some(e => e.g) ? ['Ungroup', () => arrange('ungroup')] : null,
@@ -1255,6 +1272,7 @@ const KEYS = [
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
+  ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {
   const open = $('#help'); if (open) { open.remove(); return; }
@@ -1264,6 +1282,146 @@ function toggleHelp() {
       h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
       h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'))));
 }
+
+/* ---------- Slides and presenting ---------- */
+const LAYOUT_ICONS = { title: 'M3 5h14v10H3zM6 9h8M7.5 11.5h5', titleBody: 'M3 5h14v10H3zM5.5 8h7M5.5 10.5h9M5.5 12.5h6', twoCol: 'M3 5h14v10H3zM5.5 8h9M5.5 10.5h3.5M11 10.5h3.5M5.5 12.5h3.5M11 12.5h3.5', section: 'M3 5h14v10H3zM5.5 9.5h8M5.5 12h5', blank: 'M3 5h14v10H3z' };
+/** The slides to present: this page's, or every page's in page order. */
+function deckOf(scope) {
+  if (!board) return [];
+  const pages = scope === 'all' ? board.pages : board.pages.filter(p => p.id === board.page);
+  return pages.flatMap(p => SL.slidesOf(p.els).map(f => ({ page: p, els: p.els, f })));
+}
+/** A slide as an SVG: its background and everything overlapping it, clipped to the frame, in the light look. */
+function slideSvg(els, f, attrs = {}) {
+  const get = id => els[id], rc = { ...rctx(true, els), get };
+  return s('svg', { viewBox: `${f.x} ${f.y} ${f.w} ${f.h}`, preserveAspectRatio: 'xMidYMid meet', 'aria-hidden': 'true', ...attrs },
+    s('rect', { x: f.x, y: f.y, width: f.w, height: f.h, fill: f.fill || '#ffffff' }),
+    SL.slideMembers(els, f, get).sort(byLayer).map(e => renderEl(e, rc)));
+}
+function addSlide(layout) {
+  if (editing) endEdit();
+  const last = SL.slidesOf(board.els).at(-1), size = (last && SL.sizeOf(last)) || 'wide';
+  const made = SL.newSlide(board.els, E, layout, size, uid, topZ() + 1);
+  for (const e of made) board.els[e.id] = e;
+  sel = new Set([made[0].id]); commit(); fit([made[0]]);
+}
+function layoutMenu(anchor) {
+  popup(anchor, [{ head: 'New slide' }, ...Object.entries(SL.LAYOUTS).map(([k, v]) => [v.label, () => addSlide(k), '', LAYOUT_ICONS[k]])]);
+}
+function presentMenu(anchor) {
+  const here = deckOf('page').length, every = deckOf('all').length;
+  if (every > here && here) popup(anchor, [{ head: 'Present' }, ['This page', () => present(0, 'page'), '', MI.image], ['All pages', () => present(0, 'all'), '', MI.tpl]]);
+  else present(0, here ? 'page' : 'all');
+}
+let slideDrag = null;
+function renderSlides() {
+  const el = $('#pslides'); if (!el || rightTab !== 'slides') return;
+  const list = SL.slidesOf(board.els), frames = all().filter(e => e.type === 'frame' && !e.slide);
+  const head = h('div', { class: 'shead' },
+    h('div', { class: 'shead-t' }, h('strong', null, list.length === 1 ? '1 slide' : list.length + ' slides')),
+    h('button', { class: 'fbtn', 'aria-haspopup': 'menu', onclick: e => layoutMenu(e.currentTarget) }, icon('M10 4.5v11M4.5 10h11', 14), 'New slide'),
+    h('button', { class: 'btn primary sm', disabled: !deckOf('all').length, onclick: e => presentMenu(e.currentTarget) }, icon('M7 4.5l8.5 5.5L7 15.5z', 12, { fill: 'currentColor', stroke: 'none' }), 'Present'));
+  if (!list.length) {
+    el.replaceChildren(head, h('div', { class: 'sempty' },
+      h('div', { class: 'sempty-art', 'aria-hidden': 'true' }, h('span'), h('span'), h('span')),
+      h('p', null, 'Slides are frames on your board, so anything you sketch can become a deck. Add a slide from a layout, or select a frame and choose Use as slide.'),
+      frames.length ? h('button', { class: 'fbtn', onclick: () => { frames.sort((a, b) => a.y - b.y || a.x - b.x).forEach(f => SL.setSlide(board.els, f, true)); commit(); } }, `Use all ${frames.length} frames as slides`) : null));
+    return;
+  }
+  const dropAt = (ev, i) => { const r = ev.currentTarget.getBoundingClientRect(); return ev.clientY > r.top + r.height / 2 ? i + 1 : i; };
+  el.replaceChildren(head, h('div', { class: 'slist' }, list.map((f, i) => h('div', {
+      class: 'sitem' + (sel.has(f.id) ? ' on' : ''), draggable: 'true', tabindex: '0', 'aria-label': `Slide ${i + 1}, ${f.text || 'Untitled'}`,
+      ondragstart: ev => { slideDrag = f.id; ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', f.id); ev.currentTarget.classList.add('drag'); },
+      ondragend: ev => { slideDrag = null; ev.currentTarget.classList.remove('drag'); },
+      ondragover: ev => { if (!slideDrag) return; ev.preventDefault(); const after = dropAt(ev, i) > i; ev.currentTarget.classList.toggle('before', !after); ev.currentTarget.classList.toggle('after', after); },
+      ondragleave: ev => ev.currentTarget.classList.remove('before', 'after'),
+      ondrop: ev => { ev.preventDefault(); ev.currentTarget.classList.remove('before', 'after'); if (!slideDrag) return; const from = list.findIndex(x => x.id === slideDrag); let to = dropAt(ev, i); if (from < to) to--; if (from !== to) { SL.moveSlide(board.els, slideDrag, to); commit(); } slideDrag = null; },
+      onclick: () => { sel = new Set([f.id]); fit([f]); refresh(); },
+      ondblclick: () => present(i),
+      onkeydown: ev => { if (ev.key === 'Enter') present(i); else if ((ev.key === 'ArrowUp' || ev.key === 'ArrowDown') && ev.altKey) { ev.preventDefault(); SL.moveSlide(board.els, f.id, i + (ev.key === 'ArrowUp' ? -1 : 1)); commit(); } },
+      oncontextmenu: ev => { ev.preventDefault(); sel = new Set([f.id]); refresh(); popupAt(ev.clientX, ev.clientY, [['Present from here', () => present(i), '', 'M7 4.5l8.5 5.5L7 15.5z'], ['PNG of this slide', () => exportSlidePng(board.els, f, i + 1), '', MI.image], '-',
+        ['Move up', () => { SL.moveSlide(board.els, f.id, i - 1); commit(); }, '', MI.front], ['Move down', () => { SL.moveSlide(board.els, f.id, i + 1); commit(); }, '', MI.back], '-',
+        ['Remove from slides', () => { SL.setSlide(board.els, f, false); commit(); }, 'danger', MI.out]]); } },
+    h('span', { class: 'snum' }, String(i + 1)),
+    h('div', { class: 'sbody' }, h('div', { class: 'sthumb', style: `aspect-ratio:${f.w}/${f.h}` }, slideSvg(board.els, f)), h('div', { class: 'sname' }, f.text || 'Untitled', f.notes ? h('span', { class: 'snote', title: 'Has presenter notes' }, 'Notes') : null))))),
+    h('p', { class: 'hint shint' }, 'Drag to reorder, or Alt+Up and Alt+Down. Double-click to present from a slide.'));
+}
+/** The Slide section in a frame's properties. */
+function slideSection(f, sec, swatch) {
+  const on = !!f.slide, sz = SL.sizeOf(f), n = SL.slidesOf(board.els).length;
+  return sec('Slide',
+    h('div', { class: 'row' },
+      h('button', { class: 'fbtn', 'aria-pressed': String(on), onclick: () => { SL.setSlide(board.els, f, !on); commit(); } }, on ? 'In slides' : 'Use as slide'),
+      on ? h('span', { class: 'hint' }, `Slide ${f.slide} of ${n}`) : null),
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Slide size' }, Object.entries(SL.SLIDE_SIZES).map(([k, v]) =>
+      h('button', { 'aria-pressed': String(sz === k), title: v.label + ` (${v.w} by ${v.h})`, onclick: () => { f.w = v.w; f.h = v.h; commit(); } }, v.label.split(' ')[1]))),
+    h('div', { class: 'f-label' }, 'Background'),
+    h('div', { class: 'swatches' }, SL.SLIDE_BGS.map(([c, name]) => swatch(c, (f.fill || '') === c, () => { f.fill = c; commit(); }, name)),
+      h('button', { class: 'sw none', title: 'No background', 'aria-label': 'No background', 'aria-pressed': String(!f.fill), onclick: () => { delete f.fill; commit(); } })),
+    on ? [h('label', { class: 'f-label', for: 'slide-notes' }, 'Presenter notes'),
+      h('textarea', { class: 'inp', id: 'slide-notes', placeholder: 'What to say on this slide', value: f.notes || '', oninput: e => { f.notes = e.target.value; }, onchange: () => holdCommit() }),
+      h('button', { class: 'fbtn', onclick: () => present(SL.slidesOf(board.els).indexOf(f)) }, 'Present from this slide')] : null);
+}
+
+let show = null;
+async function present(i = 0, scope = 'page') {
+  if (editing) endEdit(); closeMenu();
+  let deck = deckOf(scope); if (!deck.length) { deck = deckOf('all'); i = 0; }
+  if (!deck.length) return toast('Add a slide first: open the Slides tab, or select a frame and choose Use as slide.');
+  await loadImages(board.pages.flatMap(p => Object.values(p.els)));
+  show = { deck, i: Math.max(0, Math.min(deck.length - 1, i)), presenter: false, t0: Date.now(), full: false, idle: 0 };
+  const root = h('div', { class: 'present', id: 'present', role: 'dialog', 'aria-label': 'Presentation', tabindex: '-1', onmousemove: wake });
+  document.body.append(root); root.focus();
+  const fs = document.documentElement.requestFullscreen;
+  if (fs) document.documentElement.requestFullscreen().then(() => { if (show) show.full = true; }).catch(() => {});
+  show.timer = setInterval(() => { const tm = $('#pz-time'); if (tm) tm.textContent = clock(); }, 1000);
+  renderShow(); wake();
+}
+const clock = () => { const s2 = Math.floor((Date.now() - show.t0) / 1000); return `${Math.floor(s2 / 60)}:${String(s2 % 60).padStart(2, '0')}`; };
+function wake() { const r = $('#present'); if (!r) return; r.classList.add('awake'); clearTimeout(show.idle); show.idle = setTimeout(() => r.classList.remove('awake'), 2200); }
+function goShow(d, abs) { if (!show) return; const n = abs != null ? abs : show.i + d; show.i = Math.max(0, Math.min(show.deck.length - 1, n)); renderShow(); }
+function endShow() {
+  if (!show) return; clearInterval(show.timer); clearTimeout(show.idle);
+  const cur = show.deck[show.i]; show = null; const r = $('#present'); if (r) r.remove();
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+  if (cur && cur.page.id === board.page) { sel = new Set([cur.f.id]); refresh(); }
+}
+function renderShow() {
+  const r = $('#present'); if (!r || !show) return;
+  const { deck, i, presenter } = show, cur = deck[i], next = deck[i + 1];
+  const btn = (label, d, fn, extra = {}) => h('button', { class: 'pz-btn', title: label, 'aria-label': label, onclick: e => { e.stopPropagation(); fn(); }, ...extra }, icon(d, 16));
+  r.classList.toggle('pv', presenter);
+  r.replaceChildren(
+    h('div', { class: 'pz-stage', onclick: () => goShow(1) }, slideSvg(cur.els, cur.f, { class: 'pz-slide' })),
+    presenter ? h('aside', { class: 'pz-side' },
+      h('div', { class: 'pz-top' }, h('span', { class: 'pz-lab' }, 'Elapsed'), h('span', { class: 'pz-time', id: 'pz-time' }, clock())),
+      h('div', { class: 'pz-lab' }, next ? 'Next' : 'Last slide'),
+      next ? h('div', { class: 'pz-next', style: `aspect-ratio:${next.f.w}/${next.f.h}` }, slideSvg(next.els, next.f)) : h('div', { class: 'pz-end' }, 'End of presentation'),
+      h('div', { class: 'pz-lab' }, 'Notes'),
+      h('div', { class: 'pz-notes' + (cur.f.notes ? '' : ' none') }, cur.f.notes || 'No notes for this slide.')) : null,
+    h('div', { class: 'pz-bar', onclick: e => e.stopPropagation() },
+      btn('Previous slide', 'M12.5 4.5L7 10l5.5 5.5', () => goShow(-1), { disabled: i === 0 }),
+      h('span', { class: 'pz-count' }, `${i + 1} / ${deck.length}`),
+      btn('Next slide', 'M7.5 4.5L13 10l-5.5 5.5', () => goShow(1), { disabled: i === deck.length - 1 }),
+      h('span', { class: 'pz-sep' }),
+      h('button', { class: 'pz-btn wide' + (presenter ? ' on' : ''), title: 'Presenter view (P)', onclick: e => { e.stopPropagation(); show.presenter = !show.presenter; renderShow(); } }, 'Presenter view'),
+      btn('Full screen (F)', 'M4 8V4h4M12 4h4v4M16 12v4h-4M8 16H4v-4', toggleFull),
+      btn('Stop presenting (Esc)', 'M5 5l10 10M15 5L5 15', endShow)));
+}
+function toggleFull() { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().then(() => { if (show) show.full = true; }).catch(() => toast('Full screen is not available here.')); }
+function showKey(ev) {
+  const k = ev.key; let used = true;
+  if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter', 'n', 'N'].includes(k)) goShow(1);
+  else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(k)) goShow(-1);
+  else if (k === 'Home') goShow(0, 0); else if (k === 'End') goShow(0, show.deck.length - 1);
+  else if (k === 'Escape') endShow();
+  else if (k === 'p' || k === 'P') { show.presenter = !show.presenter; renderShow(); }
+  else if (k === 'f' || k === 'F') toggleFull();
+  else used = false;
+  if (used) { ev.preventDefault(); wake(); }
+}
+// Leaving full screen with the browser's own Esc also ends the presentation.
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && show && show.full) endShow(); });
 
 /* ---------- Export ---------- */
 async function saveFile(name, data, mime) {
@@ -1275,7 +1433,7 @@ const byLayer = (a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - 
 /** One page (or a selection on it) as a standalone light-theme SVG string. */
 function pageSvg(els, list) {
   const get = id => els[id], b = G.bounds(list, get); if (!b) return null;
-  const pad = 36, w = Math.ceil(b.w + pad * 2), ht = Math.ceil(b.h + pad * 2), x = Math.floor(b.x - pad), y = Math.floor(b.y - pad), rc = { ...rctx(true), get };
+  const pad = 36, w = Math.ceil(b.w + pad * 2), ht = Math.ceil(b.h + pad * 2), x = Math.floor(b.x - pad), y = Math.floor(b.y - pad), rc = { ...rctx(true, els), get };
   const svg = s('svg', { viewBox: `${x} ${y} ${w} ${ht}`, width: w, height: ht }, s('rect', { x, y, width: w, height: ht, fill: '#ffffff' }), [...list].sort(byLayer).map(e => renderEl(e, rc)));
   return { str: new XMLSerializer().serializeToString(svg), w, ht, x, y, svg };
 }
@@ -1321,6 +1479,33 @@ async function exportAs(kind) {
   if (kind === 'svg') return saveFile(fileName() + '.svg', sv.str, 'image/svg+xml');
   try { const c = await rasterize(sv, 8000); c.toBlob(blob => blob ? saveFile(fileName() + '.png', blob, 'image/png') : toast('Export failed. Try SVG instead.'), 'image/png'); }
   catch (e) { toast('Export failed. Try SVG instead.'); }
+}
+/** A slide as a standalone SVG string, sized to its frame. */
+function slidePack(els, f) {
+  const svg = slideSvg(els, f, { width: f.w, height: f.h, xmlns: 'http://www.w3.org/2000/svg' });
+  return { str: new XMLSerializer().serializeToString(svg), w: f.w, ht: f.h, x: f.x, y: f.y, svg };
+}
+async function exportSlidePng(els, f, n) {
+  await loadImages(Object.values(els));
+  try { const c = await rasterize(slidePack(els, f), 3840); c.toBlob(blob => blob ? saveFile(`${fileName()} slide ${n}.png`, blob, 'image/png') : toast('Export failed.'), 'image/png'); }
+  catch (e) { toast('Export failed.'); }
+}
+/** Turns standalone SVGs into PDF pages: a picture of each with its text placed invisibly on top. */
+async function pdfPages(svs) {
+  const out = [];
+  for (const sv of svs) {
+    const c = await rasterize(sv, 4000), blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92)); if (!blob) throw new Error('encode');
+    const k = Math.min(0.75, 14000 / Math.max(sv.w, sv.ht));
+    out.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), px: c.width, py: c.height, w: sv.w * k, h: sv.ht * k, texts: textLayer(sv, k) });
+  }
+  return out;
+}
+/** A PDF of every slide on every page, one slide per page. */
+async function exportSlides() {
+  const deck = deckOf('all'); if (!deck.length) return toast('No slides yet.');
+  await loadImages(board.pages.flatMap(p => Object.values(p.els)));
+  let out; try { out = await pdfPages(deck.map(d => slidePack(d.els, d.f))); } catch (e) { return toast('The PDF could not be made. Try PNG instead.'); }
+  saveFile(fileName() + ' slides.pdf', new Blob([buildPdf(out)], { type: 'application/pdf' }), 'application/pdf');
 }
 /** A PDF with one page per board page (or just this page, or the selection on it). */
 async function exportPdf(allPages) {
