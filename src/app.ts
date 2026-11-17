@@ -2,7 +2,7 @@
 // UI layer, ported as-is from the single-file prototype. It is not type-checked yet:
 // it will be split into typed modules when the canvas renderer is rebuilt.
 import { $, h, s, uid, clone, today, toast } from './dom';
-import { STATUS, FILLS, VIVID, FONTS, WEIGHTS, SIZES, TEXTY, BOXY } from './types';
+import { STATUS, FILLS, VIVID, FONTS, WEIGHTS, SIZES, TEXT_COLORS, TEXTY, BOXY } from './types';
 import { fitText } from './geometry';
 import { connGeom } from './connectors';
 import { kick, step, still, atRest } from './cable';
@@ -108,7 +108,7 @@ function boardCard(b) {
       h('div', { class: 'name' }, name),
       h('div', { class: 'meta' }, (p ? p.name : 'No project') + ' · edited ' + new Date(b.updated).toLocaleDateString()),
       h('div', { class: 'acts' }, b.trashed
-        ? [act('Restore', () => { b.trashed = false; }), act('Delete forever', () => { index.boards = index.boards.filter(x => x !== b); Store.del('b_' + b.id); }, 'danger')]
+        ? [act('Restore', () => { b.trashed = false; }), act('Delete forever', () => { index.boards = index.boards.filter(x => x !== b); Store.del('b_' + b.id); (b.imgs || []).filter(i => !index.boards.some(x => (x.imgs || []).includes(i))).forEach(i => Store.del('img_' + i)); }, 'danger')]
         : [act(b.fav ? 'Favorited' : 'Favorite', () => { b.fav = !b.fav; }, b.fav ? 'fav-on' : ''),
            h('button', { onclick: () => { home.rename = b.id; renderHome(); const i = $('#rename-' + b.id); i.focus(); i.select(); } }, 'Rename'),
            h('button', { onclick: () => dupBoard(b) }, 'Duplicate'),
@@ -153,7 +153,7 @@ function queueSave() { clearTimeout(saveT); saveT = setTimeout(saveNow, 600); }
 function saveNow() {
   clearTimeout(saveT); if (!board) return;
   Store.put('b_' + board.id, { els: board.els });
-  const m = meta(board.id); if (m) { m.updated = Date.now(); m.thumb = thumbOf(board.els); saveIndex(); }
+  const m = meta(board.id); if (m) { m.updated = Date.now(); m.thumb = thumbOf(board.els); m.imgs = [...new Set(all().filter(e => e.type === 'image' && e.src).map(e => e.src))]; saveIndex(); }
 }
 
 /* ---------- Text and geometry helpers ---------- */
@@ -163,7 +163,45 @@ const ends = c => G.ends(c, E), bbox = e => G.bbox(e, E), bounds = list => G.bou
 // Cables swing when their ends move. `mids` remembers where each cable was; `sways` holds the ones still moving.
 const sways = new Map(), mids = new Map(); let swayRaf = 0, swayT = 0;
 const calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-const rctx = exp => ({ exp, ink: C.ink, muted: C.muted, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine, hideId: exp ? null : editing, get: E, sway: exp ? undefined : id => sways.get(id) });
+const rctx = exp => ({ exp, ink: C.ink, muted: C.muted, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine, hideId: exp ? null : editing, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
+// Pictures are stored one per storage document and cached here by id as data URLs.
+const images = new Map();
+async function loadImages() {
+  const ids = [...new Set(all().filter(e => e.type === 'image' && e.src && !images.has(e.src)).map(e => e.src))], bid = board.id; if (!ids.length) return;
+  await Promise.all(ids.map(async id => { const d = await Store.get('img_' + id); if (d && d.url) images.set(id, d.url); }));
+  if (board && board.id === bid) draw();
+}
+function encodeImage(bmp, scale, alpha) {
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bmp.width * scale)); c.height = Math.max(1, Math.round(bmp.height * scale));
+  const x = c.getContext('2d');
+  if (alpha) { x.drawImage(bmp, 0, 0, c.width, c.height); const u = c.toDataURL('image/webp', 0.85); if (u.startsWith('data:image/webp')) return u; }
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(bmp, 0, 0, c.width, c.height); return c.toDataURL('image/jpeg', 0.84);
+}
+async function addImage(file, at) {
+  if (!board || !file || !file.type.startsWith('image/')) return;
+  let bmp; try { bmp = await createImageBitmap(file); } catch (e) { return toast('That picture could not be read.'); }
+  // Shrink until the picture fits in one storage document.
+  let scale = Math.min(1, 1400 / Math.max(bmp.width, bmp.height)), url = '';
+  for (let i = 0; i < 9; i++) { url = encodeImage(bmp, scale, file.type !== 'image/jpeg'); if (url.length < 220000) break; scale *= 0.8; }
+  if (url.length >= 220000) return toast('That picture is too detailed to store. Try a smaller one.');
+  const id = uid('i'); images.set(id, url); Store.put('img_' + id, { url });
+  if (Store.mode !== 'cloud' && !Store.local('img_' + id)) toast('This browser is out of storage space, so this picture will not be kept after you close the page.');
+  const w = Math.min(bmp.width, 420), ht = Math.round(w * bmp.height / bmp.width), r = cv.getBoundingClientRect();
+  const c = at || { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
+  const e = { id: uid('e'), type: 'image', z: topZ() + 1, x: Math.round(c.x - w / 2), y: Math.round(c.y - ht / 2), w, h: ht, src: id };
+  board.els[e.id] = e; sel = new Set([e.id]); tool = 'select'; commit();
+}
+function onPaste(ev) {
+  const tgt = ev.target; if (!board || kanban || (tgt && ['INPUT', 'TEXTAREA', 'SELECT'].includes(tgt.tagName))) return;
+  const data = ev.clipboardData, file = data && [...data.files].find(f => f.type.startsWith('image/')), text = data ? data.getData('text/plain').trim() : '';
+  const r = cv.getBoundingClientRect(), at = { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
+  if (file) addImage(file);
+  else if (clip.length) { pasteEls(clip, 24); copySel(); }
+  else if (text) { makeBox('sticky', at.x, at.y, 0, 0); $('#ed').value = text.slice(0, 2000); endEdit(); }
+  else return;
+  ev.preventDefault();
+}
+
 function trackCables() {
   const seen = new Set();
   for (const e of all()) if (e.type === 'conn' && e.style === 'cable') {
@@ -241,7 +279,9 @@ function drawOverlay(extra) {
     const turning = mode && mode.k === 'grotate' ? mode : null, b = turning ? turning.box0 : bounds(free), mx = b.x + b.w / 2, pad = 9 * k;
     out.push(s('g', { transform: turning && turning.ang ? `rotate(${turning.ang} ${mx} ${b.y + b.h / 2})` : null },
       s('rect', { x: b.x - pad, y: b.y - pad, width: b.w + pad * 2, height: b.h + pad * 2, fill: 'none', stroke: C.accent, 'stroke-width': k, 'stroke-dasharray': `${5 * k} ${4 * k}`, 'pointer-events': 'none' }),
-      rotateHandle(mx, b.y - pad, C.accent, k)));
+      rotateHandle(mx, b.y - pad, C.accent, k),
+      turning ? [] : [['nw', b.x - pad, b.y - pad, 'nwse'], ['ne', b.x + b.w + pad, b.y - pad, 'nesw'], ['sw', b.x - pad, b.y + b.h + pad, 'nesw'], ['se', b.x + b.w + pad, b.y + b.h + pad, 'nwse']].map(([n, px, py, cur]) =>
+        s('rect', { 'data-h': 'gs-' + n, x: px - 5 * k, y: py - 5 * k, width: 10 * k, height: 10 * k, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.5 * k, style: `cursor:${cur}-resize` }, s('title', null, 'Drag to resize the whole selection')))));
   }
   if (extra) out.push(extra);
   ov.replaceChildren(...out);
@@ -364,7 +404,7 @@ function placeEditor() {
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
     padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px',
-    textAlign: centered ? 'center' : 'left', background: e.type === 'sticky' ? e.fill : '#ffffff',
+    textAlign: e.align || (centered ? 'center' : 'left'), color: e.color || '#1d2530', background: e.type === 'sticky' ? e.fill : e.color === '#ffffff' ? '#2b2f3a' : '#ffffff',
     transform: e.rot && !lab ? `rotate(${e.rot}deg)` : '', transformOrigin: lab ? '' : `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
 }
 function startEdit(id) {
@@ -390,6 +430,11 @@ function onDown(ev) {
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
   if (tool === 'select') {
     if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; 
+      if (hd.startsWith('gs-')) {
+        // Scale the whole selection away from the corner opposite the one being dragged.
+        const b = bounds(selEls().filter(x => !x.locked)), c = hd.slice(3), ax = c.includes('w') ? b.x + b.w : b.x, ay = c.includes('n') ? b.y + b.h : b.y;
+        mode = { k: 'gscale', start: [...moveSet()].map(i => clone(E(i))), ax, ay, vx: (c.includes('w') ? b.x : b.x + b.w) - ax, vy: (c.includes('n') ? b.y : b.y + b.h) - ay }; return;
+      }
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
       if (hd === 'rot') {
         const one = sel.size === 1, b = one ? e : bounds(selEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
@@ -423,13 +468,19 @@ function onMove(ev) {
     for (const o of mode.start) { const e = E(o.id); if (e.type === 'conn') { e.ax = o.ax + dx; e.ay = o.ay + dy; e.bx = o.bx + dx; e.by = o.by + dy; } else { e.x = Math.round(o.x + dx); e.y = Math.round(o.y + dy); } }
     draw(); drawOverlay(guideMarks(guides));
   } else if (mode.k === 'resize') {
-    const { e, o, hd } = mode, r = G.resizeBox(o, hd, p.x - mode.p.x, p.y - mode.p.y, 30), guides = [];
-    if (!o.rot && !ev.ctrlKey && !ev.metaKey) {
+    // Pictures and stickers keep their shape from the corners; Shift does the same for anything else.
+    const { e, o, hd } = mode, ratio = o.type === 'image' || o.type === 'sticker' || ev.shiftKey ? o.w / o.h : undefined;
+    const r = G.resizeBox(o, hd, p.x - mode.p.x, p.y - mode.p.y, 30, ratio), guides = [];
+    if (!o.rot && !(ratio && hd.length === 2) && !ev.ctrlKey && !ev.metaKey) {
       const thr = 6 / cam.z, west = hd.includes('w'), north = hd.includes('n');
       if (west || hd.includes('e')) { const sx = snapPoint(west ? r.x : r.x + r.w, 'x', mode.others, thr, [r.y, r.y + r.h]), w = sx && (west ? r.x + r.w - sx.v : sx.v - r.x); if (sx && w >= 30) { if (west) r.x = sx.v; r.w = w; guides.push(sx.guide); } }
       if (north || hd.includes('s')) { const sy = snapPoint(north ? r.y : r.y + r.h, 'y', mode.others, thr, [r.x, r.x + r.w]), ht = sy && (north ? r.y + r.h - sy.v : sy.v - r.y); if (sy && ht >= 30) { if (north) r.y = sy.v; r.h = ht; guides.push(sy.guide); } }
     }
     Object.assign(e, { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) }); fitText(e); draw(); drawOverlay(guideMarks(guides));
+  } else if (mode.k === 'gscale') {
+    const len2 = mode.vx * mode.vx + mode.vy * mode.vy || 1, f = Math.min(20, Math.max(0.1, ((p.x - mode.ax) * mode.vx + (p.y - mode.ay) * mode.vy) / len2));
+    for (const o of mode.start) Object.assign(E(o.id), G.scaleEl(o, mode.ax, mode.ay, f));
+    draw();
   } else if (mode.k === 'grotate') {
     const raw = (Math.atan2(p.y - mode.c.y, p.x - mode.c.x) - mode.a0) * 180 / Math.PI;
     mode.ang = G.snapAngle(mode.base + raw, ev.shiftKey) - mode.base;
@@ -454,7 +505,7 @@ function onMove(ev) {
 function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
   if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } }
-  else if (m.k === 'resize' || m.k === 'grotate') commit();
+  else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
   else if (m.k === 'connEnd') {
     const other = m.end === 'a' ? m.e.b : m.e.a;
     const hit = document.elementsFromPoint(ev.clientX, ev.clientY).map(idAt).find(id => id && id !== other && E(id) && E(id).type !== 'conn');
@@ -487,7 +538,7 @@ function onKey(ev) {
   else if (mod && k === 'y') travel('redo');
   else if (mod && k === 'd') { copySel(); const c = clip; pasteEls(c, 24); }
   else if (mod && k === 'c') copySel();
-  else if (mod && k === 'v') { if (clip.length) { pasteEls(clip, 24); copySel(); } }
+  else if (mod && k === 'v') done = false; // handled by the paste event, so pictures and text can come in too
   else if (mod && k === 'a') { sel = new Set(Object.keys(board.els)); refresh(); }
   else if (mod && k === 'g') arrange(ev.shiftKey ? 'ungroup' : 'group');
   else if (mod && ev.shiftKey && k === 'l') arrange(selEls().some(e => !e.locked) ? 'lock' : 'unlock');
@@ -504,14 +555,14 @@ function onKey(ev) {
   else if (k === ']') arrange('front'); else if (k === '[') arrange('back');
   else if (k === '=' || k === '+') zoomAt(1.2); else if (k === '-') zoomAt(1 / 1.2); else if (k === '1' && ev.shiftKey || k === '!') fit();
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
-  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp' }[k]; if (t) { tool = t; refresh(); } else done = false; }
+  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp' }[k]; if (k === 'i') $('#img-file').click(); else if (t) { tool = t; refresh(); } else done = false; }
   if (done) ev.preventDefault();
 }
 
 /* ---------- Board chrome ---------- */
 const ICON = { select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
-  diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z' };
-const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['stamp', 'Stickers and tape (K)']];
+  diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z', image: 'M3 4h14v12H3zM3 13.5l4-4 3 3 2.5-2 4.5 4M13.2 7.6a.6.6 0 1 0 .01 0' };
+const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
 async function openBoard(id) {
   const m = meta(id); if (!m) return;
   $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
@@ -537,8 +588,9 @@ async function openBoard(id) {
       h('button', { id: 'kanban-toggle', title: 'Show tasks as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
       h('button', { title: 'Keyboard shortcuts (?)', onclick: toggleHelp }, 'Keys')),
     h('div', { class: 'work' },
-      h('nav', { class: 'tools', 'aria-label': 'Tools' }, TOOLS.map(([t, label]) => h('button', { 'data-tool': t, title: label, 'aria-label': label, onclick: () => { tool = t; refresh(); } }, s('svg', { viewBox: '0 0 20 20' }, s('path', { d: ICON[t] }))))),
+      h('nav', { class: 'tools', 'aria-label': 'Tools' }, TOOLS.map(([t, label]) => h('button', { 'data-tool': t, title: label, 'aria-label': label, onclick: () => { if (t === 'image') $('#img-file').click(); else { tool = t; refresh(); } } }, s('svg', { viewBox: '0 0 20 20' }, s('path', { d: ICON[t] }))))),
       h('div', { class: 'stage' }, h('div', { class: 'ctx', id: 'ctx', hidden: true }), h('div', { class: 'fly', id: 'fly', hidden: true }), h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }), h('div', { class: 'kan', id: 'kan', hidden: true }),
+        h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { for (const f of [...e.target.files]) await addImage(f); e.target.value = ''; } }),
         h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit, onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
       h('aside', { class: 'tasks', id: 'tasks', 'aria-label': 'Tasks' }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
   cv = s('svg', { id: 'cv', role: 'application', 'aria-label': 'Board canvas' },
@@ -552,9 +604,11 @@ async function openBoard(id) {
   mini.addEventListener('pointermove', ev => { if (miniDrag) miniGo(ev); });
   const miniEnd = () => { miniDrag = false; draw(); }; mini.addEventListener('pointerup', miniEnd); mini.addEventListener('pointercancel', miniEnd);
   cv.addEventListener('contextmenu', openMenu);
+  cv.addEventListener('dragover', ev => ev.preventDefault());
+  cv.addEventListener('drop', async ev => { ev.preventDefault(); const p = pt(ev); let i = 0; for (const f of [...ev.dataTransfer.files]) await addImage(f, { x: p.x + i * 24, y: p.y + i++ * 24 }); });
   cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; draw(); placeEditor(); } }, { passive: false });
-  fit(); refresh();
+  fit(); refresh(); loadImages();
 }
 function renderCtx() {
   const el = $('#ctx'); if (!el) return; const list = selEls();
@@ -576,7 +630,9 @@ function renderCtx() {
       pick('font', 'Font', Object.entries(FONTS).map(([k, v]) => [k, v.label]), same(texty, 'font'), v => setAll(texty, 'font', v)),
       pick('weight', 'Weight', WEIGHTS, same(texty, 'weight'), v => setAll(texty, 'weight', v ? Number(v) : '')),
       pick('size', 'Size', SIZES.map(n => [n, n + ' px']), same(texty, 'size'), v => setAll(texty, 'size', v ? Number(v) : '')),
-      h('button', { class: same(texty, 'italic') === true ? 'fav-on' : '', title: 'Italic', style: 'font-style:italic', onclick: () => setAll(texty, 'italic', !texty.every(e => e.italic)) }, 'Italic')] : [],
+      h('button', { class: same(texty, 'italic') === true ? 'fav-on' : '', title: 'Italic', style: 'font-style:italic', onclick: () => setAll(texty, 'italic', !texty.every(e => e.italic)) }, 'Italic'),
+      pick('text-color', 'Text color', TEXT_COLORS, same(texty, 'color'), v => setAll(texty, 'color', v)),
+      pick('text-align', 'Text align', [['left', 'Left'], ['center', 'Center'], ['right', 'Right']], same(texty, 'align'), v => setAll(texty, 'align', v))] : [],
     list.length > 1 ? menu('align', 'Align', [['l', 'Left edges'], ['c', 'Centers'], ['r', 'Right edges'], ['t', 'Top edges'], ['m', 'Middles'], ['b', 'Bottom edges'], ['dh', 'Space evenly across'], ['dv', 'Space evenly down']], align) : null,
     menu('arrange', 'Arrange', [['front', 'Bring to front'], ['back', 'Send to back'], ['group', 'Group'], ['ungroup', 'Ungroup'], ['lock', 'Lock'], ['unlock', 'Unlock']], arrange),
     h('button', { onclick: () => { copySel(); pasteEls(clip, 24); } }, 'Duplicate'),
@@ -673,15 +729,15 @@ function openMenu(ev) {
     list.every(e => e.locked) ? item('Unlock', () => arrange('unlock')) : item('Lock', () => arrange('lock')), h('hr'),
     item('Delete', removeSel, 'danger')]
     : [clip.length ? item('Paste here', () => pasteAt(p)) : null,
-      item('Add sticky note', () => makeBox('sticky', p.x, p.y, 0, 0)), item('Add task card', () => makeBox('card', p.x, p.y, 0, 0)), item('Add text', () => makeBox('text', p.x, p.y, 0, 0)), h('hr'),
+      item('Add sticky note', () => makeBox('sticky', p.x, p.y, 0, 0)), item('Add task card', () => makeBox('card', p.x, p.y, 0, 0)), item('Add text', () => makeBox('text', p.x, p.y, 0, 0)), item('Add picture', () => $('#img-file').click()), h('hr'),
       item('Select all', () => { sel = new Set(Object.keys(board.els)); refresh(); }), item('Fit everything', () => fit())];
   const m = h('div', { class: 'menu', id: 'menu', role: 'menu' }, items.filter(Boolean)), r = cv.getBoundingClientRect(); $('.stage').append(m);
   m.style.left = Math.max(4, Math.min(p.sx, r.width - m.offsetWidth - 6)) + 'px'; m.style.top = Math.max(4, Math.min(p.sy, r.height - m.offsetHeight - 6)) + 'px';
 }
 const KEYS = [
-  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['K', 'Stickers and tape']]],
-  ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
-  ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
+  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
+  ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
+  ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {
   const open = $('#help'); if (open) { open.remove(); return; }
@@ -716,6 +772,7 @@ function exportAs(kind) {
 
 /* ---------- Boot ---------- */
 window.addEventListener('keydown', onKey);
+window.addEventListener('paste', onPaste);
 window.addEventListener('pointerdown', ev => { if (!(ev.target.closest && ev.target.closest('#menu'))) closeMenu(); }, true);
 window.addEventListener('keyup', ev => { if (ev.key === ' ') { spaceDown = false; if (cv) cv.classList.remove('pan'); } });
 window.addEventListener('pagehide', () => { if (board) saveNow(); });

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { bbox, bounds, ends, fitText, normAngle, resizeBox, rotateEl, rotatedBox, rotatePoint, snapAngle, setMeasurer, wrap } from '../src/geometry';
+import { bbox, bounds, ends, fitText, normAngle, resizeBox, rotateEl, rotatedBox, rotatePoint, scaleEl, snapAngle, setMeasurer, wrap } from '../src/geometry';
 import type { El } from '../src/types';
 
 const el = (p: Partial<El>): El => ({ id: 'x', type: 'rect', z: 1, x: 0, y: 0, w: 100, h: 100, ...p });
@@ -144,5 +144,40 @@ describe('resizeBox', () => {
     const r = resizeBox(o, 'se', 37, 11, 30);
     const after = corner(r, -r.w / 2, -r.h / 2);
     expect(after.x).toBeCloseTo(before.x); expect(after.y).toBeCloseTo(before.y);
+  });
+});
+
+describe('keeping shape while resizing', () => {
+  const pic = { x: 0, y: 0, w: 200, h: 100 };
+  it('a corner drag keeps the width to height ratio', () => {
+    expect(resizeBox(pic, 'se', 100, 3, 30, 2)).toEqual({ x: 0, y: 0, w: 300, h: 150 });
+  });
+  it('the opposite corner stays put when dragging the top left', () => {
+    const r = resizeBox(pic, 'nw', -100, 0, 30, 2);
+    expect(r).toEqual({ x: -100, y: -50, w: 300, h: 150 });
+  });
+  it('edge handles still stretch freely', () => {
+    expect(resizeBox(pic, 'e', 50, 0, 30, 2)).toEqual({ x: 0, y: 0, w: 250, h: 100 });
+  });
+});
+
+describe('scaling a selection', () => {
+  it('sizes and positions grow away from the fixed corner', () => {
+    const r = scaleEl(el({ x: 100, y: 50, w: 40, h: 20 }), 0, 0, 2);
+    expect([r.x, r.y, r.w, r.h]).toEqual([200, 100, 80, 40]);
+  });
+  it('text grows with its note', () => {
+    expect(scaleEl(el({ type: 'sticky' }), 0, 0, 1.5).size).toBe(24);
+    expect(scaleEl(el({ type: 'sticky', size: 20 }), 0, 0, 0.5).size).toBe(10);
+    expect(scaleEl(el({ type: 'card' }), 0, 0, 2).size).toBeUndefined();
+  });
+  it('drawings and free connector ends scale too', () => {
+    expect(scaleEl(el({ type: 'pen', pts: [[0, 0], [10, 5]] }), 0, 0, 3).pts).toEqual([[0, 0], [30, 15]]);
+    const c = scaleEl(el({ type: 'conn', ax: 10, ay: 10, bx: 30, by: 20 }), 10, 10, 2);
+    expect([c.ax, c.ay, c.bx, c.by]).toEqual([10, 10, 50, 30]);
+  });
+  it('a rotated piece keeps its angle and scales around its center', () => {
+    const r = scaleEl(el({ x: 0, y: 0, w: 100, h: 50, rot: 30 }), 50, 25, 2);
+    expect([r.x, r.y, r.w, r.h, r.rot]).toEqual([-50, -25, 200, 100, 30]);
   });
 });

@@ -18,9 +18,17 @@ export interface RenderCtx {
   get: Lookup;
   /** Momentary swing of a cable connector, if it is moving. */
   sway?: (id: string) => Pt | undefined;
+  /** Data URL of a stored picture, once it has loaded. */
+  image?: (id: string) => string | undefined;
 }
 
 const DARK = '#1d2530';
+
+/** Where a line of text starts and how it is anchored, for an element's alignment choice. */
+function lineStart(e: El, x: number, w: number, pad: number, fallback: 'left' | 'center' | 'right'): [number, string] {
+  const a = e.align || fallback;
+  return a === 'center' ? [x + w / 2, 'middle'] : a === 'right' ? [x + w - pad, 'end'] : [x + pad, 'start'];
+}
 
 function textBlock(lines: string[], x: number, y: number, st: TextStyle, fill: string, anchor = 'start'): SVGElement {
   const t = s('text', { x, y, 'font-size': st.size, 'font-family': st.family, 'font-weight': st.weight, 'font-style': st.italic ? 'italic' : null, fill, 'text-anchor': anchor, 'pointer-events': 'none' });
@@ -64,21 +72,21 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
   const { x, y, w, h } = e, st = textStyle(e), lh = st.size * 1.3;
   if (e.type === 'sticky') {
     g.append(s('rect', { x, y, width: w, height: h, rx: 3, fill: e.fill, filter: shadow }));
-    if (!hide) g.append(textBlock(wrapEl(e, w - 24), x + 12, y + 12 + st.size, st, DARK));
+    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 12, 'left'); g.append(textBlock(wrapEl(e, w - 24), tx, y + 12 + st.size, st, e.color || DARK, anchor)); }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
     const a = { fill: e.fill, stroke: '#2b3545', 'stroke-width': 1.5 };
     g.append(e.type === 'rect' ? s('rect', { x, y, width: w, height: h, rx: 6, ...a })
       : e.type === 'ellipse' ? s('ellipse', { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2, ...a })
       : s('polygon', { points: `${x + w / 2},${y} ${x + w},${y + h / 2} ${x + w / 2},${y + h} ${x},${y + h / 2}`, ...a }));
-    if (!hide) { const ls = wrapEl(e, w - 24); g.append(textBlock(ls, x + w / 2, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, DARK, 'middle')); }
+    if (!hide) { const ls = wrapEl(e, w - 24); const [tx, anchor] = lineStart(e, x, w, 12, 'center'); g.append(textBlock(ls, tx, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, e.color || DARK, anchor)); }
   } else if (e.type === 'text') {
     g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
-    if (!hide) g.append(textBlock(wrapEl(e, w - 4), x + 2, y + 4 + st.size * 0.95, st, c.ink));
+    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(wrapEl(e, w - 4), tx, y + 4 + st.size * 0.95, st, e.color || c.ink, anchor)); }
   } else if (e.type === 'card') {
     const [label, col] = STATUS[e.status || 'todo'] || STATUS.todo, late = !!e.due && e.due < today() && e.status !== 'done';
     g.append(s('rect', { x, y, width: w, height: h, rx: 8, fill: '#ffffff', stroke: '#c3ccda', filter: shadow }),
       s('rect', { x, y: y + 8, width: 5, height: h - 16, rx: 2.5, fill: col, 'pointer-events': 'none' }));
-    if (!hide) g.append(textBlock(wrapEl(e, w - 34).slice(0, 2), x + 18, y + 12 + st.size, st, DARK));
+    if (!hide) g.append(textBlock(wrapEl(e, w - 34).slice(0, 2), x + 18, y + 12 + st.size, st, e.color || DARK));
     const pill: TextStyle = { size: 11, weight: 600, family: textStyle({ ...e, font: undefined }).family, italic: false };
     const pw = measure(label, 11, 600) + 16;
     g.append(s('rect', { x: x + 18, y: y + h - 30, width: pw, height: 18, rx: 9, fill: col, 'pointer-events': 'none' }),
@@ -106,6 +114,11 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const outline = tapeOutline(x, y, w, h), marks = tapePattern(e.pattern || 'stripes', x, y, w, h), clip = 'tape-' + e.id + (c.exp ? '-x' : '');
     g.append(s('clipPath', { id: clip }, s('path', { d: outline })), s('path', { d: outline, fill: e.fill || '#2f6fed', 'fill-opacity': 0.78 }));
     if (marks.d) g.append(s('path', { d: marks.d, 'clip-path': `url(#${clip})`, 'pointer-events': 'none', ...(marks.filled ? { fill: '#ffffff', 'fill-opacity': 0.6 } : { fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.5, 'stroke-width': marks.d && e.pattern === 'grid' ? 1.2 : 4 }) }));
+  } else if (e.type === 'image') {
+    const href = e.src ? c.image?.(e.src) : undefined;
+    if (href) g.append(s('image', { x, y, width: w, height: h, href, preserveAspectRatio: 'none' }));
+    else g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: '#dfe5ee', stroke: '#9aa8c4', 'stroke-dasharray': '6 4' }),
+      textBlock(['Loading picture'], x + w / 2, y + h / 2 + 4, { size: 13, weight: 500, family: st.family, italic: false }, '#5d697c', 'middle'));
   } else if (e.type === 'conn') {
     renderConn(g, e, c);
   }

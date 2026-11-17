@@ -66,8 +66,9 @@ export function rotatedBox(b: Box, deg: number): Box {
 /**
  * Resize a (possibly rotated) box by dragging a handle. `hd` names the handle (n, s, e, w, or a corner);
  * dx/dy are the pointer movement in board coordinates. The opposite edge or corner stays fixed on screen.
+ * With `ratio` (width / height), corner handles keep that shape.
  */
-export function resizeBox(o: Box & { rot?: number }, hd: string, dx: number, dy: number, min: number): Box {
+export function resizeBox(o: Box & { rot?: number }, hd: string, dx: number, dy: number, min: number, ratio?: number): Box {
   const r = (o.rot || 0) * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
   const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
   let x0 = -o.w / 2, y0 = -o.h / 2, x1 = o.w / 2, y1 = o.h / 2;
@@ -75,6 +76,7 @@ export function resizeBox(o: Box & { rot?: number }, hd: string, dx: number, dy:
   if (hd.includes('e')) x1 = Math.max(x1 + lx, x0 + min);
   if (hd.includes('n')) y0 = Math.min(y0 + ly, y1 - min);
   if (hd.includes('s')) y1 = Math.max(y1 + ly, y0 + min);
+  if (ratio && hd.length === 2) { const tall = (x1 - x0) / ratio; if (hd.includes('n')) y0 = y1 - tall; else y1 = y0 + tall; }
   const w = x1 - x0, h = y1 - y0, mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
   const cx = o.x + o.w / 2 + mx * cos - my * sin, cy = o.y + o.h / 2 + mx * sin + my * cos;
   return { x: cx - w / 2, y: cy - h / 2, w, h };
@@ -115,6 +117,22 @@ export function rotateEl(o: El, cx: number, cy: number, deg: number): El {
   e.y = round2(c.y - o.h / 2);
   const rot = round2(normAngle((o.rot || 0) + deg));
   if (rot) e.rot = rot; else delete e.rot;
+  return e;
+}
+
+/**
+ * A copy of `o` scaled by `f` away from the fixed point (ox, oy). Sizes, drawings, free connector ends,
+ * and the text size of notes, shapes, and text all scale together, so a resized group keeps its look.
+ */
+export function scaleEl(o: El, ox: number, oy: number, f: number): El {
+  const e = { ...o }, sx = (v: number) => round2(ox + (v - ox) * f), sy = (v: number) => round2(oy + (v - oy) * f);
+  if (o.type === 'conn') return Object.assign(e, { ax: sx(o.ax ?? 0), ay: sy(o.ay ?? 0), bx: sx(o.bx ?? 0), by: sy(o.by ?? 0) });
+  e.w = round2(o.w * f);
+  e.h = round2(o.h * f);
+  e.x = round2(ox + (o.x + o.w / 2 - ox) * f - e.w / 2);
+  e.y = round2(oy + (o.y + o.h / 2 - oy) * f - e.h / 2);
+  if (o.pts) e.pts = o.pts.map(p => [Math.round(p[0] * f * 10) / 10, Math.round(p[1] * f * 10) / 10]);
+  if (['sticky', 'text', 'rect', 'ellipse', 'diamond'].includes(o.type)) e.size = Math.min(400, Math.max(4, Math.round(textStyle(o).size * f * 10) / 10));
   return e;
 }
 

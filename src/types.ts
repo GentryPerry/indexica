@@ -1,4 +1,4 @@
-export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape';
+export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image';
 export type ConnStyle = 'straight' | 'curve' | 'elbow' | 'cable';
 export type Status = 'todo' | 'doing' | 'blocked' | 'done';
 
@@ -32,6 +32,11 @@ export interface El {
   weight?: number;
   size?: number;
   italic?: boolean;
+  /** Text color and alignment. Unset means the type's default. */
+  color?: string;
+  align?: 'left' | 'center' | 'right';
+  /** Image elements: id of the stored picture (kept in its own storage document). */
+  src?: string;
   /** Connector line style. */
   style?: ConnStyle;
   /** Sticker shape key (STICKERS) or tape pattern key (TAPES). */
@@ -52,6 +57,8 @@ export interface BoardMeta {
   created: number;
   updated: number;
   thumb: (number | string)[][];
+  /** Ids of pictures this board uses, so they can be removed when the board is deleted for good. */
+  imgs?: string[];
 }
 export interface WorkspaceIndex {
   projects: { id: string; name: string }[];
@@ -66,7 +73,7 @@ export const STATUS: Record<Status, [label: string, color: string]> = {
 };
 export const FILLS = ['#ffe27a', '#ffc2a8', '#b9e6c9', '#b5d8ff', '#e3c8ff', '#ffffff', '#dfe5ee'];
 export const TEXTY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'conn'];
-export const BOXY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'sticker', 'tape'];
+export const BOXY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'sticker', 'tape', 'image'];
 
 /** Stronger colors for stickers, tape, and connector lines. */
 export const VIVID = ['#e5484d', '#f76b15', '#f5c518', '#2a9460', '#2f6fed', '#8e4ec6', '#e0409a', '#2b2f3a'];
@@ -83,3 +90,4 @@ export const FONTS: Record<string, { label: string; stack: string }> = {
 };
 export const WEIGHTS: [number, string][] = [[300, 'Light'], [400, 'Regular'], [600, 'Semibold'], [700, 'Bold'], [900, 'Black']];
 export const SIZES = [12, 14, 16, 18, 24, 32, 48, 64];
+export const TEXT_COLORS: [string, string][] = [['#1d2530', 'Black'], ['#5d697c', 'Gray'], ['#e5484d', 'Red'], ['#f76b15', 'Orange'], ['#2a9460', 'Green'], ['#2f6fed', 'Blue'], ['#8e4ec6', 'Purple'], ['#e0409a', 'Pink'], ['#ffffff', 'White']];
