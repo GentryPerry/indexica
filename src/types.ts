@@ -1,5 +1,7 @@
 export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image';
 export type ConnStyle = 'straight' | 'curve' | 'elbow' | 'cable';
+/** A side of a piece, for pinning a connector end: north, east, south, west. */
+export type Side = 'n' | 'e' | 's' | 'w';
 export type Status = 'todo' | 'doing' | 'blocked' | 'done';
 
 /** One object on a board. Connectors use a/b (attached ids) and ax..by (free points) instead of x/y/w/h. */
@@ -39,6 +41,11 @@ export interface El {
   src?: string;
   /** Connector line style. */
   style?: ConnStyle;
+  /** Connector ends pinned to a side of the piece they attach to. Unset means the end picks the best side itself. */
+  as?: Side;
+  bs?: Side;
+  /** Connector shows moving dots from its start to its end. */
+  flow?: boolean;
   /** Sticker shape key (STICKERS) or tape pattern key (TAPES). */
   shape?: string;
   pattern?: string;

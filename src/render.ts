@@ -60,6 +60,8 @@ function renderConn(g: SVGElement, e: El, c: RenderCtx) {
       s('path', { d: geom.d, fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
       s('polygon', { points: `${q.x},${q.y} ${q.x - L * Math.cos(a - W)},${q.y - L * Math.sin(a - W)} ${q.x - L * Math.cos(a + W)},${q.y - L * Math.sin(a + W)}`, fill: color, stroke: color, 'stroke-width': 1, 'stroke-linejoin': 'round' }));
   }
+  // Flow: dots travelling from the start to the end. Drawn on screen only; exports show the still line.
+  if (e.flow && !c.exp) g.append(s('path', { class: 'flow', d: geom.d, fill: 'none', stroke: cable ? '#ffffff' : color, 'stroke-opacity': cable ? 0.75 : 1, 'stroke-width': cable ? 2.6 : 5, 'stroke-linecap': 'round', 'stroke-dasharray': '0.1 12', 'pointer-events': 'none' }));
   if (!c.exp) g.append(s('path', { d: geom.d, fill: 'none', stroke: 'transparent', 'stroke-width': 16 }));
   if (e.text && c.hideId !== e.id) {
     const st = textStyle(e), w = measure(e.text, st.size, st.weight, st.family, st.italic) + 14, h = st.size * 1.3 + 6;

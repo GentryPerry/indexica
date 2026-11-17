@@ -4,7 +4,7 @@
 import { $, h, s, uid, clone, today, toast } from './dom';
 import { STATUS, FILLS, VIVID, FONTS, WEIGHTS, SIZES, TEXT_COLORS, TEXTY, BOXY } from './types';
 import { fitText } from './geometry';
-import { connGeom } from './connectors';
+import { connGeom, nearSide, pickTarget, sidePoint, sideDir, OPPOSITE, SIDES } from './connectors';
 import { kick, step, still, atRest } from './cable';
 import { renderEl } from './render';
 import { STICKERS, TAPES } from './stickers';
@@ -220,7 +220,7 @@ let cam = { x: 0, y: 0, z: 1 }, tool = 'select', sel = new Set(), editing = null
 let mode = null, spaceDown = false, lastDown = { t: 0, x: 0, y: 0 }, saveT = 0;
 let rightTab = 'design', panelHold = false, fieldSync = [], outlineSig = '', outlineKey = '', taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
 let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
-let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight';
+let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight', connColor = '';
 let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = null;
 let cv, vp, ov, C = {};
 const E = id => board.els[id];
@@ -358,7 +358,7 @@ function drawOverlay(extra) {
       s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': 1.5 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
     if (solo && !e.locked) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
-      g.append(...rotateHandle(mx, e.y, col, k));
+      g.append(s('circle', { 'data-h': 'rot', cx: x1 + 12 * k, cy: e.y - 12 * k, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.5 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
       if (BOXY.includes(e.type)) {
         for (const [n, px, py, cur] of [['n', mx, e.y, 'ns'], ['s', mx, y1, 'ns'], ['w', e.x, my, 'ew'], ['e', x1, my, 'ew']]) g.append(handleSq(n, px, py, 3 * k, k, cur));
         for (const [n, px, py, cur] of [['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) g.append(handleSq(n, px, py, 4 * k, k, cur));
@@ -366,6 +366,14 @@ function drawOverlay(extra) {
     }
     out.push(g);
     if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k));
+    // Quick connect: drag a + handle to another piece, or click it to add a connected piece on that side.
+    if (solo && !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode) for (const sd of SIDES) {
+      const at = sidePoint(e, sd, 22 * k), r = 7 * k;
+      out.push(s('g', { 'data-h': 'qc-' + sd, class: 'qc', style: 'cursor:crosshair' },
+        s('title', null, 'Drag to connect, or click to add a connected piece'),
+        s('circle', { 'data-h': 'qc-' + sd, cx: at.x, cy: at.y, r, fill: C.accentFill, stroke: '#ffffff', 'stroke-width': 1.5 * k }),
+        s('path', { 'data-h': 'qc-' + sd, d: `M${at.x - r * 0.45} ${at.y}H${at.x + r * 0.45}M${at.x} ${at.y - r * 0.45}V${at.y + r * 0.45}`, stroke: '#ffffff', 'stroke-width': 1.5 * k, 'stroke-linecap': 'round', 'pointer-events': 'none' })));
+    }
   }
   // Several pieces selected: one box around them all, with handles that turn or scale the whole selection.
   const free = list.filter(e => !e.locked);
@@ -389,6 +397,13 @@ function moveSet() {
   return move;
 }
 const otherBoxes = skip => all().filter(e => e.type !== 'conn' && !skip.has(e.id)).map(bbox);
+/** Pink measuring lines with end ticks for equal gaps. */
+function gapMarks(gaps) {
+  if (!gaps || !gaps.length) return null; const k = 1 / cam.z, t = 4 * k;
+  return s('g', { 'pointer-events': 'none', stroke: '#e0409a', 'stroke-width': k }, gaps.map(g => g.axis === 'x'
+    ? s('path', { d: `M${g.from} ${g.at}H${g.to}M${g.from} ${g.at - t}V${g.at + t}M${g.to} ${g.at - t}V${g.at + t}` })
+    : s('path', { d: `M${g.at} ${g.from}V${g.to}M${g.at - t} ${g.from}H${g.at + t}M${g.at - t} ${g.to}H${g.at + t}` })));
+}
 function guideMarks(guides) {
   if (!guides.length) return null; const k = 1 / cam.z;
   return s('g', { 'pointer-events': 'none' }, guides.map(g => s('line', { ...(g.axis === 'x' ? { x1: g.pos, x2: g.pos, y1: g.from, y2: g.to } : { y1: g.pos, y2: g.pos, x1: g.from, x2: g.to }), stroke: '#e0409a', 'stroke-width': k })));
@@ -491,6 +506,44 @@ function makeBox(type, x, y, w, ht) {
   if (type !== 'frame' && !stuck) startEdit(e.id);
 }
 
+/* ---------- Connecting ---------- */
+const targetAt = (p, exclude) => pickTarget(all(), p.x, p.y, 10 / cam.z, exclude);
+const sideAt = (id, p) => id ? nearSide(E(id), p.x, p.y, 16 / cam.z) : null;
+/** Outline and side dots on the piece a connector is about to attach to; the dot under the pointer is filled. */
+function targetMarks(id, side) {
+  const e = id && E(id); if (!e) return [];
+  const k = 1 / cam.z, out = [s('rect', { x: e.x - 2 * k, y: e.y - 2 * k, width: e.w + 4 * k, height: e.h + 4 * k, rx: 3 * k, fill: C.accent, 'fill-opacity': 0.06, stroke: C.accent, 'stroke-width': 2 * k, transform: e.rot ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null, 'pointer-events': 'none' })];
+  for (const sd of SIDES) { const at = sidePoint(e, sd); out.push(s('circle', { cx: at.x, cy: at.y, r: (sd === side ? 6 : 4) * k, fill: sd === side ? C.accent : '#ffffff', stroke: C.accent, 'stroke-width': 1.5 * k, 'pointer-events': 'none' })); }
+  return out;
+}
+/** A connector as it would be drawn, from what is being dragged right now. */
+function connPreview(m, p) {
+  const b = targetAt(p, m.a), bs = sideAt(b, p);
+  const tmp = { id: '__preview', type: 'conn', z: 0, x: 0, y: 0, w: 0, h: 0, a: m.a, as: m.as || undefined, ax: m.p.x, ay: m.p.y, b, bs: bs || undefined, bx: p.x, by: p.y, style: connStyle === 'straight' ? undefined : connStyle, stroke: connColor || undefined };
+  return { b, bs, g: s('g', { 'pointer-events': 'none' }, s('g', { opacity: 0.8 }, renderEl(tmp, rctx(false))), targetMarks(m.a, m.as), targetMarks(b, bs)) };
+}
+function addConn(m, p, b, bs) {
+  const e = { id: uid('e'), type: 'conn', z: topZ() + 1, x: 0, y: 0, w: 0, h: 0, a: m.a, b, ax: Math.round(m.p.x), ay: Math.round(m.p.y), bx: Math.round(p.x), by: Math.round(p.y),
+    ...(m.as ? { as: m.as } : {}), ...(bs ? { bs } : {}), ...(connStyle !== 'straight' ? { style: connStyle } : {}), ...(connColor ? { stroke: connColor } : {}) };
+  board.els[e.id] = e; return e;
+}
+/** Click on a + handle: add a matching piece on that side, joined by a connector, and start typing in it. */
+function quickAdd(src, side) {
+  const same = ['sticky', 'rect', 'ellipse', 'diamond', 'card', 'text'].includes(src.type), type = same ? src.type : 'sticky';
+  const w = same ? src.w : 180, ht = same ? src.h : 150, dir = sideDir(src, side), cx = src.x + src.w / 2, cy = src.y + src.h / 2;
+  let reach = (Math.abs(dir.x) * src.w + Math.abs(dir.y) * src.h) / 2 + 80 + (Math.abs(dir.x) * w + Math.abs(dir.y) * ht) / 2;
+  const n = { id: uid('e'), type, z: topZ() + 1, x: 0, y: 0, w, h: ht, text: type === 'card' ? 'New task' : '' };
+  for (const key of ['fill', 'font', 'weight', 'size', 'italic', 'color', 'align']) if (same && src[key] != null) n[key] = src[key];
+  if (type === 'sticky' && !n.fill) n.fill = FILLS[0];
+  if (type === 'card') Object.assign(n, { status: 'todo', due: '', notes: '' });
+  const place = () => { n.x = Math.round(cx + dir.x * reach - w / 2); n.y = Math.round(cy + dir.y * reach - ht / 2); };
+  const hits = () => all().some(o => o.type !== 'conn' && o.type !== 'frame' && o.x < n.x + w && o.x + o.w > n.x && o.y < n.y + ht && o.y + o.h > n.y);
+  place(); for (let i = 0; i < 12 && hits(); i++) { reach += 40; place(); }
+  board.els[n.id] = n;
+  addConn({ a: src.id, as: side, p: { x: cx, y: cy } }, { x: n.x, y: n.y }, n.id, src.rot ? null : OPPOSITE[side]);
+  sel = new Set([n.id]); commit(); startEdit(n.id);
+}
+
 /* ---------- Text editing ---------- */
 function placeEditor() {
   const ed = $('#ed'), e = editing && E(editing); if (!e) return;
@@ -532,6 +585,7 @@ function onDown(ev) {
         mode = { k: 'gscale', start: [...moveSet()].map(i => clone(E(i))), ax, ay, vx: (c.includes('w') ? b.x : b.x + b.w) - ax, vy: (c.includes('n') ? b.y : b.y + b.h) - ay }; return;
       }
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
+      if (hd.startsWith('qc-')) { const side = hd.slice(3); mode = { k: 'conn', quick: true, a: e.id, as: side, p: sidePoint(e, side), sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
       if (hd === 'rot') {
         const one = sel.size === 1, b = one ? e : bounds(selEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
         mode = { k: 'grotate', start: [...moveSet()].map(i => clone(E(i))), c, a0: Math.atan2(p.y - c.y, p.x - c.x), ang: 0, base: one ? e.rot || 0 : 0, box0: { x: b.x, y: b.y, w: b.w, h: b.h } }; return;
@@ -551,18 +605,36 @@ function onDown(ev) {
     if (!ev.shiftKey) sel.clear(); mode = { k: 'marquee', p, keep: new Set(sel) }; refresh(); return;
   }
   if (tool === 'pen') { mode = { k: 'pen', pts: [[p.x, p.y]] }; return; }
-  if (tool === 'conn') { mode = { k: 'conn', a: id && E(id).type !== 'conn' ? id : null, p }; return; }
+  if (tool === 'conn') { const a = targetAt(p); mode = { k: 'conn', a, as: sideAt(a, p), p, sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
   mode = { k: 'create', p };
 }
+// Dragging near the edge of the canvas pans the board, so pieces and connectors can travel past the screen.
+let edgeRaf = 0, edgeEv = null;
+function edgeScroll(ev) {
+  edgeEv = ev; if (edgeRaf || ev.synthetic) return;
+  const step = () => {
+    edgeRaf = 0;
+    if (!mode || !edgeEv || !['drag', 'marquee', 'conn', 'connEnd', 'create', 'resize', 'gscale'].includes(mode.k)) return;
+    const r = cv.getBoundingClientRect(), m = 32, x = edgeEv.clientX - r.left, y = edgeEv.clientY - r.top;
+    const push = (v, size) => v < m ? Math.min(m - v, 48) : v > size - m ? -Math.min(v - (size - m), 48) : 0;
+    const vx = push(x, r.width), vy = push(y, r.height); if (!vx && !vy) return;
+    cam.x += vx * 0.4; cam.y += vy * 0.4;
+    onMove({ clientX: edgeEv.clientX, clientY: edgeEv.clientY, shiftKey: edgeEv.shiftKey, ctrlKey: edgeEv.ctrlKey, metaKey: edgeEv.metaKey, altKey: edgeEv.altKey, synthetic: true });
+    edgeRaf = requestAnimationFrame(step);
+  };
+  edgeRaf = requestAnimationFrame(step);
+}
 function onMove(ev) {
-  if (!mode) return; const p = pt(ev), k = 1 / cam.z;
+  if (!mode) { if (tool === 'conn' && board) { const p = pt(ev), t = targetAt(p); drawOverlay(t ? s('g', null, targetMarks(t, sideAt(t, p))) : null); } return; }
+  edgeScroll(ev);
+  const p = pt(ev), k = 1 / cam.z;
   if (mode.k === 'pan') { cam.x = mode.cx + ev.clientX - mode.sx; cam.y = mode.cy + ev.clientY - mode.sy; draw(); }
   else if (mode.k === 'drag') {
-    let dx = p.x - mode.p.x, dy = p.y - mode.p.y, guides = []; if (!mode.moved && Math.hypot(dx, dy) * cam.z < 3) return; mode.moved = true;
+    let dx = p.x - mode.p.x, dy = p.y - mode.p.y, guides = [], gaps = []; if (!mode.moved && Math.hypot(dx, dy) * cam.z < 3) return; mode.moved = true;
     if (ev.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
-    if (mode.box0 && !ev.ctrlKey && !ev.metaKey) { const r = snapMove({ x: mode.box0.x + dx, y: mode.box0.y + dy, w: mode.box0.w, h: mode.box0.h }, mode.others, 6 / cam.z); dx += r.dx; dy += r.dy; guides = r.guides; }
+    if (mode.box0 && !ev.ctrlKey && !ev.metaKey) { const r = snapMove({ x: mode.box0.x + dx, y: mode.box0.y + dy, w: mode.box0.w, h: mode.box0.h }, mode.others, 6 / cam.z); dx += r.dx; dy += r.dy; guides = r.guides; gaps = r.gaps; }
     for (const o of mode.start) { const e = E(o.id); if (e.type === 'conn') { e.ax = o.ax + dx; e.ay = o.ay + dy; e.bx = o.bx + dx; e.by = o.by + dy; } else { e.x = Math.round(o.x + dx); e.y = Math.round(o.y + dy); } }
-    draw(); drawOverlay(guideMarks(guides));
+    draw(); drawOverlay(s('g', null, guideMarks(guides), gapMarks(gaps)));
   } else if (mode.k === 'resize') {
     // Pictures and stickers keep their shape from the corners; Shift does the same for anything else.
     const { e, o, hd } = mode, ratio = o.type === 'image' || o.type === 'sticker' || ev.shiftKey ? o.w / o.h : undefined;
@@ -583,7 +655,10 @@ function onMove(ev) {
     for (const o of mode.start) { const e = E(o.id); delete e.rot; Object.assign(e, G.rotateEl(o, mode.c.x, mode.c.y, mode.ang)); }
     draw();
   } else if (mode.k === 'connEnd') {
-    const e = mode.e, n = mode.end; e[n] = null; e[n + 'x'] = Math.round(p.x); e[n + 'y'] = Math.round(p.y); draw();
+    // The end attaches live as it passes over a piece, so the line shows where it will land.
+    const e = mode.e, n = mode.end, other = n === 'a' ? e.b : e.a, tgt = targetAt(p, other), sd = sideAt(tgt, p);
+    e[n] = tgt; e[n + 'x'] = Math.round(p.x); e[n + 'y'] = Math.round(p.y); if (sd) e[n + 's'] = sd; else delete e[n + 's'];
+    draw(); drawOverlay(s('g', null, targetMarks(tgt, sd)));
   } else if (mode.k === 'marquee') {
     const x = Math.min(p.x, mode.p.x), y = Math.min(p.y, mode.p.y), w = Math.abs(p.x - mode.p.x), ht = Math.abs(p.y - mode.p.y);
     sel = new Set(mode.keep); for (const e of all()) { const b = bbox(e); if (b.x < x + w && b.x + b.w > x && b.y < y + ht && b.y + b.h > y) sel.add(e.id); }
@@ -592,21 +667,17 @@ function onMove(ev) {
     const l = mode.pts[mode.pts.length - 1]; if (Math.hypot(p.x - l[0], p.y - l[1]) * cam.z > 2) mode.pts.push([p.x, p.y]);
     drawOverlay(s('path', { d: 'M' + mode.pts.map(q => q[0] + ' ' + q[1]).join('L'), fill: 'none', stroke: C.ink, 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' }));
   } else if (mode.k === 'conn') {
-    const a = mode.a ? E(mode.a) : null, from = a ? { x: a.x + a.w / 2, y: a.y + a.h / 2 } : mode.p;
-    drawOverlay(s('line', { x1: from.x, y1: from.y, x2: p.x, y2: p.y, stroke: C.accent, 'stroke-width': 2 * k, 'stroke-dasharray': `${5 * k} ${4 * k}`, 'pointer-events': 'none' }));
+    if (Math.hypot(ev.clientX - mode.sx, ev.clientY - mode.sy) > 4) mode.moved = true;
+    if (mode.moved) drawOverlay(connPreview(mode, p).g);
   } else if (mode.k === 'create') {
     drawOverlay(s('rect', { x: Math.min(p.x, mode.p.x), y: Math.min(p.y, mode.p.y), width: Math.abs(p.x - mode.p.x), height: Math.abs(p.y - mode.p.y), fill: 'none', stroke: C.accent, 'stroke-width': 1.5 * k, 'pointer-events': 'none' }));
   }
 }
 function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
-  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } }
+  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(group(m.id)); refresh(); } else drawOverlay(); }
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
-  else if (m.k === 'connEnd') {
-    const other = m.end === 'a' ? m.e.b : m.e.a;
-    const hit = document.elementsFromPoint(ev.clientX, ev.clientY).map(idAt).find(id => id && id !== other && E(id) && E(id).type !== 'conn');
-    if (hit) m.e[m.end] = hit; commit();
-  }
+  else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
   else if (m.k === 'pen') {
     if (m.pts.length > 1) {
@@ -616,9 +687,10 @@ function onUp(ev) {
     }
     commit();
   } else if (m.k === 'conn') {
-    let b = idAt(document.elementFromPoint(ev.clientX, ev.clientY)); if (b && (E(b).type === 'conn' || b === m.a)) b = null;
-    if ((m.a && b) || Math.hypot(p.x - m.p.x, p.y - m.p.y) > 12) { const e = { id: uid('e'), type: 'conn', z: topZ() + 1, a: m.a, b, ax: m.p.x, ay: m.p.y, bx: p.x, by: p.y, ...(connStyle !== 'straight' ? { style: connStyle } : {}) }; board.els[e.id] = e; sel = new Set([e.id]); }
-    tool = 'select'; commit();
+    if (m.quick && !m.moved) { quickAdd(E(m.a), m.as); return; }
+    const { b, bs } = connPreview(m, p);
+    if (m.moved && (b || Math.hypot(p.x - m.p.x, p.y - m.p.y) > 12) && b !== m.a) { const e = addConn(m, p, b, bs); sel = new Set([e.id]); }
+    if (!m.quick) tool = 'select'; commit();
   } else if (m.k === 'create') {
     let w = Math.abs(p.x - m.p.x), ht = Math.abs(p.y - m.p.y); if (ev.shiftKey) w = ht = Math.max(w, ht);
     makeBox(tool === 'stamp' ? stamp.type : tool, Math.min(p.x, m.p.x), Math.min(p.y, m.p.y), w, ht);
@@ -864,7 +936,10 @@ function renderProps() {
     const conns = of(['conn']);
     if (conns.length) out.push(sec('Line',
       pick('conn-style', 'Line style', [['straight', 'Straight'], ['curve', 'Curved'], ['elbow', 'Right angle'], ['cable', 'Cable']], same(conns, 'style') || 'straight', v => { connStyle = v; setAll(conns, 'style', v === 'straight' ? '' : v, true); }),
-      h('div', { class: 'swatches' }, swatch(C.ink, conns.every(e => !e.stroke), () => setAll(conns, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(conns, 'stroke') === c, () => setAll(conns, 'stroke', c))))));
+      h('div', { class: 'swatches' }, swatch(C.ink, conns.every(e => !e.stroke), () => setAll(conns, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(conns, 'stroke') === c, () => setAll(conns, 'stroke', c)))),
+      h('div', { class: 'row' },
+        h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.flow)), title: 'Show dots moving from start to end', onclick: () => setAll(conns, 'flow', !conns.every(e => e.flow)) }, 'Animate flow'),
+        conns.some(e => e.as || e.bs) ? h('button', { class: 'fbtn', title: 'Let both ends pick the best side again', onclick: () => { conns.forEach(e => { delete e.as; delete e.bs; }); commit(); } }, 'Unpin ends') : null)));
     const texty = free.filter(e => TEXTY.includes(e.type));
     if (texty.length) {
       const st0 = G.textStyle(texty[0]), al = same(texty, 'align'), col = same(texty, 'color'), ital = texty.every(e => e.italic);
@@ -894,7 +969,18 @@ function renderProps() {
   el.replaceChildren(...out);
 }
 function renderFly() {
-  const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp'; if (el.hidden) return;
+  const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp' && tool !== 'conn'; if (el.hidden) return;
+  if (tool === 'conn') {
+    const styles = [['straight', 'Straight', 'M4 16L16 4'], ['curve', 'Curved', 'M3 15C9 15 11 5 17 5'], ['elbow', 'Right angle', 'M3 15H10V5H17'], ['cable', 'Cable', 'M3 6C3 16 17 16 17 6M1.5 6H4.5M15.5 6H18.5']];
+    const pick = (k, label) => () => { connStyle = k; renderFly(); };
+    el.replaceChildren(
+      h('div', { class: 'fly-h' }, 'New connectors'),
+      h('div', { class: 'seg wide', role: 'group', 'aria-label': 'Line style' }, styles.map(([k, label, d]) => h('button', { 'aria-pressed': String(connStyle === k), title: label, 'aria-label': label, onclick: pick(k, label) }, icon(d, 18), h('span', null, label)))),
+      h('div', { class: 'fly-h' }, 'Color'),
+      h('div', { class: 'fly-c' }, [['', C.ink, 'Default'], ...VIVID.map(c => [c, c, 'Color ' + c])].map(([v, c, label]) => h('button', { class: 'sw', style: 'background:' + c, title: label, 'aria-label': label, 'aria-pressed': String(connColor === v), onclick: () => { connColor = v; renderFly(); } }))),
+      h('p', { class: 'fly-n' }, 'Drag from one piece to another. Drop on a dot to pin that end to a side. Selected pieces also have + handles for connecting.'));
+    return;
+  }
   const pv = (e, vb) => s('svg', { viewBox: vb, 'aria-hidden': 'true' }, renderEl({ id: 'pv-' + (e.shape || e.pattern), z: 0, x: 0, y: 0, ...e }, rctx(true)));
   const btn = (on, label, fn, kid) => h('button', { class: on ? 'on' : '', title: label, 'aria-label': label, onclick: () => { fn(); renderFly(); } }, kid);
   el.replaceChildren(
@@ -976,6 +1062,7 @@ function openMenu(ev) {
 }
 const KEYS = [
   ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
+  ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];

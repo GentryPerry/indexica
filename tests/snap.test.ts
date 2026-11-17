@@ -5,7 +5,7 @@ const other = { x: 100, y: 100, w: 100, h: 50 };
 
 describe('snapMove', () => {
   it('does nothing when no edge is within range', () => {
-    expect(snapMove({ x: 400, y: 400, w: 50, h: 50 }, [other], 6)).toEqual({ dx: 0, dy: 0, guides: [] });
+    expect(snapMove({ x: 400, y: 400, w: 50, h: 50 }, [other], 6)).toEqual({ dx: 0, dy: 0, guides: [], gaps: [] });
   });
   it('lines up left edges and draws a vertical guide across both boxes', () => {
     const r = snapMove({ x: 104, y: 300, w: 40, h: 40 }, [other], 6);
@@ -36,5 +36,27 @@ describe('snapPoint', () => {
   it('returns null when nothing is close', () => expect(snapPoint(50, 'x', [other], 6, [0, 10])).toBeNull());
   it('snaps a dragged edge and reports the guide', () => {
     expect(snapPoint(197, 'x', [other], 6, [300, 340])).toEqual({ v: 200, guide: { axis: 'x', pos: 200, from: 100, to: 340 } });
+  });
+});
+
+describe('equal spacing', () => {
+  const a = { x: 0, y: 0, w: 100, h: 100 }, b = { x: 140, y: 0, w: 100, h: 100 };
+  it('repeats the gap of the row to the right', () => {
+    const r = snapMove({ x: 283, y: 300, w: 100, h: 100 }, [a, b], 6);
+    expect(r.dx).toBe(0);
+    const s = snapMove({ x: 283, y: 10, w: 100, h: 100 }, [a, b], 6);
+    expect(s.dx).toBe(-3);
+    expect(s.gaps.map(g => [g.from, g.to])).toEqual([[100, 140], [240, 280]]);
+  });
+  it('centers a box between two neighbors', () => {
+    const c = { x: 400, y: 0, w: 100, h: 100 };
+    const r = snapMove({ x: 203, y: 10, w: 100, h: 100 }, [a, c], 6);
+    expect(r.dx).toBe(-3);
+    expect(r.gaps.map(g => g.to - g.from)).toEqual([100, 100]);
+  });
+  it('edge alignment wins over spacing on the same axis', () => {
+    const r = snapMove({ x: 142, y: 200, w: 100, h: 100 }, [a, b], 6);
+    expect(r.guides.some(g => g.axis === 'x')).toBe(true);
+    expect(r.gaps.filter(g => g.axis === 'x')).toEqual([]);
   });
 });

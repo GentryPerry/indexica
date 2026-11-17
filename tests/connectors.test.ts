@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { atRest, kick, step, still } from '../src/cable';
-import { cableSag, connGeom } from '../src/connectors';
+import { cableSag, connGeom, nearSide, orthoRoute, pickTarget, sidePoint } from '../src/connectors';
 import { bbox } from '../src/geometry';
 import type { El } from '../src/types';
 
@@ -66,5 +66,55 @@ describe('cable swing', () => {
   it('stays stable on a very long frame', () => {
     const s = step(kick(still(), 40, 0), 5);
     expect(Math.abs(s.x)).toBeLessThan(40);
+  });
+});
+
+describe('attaching connector ends', () => {
+  const frame = el({ id: 'f', type: 'frame', x: 0, y: 0, w: 1000, h: 1000 });
+  const note = el({ id: 'n', x: 100, y: 100, w: 100, h: 100 });
+  it('picks the piece under the point, not the frame around it', () => {
+    expect(pickTarget([frame, note], 150, 150, 0)).toBe('n');
+    expect(pickTarget([frame, note], 500, 500, 0)).toBe('f');
+    expect(pickTarget([note], 500, 500, 0)).toBeNull();
+  });
+  it('forgives a near miss', () => {
+    expect(pickTarget([note], 208, 150, 0)).toBeNull();
+    expect(pickTarget([note], 208, 150, 10)).toBe('n');
+  });
+  it('skips the piece the connector starts from', () => expect(pickTarget([frame, note], 150, 150, 0, 'n')).toBe('f'));
+  it('finds the side dot near the pointer', () => {
+    expect(nearSide(note, 199, 152, 12)).toBe('e');
+    expect(nearSide(note, 150, 150, 12)).toBeNull();
+  });
+  it('side points follow rotation', () => {
+    const p = sidePoint({ ...note, rot: 90 }, 'e');
+    expect(p.x).toBeCloseTo(150); expect(p.y).toBeCloseTo(200);
+  });
+});
+
+describe('pinned sides', () => {
+  it('a straight line can be pinned to a chosen side', () => {
+    const g = connGeom({ ...conn(), as: 's' }, get([a, right]));
+    expect(g.p).toEqual({ x: 50, y: 105 });
+  });
+  it('a right-angle line leaves from the pinned side', () => {
+    const g = connGeom({ ...conn('elbow'), as: 'n', bs: 'n' }, get([a, right]));
+    expect(g.p).toEqual({ x: 50, y: -5 });
+    expect(g.pts[1]).toEqual({ x: 50, y: -25 });
+    expect(g.a1).toBeCloseTo(Math.PI / 2);
+  });
+});
+
+describe('right-angle routing', () => {
+  it('joins two side-by-side ends with one step in the middle', () => {
+    expect(orthoRoute({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 200, y: 100 }, { x: -1, y: 0 })).toEqual([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 200, y: 100 }]);
+  });
+  it('turns once when leaving sideways and arriving from above', () => {
+    expect(orthoRoute({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 200, y: 200 }, { x: 0, y: -1 })).toEqual([{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 200 }]);
+  });
+  it('goes around instead of doubling back when the target is behind', () => {
+    const r = orthoRoute({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: -200, y: 100 }, { x: 1, y: 0 });
+    expect(r[1]).toEqual({ x: 20, y: 0 });
+    expect(r.every((pt, i) => i === 0 || pt.x === r[i - 1].x || pt.y === r[i - 1].y)).toBe(true);
   });
 });
