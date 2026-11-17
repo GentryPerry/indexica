@@ -19,7 +19,7 @@ export function setMeasurer(m: Measurer) { measurer = m; }
 export const measure = (text: string, size: number, weight = 400, family = FONT, italic = false) => measurer(text, size, weight, family, italic);
 
 const DEFAULTS: Partial<Record<El['type'], [size: number, weight: number]>> = {
-  sticky: [14, 400], text: [18, 400], rect: [15, 400], ellipse: [15, 400], diamond: [15, 400], card: [13, 600], frame: [11, 500], conn: [13, 500],
+  sticky: [14, 400], text: [18, 400], rect: [15, 400], ellipse: [15, 400], diamond: [15, 400], card: [13, 600], frame: [11, 500], conn: [13, 500], table: [13, 400],
 };
 
 /** The text style an element is drawn with: its own font choices on top of its type's defaults. */
@@ -156,4 +156,9 @@ export function fitText(e: El) {
   if (e.type === 'sticky') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 24));
   else if (e.type === 'text') e.h = Math.ceil(wrapEl(e, e.w - 4).length * lh + 8);
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
+  else if (e.type === 'table' && e.cells) {
+    const st = textStyle(e), cw = e.w / Math.max(1, ...e.cells.map(r => r.length)) - 16;
+    const lines = Math.max(1, ...e.cells.flat().map(t => wrap(t, cw, st.size, st.weight, st.family, st.italic).length));
+    e.h = Math.max(e.h, Math.ceil(e.cells.length * (lines * lh + 16)));
+  }
 }

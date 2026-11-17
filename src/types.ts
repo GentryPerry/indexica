@@ -1,4 +1,6 @@
-export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image';
+export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image' | 'table';
+/** Arrowhead shapes for connector ends. */
+export type Head = 'none' | 'arrow' | 'triangle' | 'circle' | 'bar';
 export type ConnStyle = 'straight' | 'curve' | 'elbow' | 'cable';
 /** A side of a piece, for pinning a connector end: north, east, south, west. */
 export type Side = 'n' | 'e' | 's' | 'w';
@@ -46,6 +48,17 @@ export interface El {
   bs?: Side;
   /** Connector shows moving dots from its start to its end. */
   flow?: boolean;
+  /** Line pattern for connectors, shape borders, and drawings. */
+  dash?: 'dash' | 'dot';
+  /** Connector end shapes: `head` at the end, `tail` at the start. Unset means a triangle head and no tail. */
+  head?: Head;
+  tail?: Head;
+  /** Drawing stroke width, and whether it is a translucent highlighter stroke. */
+  sw?: number;
+  hl?: boolean;
+  /** Table cell text, row by row, and whether the first row is a header. */
+  cells?: string[][];
+  header?: boolean;
   /** Sticker shape key (STICKERS) or tape pattern key (TAPES). */
   shape?: string;
   pattern?: string;
@@ -79,8 +92,8 @@ export const STATUS: Record<Status, [label: string, color: string]> = {
   done: ['Done', '#2a9460'],
 };
 export const FILLS = ['#ffe27a', '#ffc2a8', '#b9e6c9', '#b5d8ff', '#e3c8ff', '#ffffff', '#dfe5ee'];
-export const TEXTY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'conn'];
-export const BOXY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'sticker', 'tape', 'image'];
+export const TEXTY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'conn', 'table'];
+export const BOXY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'sticker', 'tape', 'image', 'table'];
 
 /** Stronger colors for stickers, tape, and connector lines. */
 export const VIVID = ['#e5484d', '#f76b15', '#f5c518', '#2a9460', '#2f6fed', '#8e4ec6', '#e0409a', '#2b2f3a'];

@@ -287,6 +287,12 @@ input.h-title:focus{background:var(--field);box-shadow:inset 0 0 0 1.5px var(--a
 /* Connector tool panel and flow animation */
 .seg.wide{display:grid;grid-template-columns:repeat(4,1fr);gap:2px}
 .seg.wide button{height:auto;padding:6px 2px 4px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px}
+.seg.wide.three{grid-template-columns:repeat(3,1fr)}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.grid3 .sel{padding-left:6px;padding-right:18px;background-position:right 5px center}
+.stepper{display:grid;grid-template-columns:1fr 28px 32px 28px;align-items:center;gap:4px}
+.stepper .num{text-align:center;color:var(--ink)}
+.stepper .ibtn:disabled{color:var(--faint)}
 .flow{animation:ixflow .9s linear infinite}
 @keyframes ixflow{to{stroke-dashoffset:-12.1}}
 @media (prefers-reduced-motion:reduce){.flow{animation:none}}

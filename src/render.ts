@@ -2,7 +2,8 @@ import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
 import { measure, textStyle, wrapEl, type TextStyle } from './geometry';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
-import { STATUS, type El, type Lookup } from './types';
+import { STATUS, type El, type Head, type Lookup } from './types';
+import { cellBox, colsOf, rowsOf } from './table';
 
 /** What the renderer needs to know about where it is drawing. */
 export interface RenderCtx {
@@ -18,6 +19,8 @@ export interface RenderCtx {
   get: Lookup;
   /** Momentary swing of a cable connector, if it is moving. */
   sway?: (id: string) => Pt | undefined;
+  /** The table cell being edited, whose text is hidden under the editor. */
+  editCell?: [number, number] | null;
   /** Data URL of a stored picture, once it has loaded. */
   image?: (id: string) => string | undefined;
 }
@@ -46,6 +49,31 @@ function plug(at: Pt, angle: number, color: string): SVGElement {
     s('rect', { x: 13, y: -5, width: 3, height: 10, fill: color }));
 }
 
+const DASH: Record<string, (w: number) => string> = { dash: w => `${w * 4} ${w * 3}`, dot: w => `0.1 ${w * 3}` };
+const dashOf = (e: El, w: number) => e.dash ? DASH[e.dash](w) : null;
+
+/** An arrowhead at `at`, pointing along `angle`. */
+function headShape(kind: Head, at: Pt, angle: number, color: string): SVGElement | null {
+  const cos = Math.cos(angle), sin = Math.sin(angle), pt = (back: number, side: number) => `${at.x - back * cos - side * sin},${at.y - back * sin + side * cos}`;
+  if (kind === 'triangle') return s('polygon', { points: `${at.x},${at.y} ${pt(11, 4.6)} ${pt(11, -4.6)}`, fill: color, stroke: color, 'stroke-width': 1, 'stroke-linejoin': 'round' });
+  if (kind === 'arrow') return s('polyline', { points: `${pt(10, 6)} ${at.x},${at.y} ${pt(10, -6)}`, fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+  if (kind === 'circle') return s('circle', { cx: at.x - 4 * cos, cy: at.y - 4 * sin, r: 4, fill: color });
+  if (kind === 'bar') return s('polyline', { points: `${pt(1, 6)} ${pt(1, -6)}`, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round' });
+  return null;
+}
+
+/** A smooth path through drawn points, using midpoints as the joins. */
+function smoothPath(pts: number[][], x: number, y: number): string {
+  if (pts.length < 3) return 'M' + pts.map(p => `${x + p[0]} ${y + p[1]}`).join('L');
+  let d = `M${x + pts[0][0]} ${y + pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+    d += `Q${x + pts[i][0]} ${y + pts[i][1]} ${x + mx} ${y + my}`;
+  }
+  const z = pts[pts.length - 1];
+  return d + `L${x + z[0]} ${y + z[1]}`;
+}
+
 function renderConn(g: SVGElement, e: El, c: RenderCtx) {
   const geom = connGeom(e, c.get, c.sway?.(e.id)), color = e.stroke || c.ink, cable = e.style === 'cable';
   if (cable) {
@@ -55,10 +83,8 @@ function renderConn(g: SVGElement, e: El, c: RenderCtx) {
       s('path', { d: geom.d, fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.28, 'stroke-width': 1.2, 'stroke-linecap': 'round', 'pointer-events': 'none' }),
       plug(geom.p, geom.a0, cord), plug(geom.q, geom.a1 + Math.PI, cord));
   } else {
-    const { q, a1: a } = geom, L = 11, W = 0.42;
-    g.append(
-      s('path', { d: geom.d, fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
-      s('polygon', { points: `${q.x},${q.y} ${q.x - L * Math.cos(a - W)},${q.y - L * Math.sin(a - W)} ${q.x - L * Math.cos(a + W)},${q.y - L * Math.sin(a + W)}`, fill: color, stroke: color, 'stroke-width': 1, 'stroke-linejoin': 'round' }));
+    g.append(s('path', { d: geom.d, fill: 'none', stroke: color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, 1.8) }));
+    for (const end of [headShape(e.head || 'triangle', geom.q, geom.a1, color), headShape(e.tail || 'none', geom.p, geom.a0 + Math.PI, color)]) if (end) { end.setAttribute('pointer-events', 'none'); g.append(end); }
   }
   // Flow: dots travelling from the start to the end. Drawn on screen only; exports show the still line.
   if (e.flow && !c.exp) g.append(s('path', { class: 'flow', d: geom.d, fill: 'none', stroke: cable ? '#ffffff' : color, 'stroke-opacity': cable ? 0.75 : 1, 'stroke-width': cable ? 2.6 : 5, 'stroke-linecap': 'round', 'stroke-dasharray': '0.1 12', 'pointer-events': 'none' }));
@@ -78,7 +104,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     g.append(s('rect', { x, y, width: w, height: h, fill: e.fill, filter: shadow }));
     if (!hide) { const [tx, anchor] = lineStart(e, x, w, 12, 'left'); g.append(textBlock(wrapEl(e, w - 24), tx, y + 12 + st.size, st, e.color || DARK, anchor)); }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
-    const a = { fill: e.fill, stroke: '#2b3545', 'stroke-width': 1.5 };
+    const a = { fill: e.fill, stroke: e.stroke || '#2b3545', 'stroke-width': 1.5, 'stroke-dasharray': dashOf(e, 1.5) };
     g.append(e.type === 'rect' ? s('rect', { x, y, width: w, height: h, rx: 6, ...a })
       : e.type === 'ellipse' ? s('ellipse', { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2, ...a })
       : s('polygon', { points: `${x + w / 2},${y} ${x + w},${y + h / 2} ${x + w / 2},${y + h} ${x},${y + h / 2}`, ...a }));
@@ -102,9 +128,9 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (!c.exp) g.append(s('rect', { x, y, width: w, height: h, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
     if (!hide) { const t = textBlock([e.text || 'Frame'], x, y - 7, st, e.color || c.muted); t.removeAttribute('pointer-events'); g.append(t); }
   } else if (e.type === 'pen') {
-    const d = 'M' + (e.pts || []).map(p => (x + p[0]) + ' ' + (y + p[1])).join('L');
-    g.append(s('path', { d, fill: 'none', stroke: e.stroke || c.ink, 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
-    if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': 14 }));
+    const d = smoothPath(e.pts || [], x, y), sw = e.sw || (e.hl ? 16 : 2.5);
+    g.append(s('path', { d, fill: 'none', stroke: e.stroke || (e.hl ? '#f5c518' : c.ink), 'stroke-width': sw, 'stroke-opacity': e.hl ? 0.4 : null, 'stroke-linecap': e.hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': e.hl ? null : dashOf(e, sw) }));
+    if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': Math.max(14, sw + 8) }));
   } else if (e.type === 'sticker') {
     const def = STICKERS[e.shape || ''] || STICKERS.star, fill = e.fill || '#f5c518';
     const inner = s('g', { transform: `translate(${x} ${y}) scale(${w / 100} ${h / 100})` });
@@ -123,6 +149,20 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (href) g.append(s('image', { x, y, width: w, height: h, href, preserveAspectRatio: 'none' }));
     else g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: '#dfe5ee', stroke: '#9aa8c4', 'stroke-dasharray': '6 4' }),
       textBlock(['Loading picture'], x + w / 2, y + h / 2 + 4, { size: 13, weight: 500, family: st.family, italic: false }, '#5d697c', 'middle'));
+  } else if (e.type === 'table') {
+    const rows = rowsOf(e), cols = colsOf(e), line = '#d3d8e0';
+    g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: '#ffffff', stroke: '#c3ccda', filter: shadow }));
+    if (e.header) g.append(s('path', { d: `M${x} ${y + h / rows}V${y + 4}Q${x} ${y} ${x + 4} ${y}H${x + w - 4}Q${x + w} ${y} ${x + w} ${y + 4}V${y + h / rows}Z`, fill: '#eef0f4', 'pointer-events': 'none' }));
+    let grid = '';
+    for (let r = 1; r < rows; r++) grid += `M${x} ${y + r * h / rows}H${x + w}`;
+    for (let k = 1; k < cols; k++) grid += `M${x + k * w / cols} ${y}V${y + h}`;
+    if (grid) g.append(s('path', { d: grid, stroke: line, 'stroke-width': 1, fill: 'none', 'pointer-events': 'none' }));
+    (e.cells || []).forEach((row, r) => row.forEach((text, k) => {
+      if (!text || (hide && c.editCell && c.editCell[0] === r && c.editCell[1] === k)) return;
+      const b = cellBox(e, r, k), cs = r === 0 && e.header ? { ...st, weight: Math.max(st.weight, 600) } : st;
+      const lines = wrapEl({ ...e, text, weight: cs.weight }, b.w - 16).slice(0, Math.max(1, Math.floor((b.h - 8) / lh)));
+      g.append(textBlock(lines, b.x + 8, b.y + 8 + cs.size * 0.95, cs, e.color || DARK));
+    }));
   } else if (e.type === 'conn') {
     renderConn(g, e, c);
   }

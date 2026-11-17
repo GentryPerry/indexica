@@ -7,12 +7,12 @@ export interface OutlineRow { id: string; depth: 0 | 1; label: string; kind: El[
 
 export const TYPE_NAMES: Record<El['type'], string> = {
   sticky: 'Sticky note', text: 'Text', rect: 'Rectangle', ellipse: 'Ellipse', diamond: 'Diamond', card: 'Task card',
-  frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture',
+  frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture', table: 'Table',
 };
 
 /** A short name for a piece: the first line of its text, or what kind of piece it is. */
 export function elLabel(e: El, get: Lookup, depth = 0): string {
-  const first = (e.text || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+  const first = (e.cells ? e.cells.flat().join('\n') : e.text || '').split('\n').map(l => l.trim()).find(Boolean) || '';
   if (first) return first.length > 60 ? first.slice(0, 59).trimEnd() + '…' : first;
   if (e.type === 'conn' && depth < 1) {
     const a = e.a ? get(e.a) : undefined, b = e.b ? get(e.b) : undefined;
