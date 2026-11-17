@@ -1,0 +1,11 @@
+# Deploys the built app (dist/index.html) as a static Cloudflare Worker at jam.gentryperry.com.
+# From a clone: npm run build && npx wrangler deploy
+name = "indexica-jam"
+compatibility_date = "2026-11-01"
+
+[assets]
+directory = "./dist"
+
+[[routes]]
+pattern = "jam.gentryperry.com"
+custom_domain = true
