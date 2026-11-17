@@ -8,6 +8,8 @@ import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
 import { pathD, scaleOf } from './vector';
 import { BRUSHES, brushOutline, outlineD, shaped } from './brush';
+import { fillLayers, isGrad, linearEnds, strokeLayers, type Paint } from './paint';
+import { outlineOf } from './boolean';
 
 /** What the renderer needs to know about where it is drawing. */
 export interface RenderCtx {
@@ -165,10 +167,26 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     else g.append(s('path', { d, fill: 'none', stroke: col, 'stroke-width': sw, 'stroke-opacity': e.hl ? 0.4 : null, 'stroke-linecap': e.hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': e.hl ? null : dashOf(e, sw) }));
     if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': Math.max(14, sw + 8) }));
   } else if (e.type === 'path') {
-    const { sx, sy } = scaleOf(e), d = pathD(e.paths || [], x, y, sx, sy), sw = e.sw ?? 2;
-    const fill = !e.fill || e.fill === 'none' ? 'none' : c.theme === 'dark' && INKISH.has(e.fill.toLowerCase()) ? c.ink : paintFill(e.fill, c.theme);
-    const stroke = e.stroke === 'none' ? 'none' : c.theme === 'dark' ? autoInkOr(e.stroke, c.ink) : e.stroke || c.ink;
-    g.append(s('path', { d, fill, stroke, 'stroke-width': stroke === 'none' ? null : sw, 'fill-rule': e.rule || null, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': stroke === 'none' ? null : dashOf(e, sw) }));
+    const { sx, sy } = scaleOf(e), d = pathD(e.paths || [], x, y, sx, sy), strokes = strokeLayers(e), sw = Math.max(2, ...strokes.map(l => l.width));
+    if (e.masking) {
+      // A mask is not drawn. On the board it shows as a faint dashed outline so it can still be found and picked.
+      if (!c.exp) g.append(s('path', { d, fill: 'transparent', stroke: c.muted, 'stroke-width': 1, 'stroke-dasharray': '4 3', 'vector-effect': 'non-scaling-stroke', 'stroke-opacity': 0.6 }));
+    } else {
+      const defs = s('defs'); let gi = 0;
+      // Solid colors follow the theme like other board colors; gradients keep the colors chosen for them.
+      const paint = (p: Paint, ink: string) => {
+        if (!isGrad(p)) return !p ? ink : c.theme === 'dark' && INKISH.has(p.toLowerCase()) ? c.ink : paintFill(p, c.theme) || p;
+        const id = `pg-${e.id}-${gi++}${c.exp ? '-x' : ''}`, stops = [...p.stops].sort((a, b) => a[0] - b[0]).map(([o, col]) => s('stop', { offset: o, 'stop-color': col }));
+        defs.append(p.kind === 'radial' ? s('radialGradient', { id, cx: 0.5, cy: 0.5, r: 0.5 }, stops) : s('linearGradient', { id, ...linearEnds(p.angle) }, stops));
+        return `url(#${id})`;
+      };
+      const layers = [
+        ...fillLayers(e).map(p => s('path', { d, fill: paint(p, c.ink), 'fill-rule': e.rule || null, stroke: 'none' })),
+        ...strokes.map(l => s('path', { d, fill: 'none', stroke: paint(l.paint, c.ink), 'stroke-width': l.width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, l.width) })),
+      ];
+      if (gi) g.append(defs);
+      g.append(...layers);
+    }
     if (!c.exp) g.append(s('path', { d, fill: 'none', stroke: 'transparent', 'stroke-width': Math.max(12, sw + 8) }));
   } else if (e.type === 'sticker') {
     const def = STICKERS[e.shape || ''] || STICKERS.star, fill = e.fill || '#f5c518';
@@ -206,5 +224,13 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     renderConn(g, e, c);
   }
   if (e.rot && e.type !== 'conn') g.setAttribute('transform', `rotate(${e.rot} ${x + w / 2} ${y + h / 2})`);
+  // A masked piece is clipped to its mask's outline. The clip lives in this piece's own (turned) space,
+  // so the outline is turned back by the piece's rotation.
+  const m = e.mask && c.get ? c.get(e.mask) : undefined;
+  if (m && m.masking) {
+    const id = `mk-${e.id}${c.exp ? '-x' : ''}`;
+    g.prepend(s('clipPath', { id }, s('path', { d: pathD(outlineOf(m)), 'clip-rule': m.rule || null, transform: e.rot && e.type !== 'conn' ? `rotate(${-e.rot} ${x + w / 2} ${y + h / 2})` : null })));
+    g.setAttribute('clip-path', `url(#${id})`);
+  }
   return g;
 }

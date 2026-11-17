@@ -30,6 +30,13 @@ export interface El {
   paths?: import('./vector').SubPath[];
   vw?: number;
   vh?: number;
+  /** On a vector path: stacked fills and strokes, bottom first. Unset means its plain fill and stroke. */
+  fills?: import('./paint').Paint[];
+  strokes?: import('./paint').StrokeLayer[];
+  /** Clipped to the outline of this piece (a mask). */
+  mask?: string;
+  /** This piece is a mask: it is not drawn, its outline clips the pieces that name it. */
+  masking?: boolean;
   /** On a drawing: the brush it was drawn with (pen when unset). */
   brush?: 'pen' | 'brush' | 'pencil' | 'marker';
   /** Fill rule for paths with holes. */

@@ -26,6 +26,7 @@ import * as SL from './slides';
 import * as V from './vector';
 import * as B from './boolean';
 import { BRUSHES, brushOutline, outlineD, shaped, eraseStroke, touches } from './brush';
+import * as PT from './paint';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -531,6 +532,7 @@ function pasteEls(src, dx, dy = dx, quiet = false) {
   for (const o of src) {
     const e = clone(o); e.id = map[o.id]; e.z = ++z; delete e.locked;
     if (e.g) e.g = gmap[e.g] || (gmap[e.g] = uid('g'));
+    if (e.mask) { if (map[e.mask]) e.mask = map[e.mask]; else delete e.mask; }
     if (e.type === 'conn') { e.a = map[e.a] || null; e.b = map[e.b] || null; e.ax += dx; e.ay += dy; e.bx += dx; e.by += dy; } else { e.x += dx; e.y += dy; }
     board.els[e.id] = e; sel.add(e.id);
   }
@@ -893,6 +895,7 @@ function onKey(ev) {
   else if (mod && k === 'z') ev.shiftKey ? travel('redo') : travel('undo');
   else if (mod && k === 'y') travel('redo');
   else if (mod && k === 'e') flattenSel();
+  else if (mod && ev.altKey && k === 'm') selEls().some(e => e.mask || e.masking) ? releaseMask() : useAsMask();
   else if (mod && ev.shiftKey && k === 'o') outlineStroke();
   else if (mod && k === 'enter') { const f = selEls().find(e => e.slide); present(f ? SL.slidesOf(board.els).indexOf(f) : 0); }
   else if (mod && k === 'd') { copySel(); const c = clip; pasteEls(c, 24); }
@@ -1173,13 +1176,18 @@ function renderProps() {
     if (vecs.length) {
       const widths = [[0.5, '0.5 px'], [1, '1 px'], [1.5, '1.5 px'], [2, '2 px'], [3, '3 px'], [4, '4 px'], [6, '6 px'], [8, '8 px'], [12, '12 px']];
       const noFill = vecs.every(e => !e.fill || e.fill === 'none'), noStroke = vecs.every(e => e.stroke === 'none');
-      out.push(sec('Fill', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No fill', 'aria-label': 'No fill', 'aria-pressed': String(noFill), onclick: () => setAll(vecs, 'fill', '') }),
-        FILLS.map((c, i) => swatch(c, same(vecs, 'fill') === c, () => setAll(vecs, 'fill', c), FILL_NAMES[i])), VIVID.map(c => swatch(c, same(vecs, 'fill') === c, () => setAll(vecs, 'fill', c), null, true)))));
-      out.push(sec('Stroke', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No stroke', 'aria-label': 'No stroke', 'aria-pressed': String(noStroke), onclick: () => setAll(vecs, 'stroke', 'none') }),
-          swatch(C.ink, vecs.every(e => !e.stroke), () => setAll(vecs, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(vecs, 'stroke') === c, () => setAll(vecs, 'stroke', c)))),
+      // Picking a swatch sets one plain color and drops any stacked layers.
+      const plain = (key, val, field) => { vecs.forEach(e => { delete e[key === 'sw' ? 'strokes' : key + 's']; }); setAll(vecs, key, val, field); };
+      const solo = one && one.type === 'path' ? one : null;
+      out.push(sec('Fill', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No fill', 'aria-label': 'No fill', 'aria-pressed': String(noFill && vecs.every(e => !e.fills)), onclick: () => plain('fill', '') }),
+          FILLS.map((c, i) => swatch(c, same(vecs, 'fill') === c && vecs.every(e => !e.fills), () => plain('fill', c), FILL_NAMES[i])), VIVID.map(c => swatch(c, same(vecs, 'fill') === c && vecs.every(e => !e.fills), () => plain('fill', c), null, true))),
+        solo ? layerEditor(solo, 'fill', num) : null));
+      out.push(sec('Stroke', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No stroke', 'aria-label': 'No stroke', 'aria-pressed': String(noStroke && vecs.every(e => !e.strokes)), onclick: () => plain('stroke', 'none') }),
+          swatch(C.ink, vecs.every(e => !e.stroke && !e.strokes), () => plain('stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(vecs, 'stroke') === c && vecs.every(e => !e.strokes), () => plain('stroke', c)))),
         h('div', { class: 'grid2' },
-          pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => setAll(vecs, 'sw', Number(v), true)),
-          pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true)))));
+          pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => plain('sw', Number(v), true)),
+          pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true))),
+        solo ? layerEditor(solo, 'stroke', num) : null));
       if (one && one.type === 'path') {
         const subs = one.paths || [], n = subs.reduce((a, sp) => a + sp.nodes.length, 0);
         out.push(sec('Vector',
@@ -1192,7 +1200,9 @@ function renderProps() {
     const combinable = free.filter(e => B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl));
     if (combinable.length >= 2) out.push(sec('Combine',
       h('div', { class: 'irow four' }, Object.entries(B.BOOL_LABELS).map(([op, label]) => h('button', { class: 'ibtn', title: label + (op === 'subtract' ? ': cut the upper shapes out of the bottom one' : ''), 'aria-label': label, onclick: () => boolOp(op) }, boolIcon(op)))),
-      h('div', { class: 'row' }, h('button', { class: 'fbtn', title: 'Join into one vector without merging the shapes', onclick: flattenSel }, 'Flatten'))));
+      h('div', { class: 'row' }, h('button', { class: 'fbtn', title: 'Join into one vector without merging the shapes', onclick: flattenSel }, 'Flatten'),
+        h('button', { class: 'fbtn', title: 'The bottom piece clips the others to its outline (Ctrl+Alt+M)', onclick: useAsMask }, 'Use as mask'))));
+    if (free.some(e => e.mask || e.masking)) out.push(sec('Mask', h('p', { class: 'hint' }, free.some(e => e.masking) ? 'This piece is a mask: its outline clips the pieces grouped with it.' : 'Clipped by a mask.'), h('button', { class: 'fbtn', onclick: releaseMask }, 'Release mask')));
     if (free.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl))) out.push(sec('Stroke to shape', h('button', { class: 'fbtn', onclick: outlineStroke }, 'Outline stroke'), h('p', { class: 'hint' }, 'Turns the stroke into a filled shape you can edit and combine.')));
     if (free.some(vectorable)) out.push(sec('Vector', h('button', { class: 'fbtn', onclick: () => toVector(free) }, 'Convert to vector'), h('p', { class: 'hint' }, 'Turns shapes and drawings into paths you can reshape node by node.')));
     if (one && one.type === 'table') {
@@ -1354,6 +1364,7 @@ function openMenu(ev) {
     boolPieces().length >= 2 ? ['Union', () => boolOp('union')] : null, boolPieces().length >= 2 ? ['Subtract', () => boolOp('subtract')] : null,
     boolPieces().length >= 2 ? ['Intersect', () => boolOp('intersect')] : null, boolPieces().length >= 2 ? ['Exclude', () => boolOp('exclude')] : null,
     boolPieces().length >= 2 ? ['Flatten', flattenSel] : null,
+    selEls().length >= 2 ? ['Use as mask', useAsMask] : null, selEls().some(e => e.mask || e.masking) ? ['Release mask', releaseMask] : null,
     list.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl)) ? ['Outline stroke', outlineStroke] : null,
     list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
     list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
@@ -1371,7 +1382,7 @@ const KEYS = [
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
-  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+E', 'Flatten the selection into one vector'], ['Ctrl+Shift+O', 'Outline stroke']]],
+  ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+E', 'Flatten the selection into one vector'], ['Ctrl+Shift+O', 'Outline stroke'], ['Ctrl+Alt+M', 'Use the bottom piece as a mask, or release it']]],
   ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {
@@ -1550,6 +1561,72 @@ function outlineStroke() {
     else { o.id = e.id; if (e.g) o.g = e.g; board.els[e.id] = o; made.push(o.id); }
   }
   sel = new Set(made); commit();
+}
+/**
+ * The bottom selected piece becomes a mask: it is no longer drawn and the other selected pieces are
+ * clipped to its outline. They are grouped so they move together.
+ */
+function useAsMask() {
+  if (editing) endEdit(); vedit = null;
+  const list = selEls().filter(e => !e.locked && e.type !== 'conn').sort((a, b) => a.z - b.z);
+  if (list.length < 2) return toast('Select the mask shape and the pieces to clip. The bottom one becomes the mask.');
+  const [m, ...rest] = list;
+  if (!B.BOOLEABLE.has(m.type) && m.type !== 'pen') return toast('The bottom piece needs to be a shape or vector to act as a mask.');
+  if (m.type !== 'path') toVector([m]);
+  const mask = E(m.id); mask.masking = true; delete mask.mask;
+  const g = uid('g'); mask.g = g;
+  for (const e of rest) { e.mask = mask.id; e.g = g; }
+  commit();
+}
+function releaseMask() {
+  const list = selEls(), ids = new Set(list.filter(e => e.masking).map(e => e.id).concat(list.map(e => e.mask).filter(Boolean)));
+  for (const e of all()) { if (ids.has(e.id)) delete e.masking; if (e.mask && ids.has(e.mask)) delete e.mask; }
+  commit();
+}
+let paintSel = null;
+/** Stores a path's fill layers, collapsing to a plain fill when one solid color is left. */
+function setFills(e, list) {
+  if (!list.length) { delete e.fills; e.fill = 'none'; }
+  else if (list.length === 1 && !PT.isGrad(list[0])) { delete e.fills; e.fill = list[0] || '#ffffff'; }
+  else { e.fills = list; e.fill = PT.colorOf(list[0]); }
+}
+/** Stores a path's stroke layers, collapsing to a plain stroke when one solid color is left. */
+function setStrokes(e, list) {
+  if (!list.length) { delete e.strokes; e.stroke = 'none'; }
+  else if (list.length === 1 && !PT.isGrad(list[0].paint)) { delete e.strokes; if (list[0].paint) e.stroke = list[0].paint; else delete e.stroke; e.sw = list[0].width; }
+  else { e.strokes = list; e.stroke = PT.colorOf(list[0].paint) || undefined; if (!e.stroke) delete e.stroke; e.sw = list[0].width; }
+}
+const hex6 = c => /^#[0-9a-f]{6}$/i.test(c || '') ? c : '#1d2530';
+/** Stacked fills or strokes for one vector, with an editor for the chosen layer: solid or gradient, stops, angle, width. */
+function layerEditor(e, kind, num) {
+  const isFill = kind === 'fill', list = isFill ? PT.fillLayers(e).slice() : PT.strokeLayers(e).map(l => ({ ...l }));
+  const paintOf = i => isFill ? list[i] : list[i] && list[i].paint, store = () => isFill ? setFills(e, list) : setStrokes(e, list);
+  const put = (i, p) => { if (isFill) list[i] = p; else list[i].paint = p; store(); };
+  const chosen = paintSel && paintSel.id === e.id && paintSel.k === kind && paintSel.i < list.length ? paintSel.i : -1;
+  const label = p => PT.isGrad(p) ? (p.kind === 'radial' ? 'Radial gradient' : 'Linear gradient') : (p || 'Default').toUpperCase();
+  const rows = list.length > 1 || PT.isGrad(paintOf(0) || '') || chosen >= 0 ? list.map((_, i) => h('div', { class: 'lrow' + (chosen === i ? ' on' : ''), role: 'button', tabindex: '0', onclick: () => { paintSel = chosen === i ? null : { id: e.id, k: kind, i }; renderProps(); } },
+      h('span', { class: 'lchip', style: 'background:' + PT.cssOf(paintOf(i), C.ink) }), h('span', { class: 'lname' }, label(paintOf(i)) + (isFill ? '' : ` · ${list[i].width} px`)),
+      h('button', { class: 'lx', title: 'Remove this layer', 'aria-label': 'Remove this layer', onclick: ev => { ev.stopPropagation(); list.splice(i, 1); store(); paintSel = null; commit(); } }, icon('M5 5l10 10M15 5L5 15', 12)))).reverse() : [];
+  let editor = null;
+  if (chosen >= 0) {
+    const p = paintOf(chosen), g = PT.isGrad(p) ? p : null;
+    const setKind = k => { const base = PT.colorOf(p) || C.ink; put(chosen, k === 'solid' ? base : g ? { ...g, kind: k } : PT.gradientFrom(hex6(base), k)); commit(); };
+    const colorIn = (val, fn, label2) => h('input', { type: 'color', class: 'cin', value: hex6(val), 'aria-label': label2, oninput: ev => { fn(ev.target.value); draw(); }, onchange: () => holdCommit() });
+    editor = h('div', { class: 'peditor' },
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Paint type' }, [['solid', 'Solid'], ['linear', 'Linear'], ['radial', 'Radial']].map(([k, l]) => h('button', { 'aria-pressed': String(g ? g.kind === k : k === 'solid'), onclick: () => setKind(k) }, l))),
+      !g ? h('div', { class: 'row' }, colorIn(p, v => put(chosen, v), 'Color'), h('span', { class: 'hint' }, 'Any color')) : [
+        g.kind === 'linear' ? num('grad-angle', 'Angle', 'Gradient angle in degrees', () => Math.round(g.angle) + '°', v => put(chosen, { ...g, angle: ((Math.round(v) % 360) + 360) % 360 })) : null,
+        ...g.stops.map(([o, col], si) => h('div', { class: 'stop' },
+          colorIn(col, v => { const st = g.stops.map(x => [...x]); st[si][1] = v; put(chosen, { ...g, stops: st }); }, `Stop ${si + 1} color`),
+          num('grad-stop-' + si, 'At', `Stop ${si + 1} position in percent`, () => Math.round(o * 100) + '%', v => { const st = g.stops.map(x => [...x]); st[si][0] = Math.max(0, Math.min(1, v / 100)); put(chosen, { ...g, stops: st }); }),
+          h('button', { class: 'lx', disabled: g.stops.length <= 2, title: 'Remove stop', 'aria-label': 'Remove stop', onclick: () => { put(chosen, PT.removeStop(g, si)); commit(); } }, icon('M5 5l10 10M15 5L5 15', 12)))),
+        h('button', { class: 'fbtn', onclick: () => { put(chosen, PT.addStop(g)); commit(); } }, 'Add stop')],
+      isFill ? null : num('stroke-w-' + chosen, 'Width', 'Stroke width', () => String(list[chosen].width), v => { list[chosen].width = Math.max(0.25, Math.min(200, v)); store(); }));
+  }
+  return [h('div', { class: 'layers' }, rows), editor,
+    h('div', { class: 'row' },
+      h('button', { class: 'fbtn', onclick: () => { const top = list.length ? paintOf(list.length - 1) : (isFill ? '#ffffff' : ''); const np = PT.gradientFrom(hex6(PT.colorOf(top) || '#2447d6')); if (isFill) list.push(np); else list.push({ paint: np, width: list.length ? list[list.length - 1].width + 4 : 2 }); store(); paintSel = { id: e.id, k: kind, i: list.length - 1 }; commit(); } }, isFill ? 'Add fill' : 'Add stroke'),
+      list.length === 1 && chosen < 0 && !PT.isGrad(paintOf(0)) ? h('button', { class: 'fbtn', onclick: () => { paintSel = { id: e.id, k: kind, i: 0 }; renderProps(); } }, 'Gradient or custom color') : null)];
 }
 /** Small two-square pictures for the combine buttons, filled where the result has area. */
 function boolIcon(op) {
