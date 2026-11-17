@@ -27,6 +27,8 @@ import * as V from './vector';
 import * as B from './boolean';
 import { BRUSHES, brushOutline, outlineD, shaped, eraseStroke, touches } from './brush';
 import * as PT from './paint';
+import * as PO from './pathops';
+import * as X from './exact';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -1204,6 +1206,15 @@ function renderProps() {
         h('button', { class: 'fbtn', title: 'The bottom piece clips the others to its outline (Ctrl+Alt+M)', onclick: useAsMask }, 'Use as mask'))));
     if (free.some(e => e.mask || e.masking)) out.push(sec('Mask', h('p', { class: 'hint' }, free.some(e => e.masking) ? 'This piece is a mask: its outline clips the pieces grouped with it.' : 'Clipped by a mask.'), h('button', { class: 'fbtn', onclick: releaseMask }, 'Release mask')));
     if (free.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl))) out.push(sec('Stroke to shape', h('button', { class: 'fbtn', onclick: outlineStroke }, 'Outline stroke'), h('p', { class: 'hint' }, 'Turns the stroke into a filled shape you can edit and combine.')));
+    if (PO.ready() && free.some(e => e.type === 'path')) out.push(sec('Path',
+      h('div', { class: 'row' },
+        h('input', { class: 'nin', type: 'number', min: 0, step: 1, value: offsetBy, 'aria-label': 'Offset distance', title: 'Offset distance', oninput: ev => { const v = Number(ev.target.value); if (isFinite(v)) offsetBy = v; } }),
+        h('button', { class: 'fbtn', title: 'Shrink by the distance', onclick: () => pathEdit('offset', -Math.abs(offsetBy)) }, 'Inset'),
+        h('button', { class: 'fbtn', title: 'Grow by the distance', onclick: () => pathEdit('offset', Math.abs(offsetBy)) }, 'Outset')),
+      h('div', { class: 'row' },
+        h('button', { class: 'fbtn', title: 'Fewer nodes, same outline', onclick: () => pathEdit('simplify', 1.5) }, 'Simplify'),
+        h('button', { class: 'fbtn', title: 'Round off jags and corners', onclick: () => pathEdit('smooth', 0.5) }, 'Smooth')),
+      h('p', { class: 'hint' }, 'Exact path tools from VectorCraft.')));
     if (free.some(vectorable)) out.push(sec('Vector', h('button', { class: 'fbtn', onclick: () => toVector(free) }, 'Convert to vector'), h('p', { class: 'hint' }, 'Turns shapes and drawings into paths you can reshape node by node.')));
     if (one && one.type === 'table') {
       const tb = one;
@@ -1366,6 +1377,8 @@ function openMenu(ev) {
     boolPieces().length >= 2 ? ['Flatten', flattenSel] : null,
     selEls().length >= 2 ? ['Use as mask', useAsMask] : null, selEls().some(e => e.mask || e.masking) ? ['Release mask', releaseMask] : null,
     list.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl)) ? ['Outline stroke', outlineStroke] : null,
+    PO.ready() && list.some(e => e.type === 'path') ? ['Simplify path', () => pathEdit('simplify', 1.5)] : null,
+    PO.ready() && list.some(e => e.type === 'path') ? ['Smooth path', () => pathEdit('smooth', 0.5)] : null,
     list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
     list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
     ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
@@ -1523,9 +1536,11 @@ function replaceWith(list, e) {
 function boolOp(op) {
   if (editing) endEdit(); vedit = null;
   const list = boolPieces(); if (list.length < 2) return toast('Select two or more shapes to combine.');
-  let region;
-  try { region = B.combine(op, list.map(e => B.regionOf(B.outlineOf(e)))); } catch (err) { return toast('Those shapes could not be combined.'); }
-  const subs = B.subsOfRegion(region);
+  // VectorCraft's engine keeps curves exact; the polygon version is the fallback.
+  let subs = X.combine(op, list.map(e => ({ subs: B.outlineOf(e), evenodd: e.type === 'path' && e.rule === 'evenodd' })));
+  if (!subs) {
+    try { subs = B.subsOfRegion(B.combine(op, list.map(e => B.regionOf(B.outlineOf(e))))); } catch (err) { return toast('Those shapes could not be combined.'); }
+  }
   if (!subs.length) { replaceWith(list, null); commit(); return toast('Nothing is left after ' + B.BOOL_LABELS[op].toLowerCase() + '. Undo to bring the shapes back.'); }
   const base = list[0], e = { id: uid('e'), type: 'path', z: base.z, x: 0, y: 0, w: 0, h: 0, rule: 'evenodd', ...styleFrom(base) };
   if (!e.fill || e.fill === 'none') e.fill = '#ffffff';
@@ -1551,10 +1566,15 @@ function outlineStroke() {
     let subs;
     try {
       if (e.type === 'pen' && shaped(e.brush)) { const sp = B.refitRing(brushOutline(e.pts, e.sw || BRUSHES[e.brush].width, e.brush).map(q => [e.x + q[0], e.y + q[1]])); subs = sp ? [sp] : []; }
-      else subs = B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75));
+      else {
+        const exact = X.outlineStroke(B.outlineOf(e), width, 'round', 'round');
+        subs = exact || B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75));
+      }
     } catch (err) { continue; }
     if (!subs.length) continue;
-    const o = { id: uid('e'), type: 'path', z: e.z, x: 0, y: 0, w: 0, h: 0, rule: 'evenodd', fill: color, stroke: 'none' };
+    // The engine's outlines overlap where a stroke crosses itself, so they fill nonzero.
+    const o = { id: uid('e'), type: 'path', z: e.z, x: 0, y: 0, w: 0, h: 0, fill: color, stroke: 'none' };
+    if (!PO.ready() || (e.type === 'pen' && shaped(e.brush))) o.rule = 'evenodd';
     V.setWorldPaths(o, subs);
     if (e.type === 'pen' && shaped(e.brush) && e.rot) o.rot = e.rot;
     if (e.type === 'path' && e.fill && e.fill !== 'none') { e.stroke = 'none'; o.z = topZ() + 1; const g = e.g || uid('g'); e.g = o.g = g; board.els[o.id] = o; made.push(e.id, o.id); }
@@ -1562,6 +1582,24 @@ function outlineStroke() {
   }
   sel = new Set(made); commit();
 }
+/** Offset, simplify, or smooth the selected vectors with VectorCraft's engine. Rotation is kept. */
+function pathEdit(kind, amount) {
+  if (editing) endEdit(); vedit = null;
+  const list = selEls().filter(e => !e.locked && e.type === 'path'); if (!list.length) return;
+  let changed = 0;
+  for (const e of list) {
+    const subs = V.worldPaths(e);
+    const out = kind === 'offset' ? X.offset(subs, amount) : kind === 'simplify' ? X.simplify(subs, amount) : X.smooth(subs, amount);
+    if (!out || !out.length) continue;
+    const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+    V.setWorldPaths(e, out);
+    if (kind !== 'offset' && e.rot) { e.x = Math.round(cx - e.w / 2); e.y = Math.round(cy - e.h / 2); }
+    changed++;
+  }
+  if (!changed) return toast(kind === 'offset' && amount < 0 ? 'The shape is too small to shrink that far.' : 'That vector could not be changed.');
+  commit();
+}
+let offsetBy = 8;
 /**
  * The bottom selected piece becomes a mask: it is no longer drawn and the other selected pieces are
  * clipped to its outline. They are grouped so they move together.
@@ -1906,6 +1944,7 @@ if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEven
 new MutationObserver(() => { if (board) draw(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 (async () => {
   await Store.init();
+  PO.init().then(ok => { if (ok && board) renderProps(); });
   let idx = await Store.get('index');
   if (!idx && Store.mode === 'cloud' && Store.local('index')) { idx = Store.local('index'); for (const b of idx.boards) { const d = Store.local('b_' + b.id); if (d) Store.put('b_' + b.id, d); } Store.put('index', idx); }
   if (!idx) { idx = seed(); Store.put('index', idx); }

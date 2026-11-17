@@ -280,3 +280,66 @@ export function fromRings(rings: number[][][], eps = 0.05): SubPath[] {
     return { closed: true as const, nodes: pts.map(([x, y]) => ({ x: r2(x), y: r2(y) })) };
   }).filter(sp => sp.nodes.length >= 3);
 }
+
+/**
+ * Reads SVG path data with absolute M, L, H, V, Q, C, and Z commands (what VectorCraft's engine
+ * writes) into subpaths. Quadratic curves become cubics; a closing point that repeats the start is
+ * merged into the first node.
+ */
+export function fromD(d: string): SubPath[] {
+  const tokens = d.match(/[MLHVQCZmlhvqcz]|-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) || [];
+  const subs: SubPath[] = [];
+  let i = 0, cmd = '', cur: SubPath | null = null, x = 0, y = 0;
+  const num = () => Number(tokens[i++]);
+  const close = () => {
+    if (!cur) return;
+    const ns = cur.nodes, a = ns[0], b = ns[ns.length - 1];
+    if (cur.closed && ns.length > 1 && Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6) {
+      if (b.ix != null) { a.ix = b.ix; a.iy = b.iy; }
+      ns.pop();
+    }
+    if (ns.length >= 2) subs.push(cur);
+    cur = null;
+  };
+  while (i < tokens.length) {
+    if (/^[a-z]$/i.test(tokens[i])) cmd = tokens[i++];
+    const C = cmd.toUpperCase();
+    if (C === 'Z') { if (cur) cur.closed = true; close(); cmd = ''; continue; }
+    if (C === 'M') { close(); x = num(); y = num(); cur = { nodes: [{ x: r2(x), y: r2(y) }] }; cmd = 'L'; continue; }
+    if (!cur) { cur = { nodes: [{ x: r2(x), y: r2(y) }] }; }
+    const last = cur.nodes[cur.nodes.length - 1];
+    if (C === 'L' || C === 'H' || C === 'V') {
+      if (C === 'L') { x = num(); y = num(); } else if (C === 'H') x = num(); else y = num();
+      cur.nodes.push({ x: r2(x), y: r2(y) });
+    } else if (C === 'C') {
+      const x1 = num(), y1 = num(), x2 = num(), y2 = num(); x = num(); y = num();
+      last.ox = r2(x1); last.oy = r2(y1); cur.nodes.push({ x: r2(x), y: r2(y), ix: r2(x2), iy: r2(y2) });
+    } else if (C === 'Q') {
+      const qx = num(), qy = num(), px = last.x, py = last.y; x = num(); y = num();
+      last.ox = r2(px + (2 / 3) * (qx - px)); last.oy = r2(py + (2 / 3) * (qy - py));
+      cur.nodes.push({ x: r2(x), y: r2(y), ix: r2(x + (2 / 3) * (qx - x)), iy: r2(y + (2 / 3) * (qy - y)) });
+    } else { i++; }
+  }
+  close();
+  // Drop zero-length steps: a repeated point merges into the node before it.
+  for (const sp of subs) {
+    const out: VNode[] = [];
+    for (const n of sp.nodes) {
+      const p = out[out.length - 1];
+      if (p && Math.abs(p.x - n.x) < 1e-6 && Math.abs(p.y - n.y) < 1e-6 && (n.ix == null || (n.ix === n.x && n.iy === n.y))) {
+        if (n.ox != null) { p.ox = n.ox; p.oy = n.oy; }
+        continue;
+      }
+      out.push(n);
+    }
+    sp.nodes = out;
+  }
+  // Nodes whose handles line up are smooth, so editing them keeps the curve.
+  for (const sp of subs) for (const n of sp.nodes) {
+    if (n.ix == null || n.ox == null) continue;
+    const a = Math.atan2(n.y - n.iy!, n.x - n.ix), b = Math.atan2(n.oy! - n.y, n.ox - n.x);
+    let dd = Math.abs(a - b); if (dd > Math.PI) dd = 2 * Math.PI - dd;
+    if (dd < 0.02) n.s = true;
+  }
+  return subs;
+}

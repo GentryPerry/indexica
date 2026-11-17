@@ -1,0 +1,14 @@
+[package]
+name = "ixops"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Indexica's bridge to VectorCraft's path operations (booleans, outline stroke, offset, simplify, smooth)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vectorcraft-pathops = { path = "../vc-pathops" }
+vectorcraft-geom = { path = "../vc-geom" }
+kurbo = "0.13"

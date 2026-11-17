@@ -1,0 +1,11 @@
+[package]
+name = "vectorcraft-geom"
+version = "0.24.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "VectorCraft geom (copied unchanged from github.com/storytold/vectorcraft at 36b5a59)"
+
+[dependencies]
+kurbo = { version = "0.13", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+thiserror = "2"

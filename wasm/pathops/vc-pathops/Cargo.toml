@@ -1,0 +1,12 @@
+[package]
+name = "vectorcraft-pathops"
+version = "0.24.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "VectorCraft path operations (copied unchanged from github.com/storytold/vectorcraft at 36b5a59)"
+
+[dependencies]
+vectorcraft-geom = { path = "../vc-geom" }
+kurbo = { version = "0.13", features = ["serde"] }
+thiserror = "2"
+linesweeper = "0.5"
