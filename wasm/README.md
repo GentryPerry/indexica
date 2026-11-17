@@ -21,6 +21,6 @@ npx -y -p binaryen wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --enable-
 ## Protocol
 
 `ix_run(ptr, len)` takes UTF-8 text: the operation on line 1 (union, subtract, intersect, exclude,
-outline, offset, simplify, smooth), its numbers on line 2, then one SVG path per line (prefix `E `
+outline, offset, simplify, smooth, smoothlevel), its numbers on line 2, then one SVG path per line (prefix `E `
 for even-odd). It returns 0 and leaves one SVG path at `ix_out_ptr()`/`ix_out_len()`, or 1 and an
 `ERR` line.

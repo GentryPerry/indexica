@@ -41,8 +41,13 @@ export function simplify(subs: SubPath[], tolerance = 1): SubPath[] | null {
   return parse(run('simplify', [tolerance], [{ d: pathD(subs) }]));
 }
 
-/** Rounds corners into curves; amount runs from 0 to 1. */
-export function smooth(subs: SubPath[], amount = 0.5): SubPath[] | null {
+/**
+ * VectorCraft's Smooth: bumps and jags give way to one curve, then the path is refitted with no more
+ * nodes than it had. `level` runs from 0 (barely) to 100 (most). Engines built before that command
+ * existed fall back to pulling each node's handles toward a smooth tangent.
+ */
+export function smooth(subs: SubPath[], level = 50): SubPath[] | null {
   if (!subs.length) return null;
-  return parse(run('smooth', [amount], [{ d: pathD(subs) }]));
+  const d = pathD(subs);
+  return parse(run('smoothlevel', [level], [{ d }]) ?? run('smooth', [Math.min(1, level / 100)], [{ d }]));
 }

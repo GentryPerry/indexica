@@ -1177,6 +1177,8 @@ function renderProps() {
     const vecs = of(['path']);
     if (vecs.length) {
       const widths = [[0.5, '0.5 px'], [1, '1 px'], [1.5, '1.5 px'], [2, '2 px'], [3, '3 px'], [4, '4 px'], [6, '6 px'], [8, '8 px'], [12, '12 px']];
+      const curW = same(vecs, 'sw');
+      if (curW && !widths.some(w => w[0] === curW)) { widths.push([curW, r2(curW) + ' px']); widths.sort((a, b) => a[0] - b[0]); }
       const noFill = vecs.every(e => !e.fill || e.fill === 'none'), noStroke = vecs.every(e => e.stroke === 'none');
       // Picking a swatch sets one plain color and drops any stacked layers.
       const plain = (key, val, field) => { vecs.forEach(e => { delete e[key === 'sw' ? 'strokes' : key + 's']; }); setAll(vecs, key, val, field); };
@@ -1190,14 +1192,6 @@ function renderProps() {
           pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => plain('sw', Number(v), true)),
           pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true))),
         solo ? layerEditor(solo, 'stroke', num) : null));
-      if (one && one.type === 'path') {
-        const subs = one.paths || [], n = subs.reduce((a, sp) => a + sp.nodes.length, 0);
-        out.push(sec('Vector',
-          h('div', { class: 'row' },
-            h('button', { class: 'fbtn', 'aria-pressed': String(!!vedit), disabled: !!one.locked, onclick: () => vedit ? exitVedit() : enterVedit(one.id) }, vedit ? 'Done editing' : 'Edit nodes'),
-            subs.length === 1 ? h('button', { class: 'fbtn', 'aria-pressed': String(!!subs[0].closed), disabled: !!one.locked, onclick: () => { if (subs[0].closed) delete subs[0].closed; else subs[0].closed = true; fitPath(one); commit(); } }, 'Closed shape') : null),
-          h('p', { class: 'hint' }, `${n} nodes${subs.length > 1 ? ' in ' + subs.length + ' parts' : ''}. ` + (vedit ? 'Drag nodes and handles. Click the outline to add a node; double-click a node to switch corner and smooth.' : 'Double-click the vector or press Enter to reshape it.'))));
-      }
     }
     const combinable = free.filter(e => B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl));
     if (combinable.length >= 2) out.push(sec('Combine',
@@ -1205,17 +1199,8 @@ function renderProps() {
       h('div', { class: 'row' }, h('button', { class: 'fbtn', title: 'Join into one vector without merging the shapes', onclick: flattenSel }, 'Flatten'),
         h('button', { class: 'fbtn', title: 'The bottom piece clips the others to its outline (Ctrl+Alt+M)', onclick: useAsMask }, 'Use as mask'))));
     if (free.some(e => e.mask || e.masking)) out.push(sec('Mask', h('p', { class: 'hint' }, free.some(e => e.masking) ? 'This piece is a mask: its outline clips the pieces grouped with it.' : 'Clipped by a mask.'), h('button', { class: 'fbtn', onclick: releaseMask }, 'Release mask')));
-    if (free.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl))) out.push(sec('Stroke to shape', h('button', { class: 'fbtn', onclick: outlineStroke }, 'Outline stroke'), h('p', { class: 'hint' }, 'Turns the stroke into a filled shape you can edit and combine.')));
-    if (PO.ready() && free.some(e => e.type === 'path')) out.push(sec('Path',
-      h('div', { class: 'row' },
-        h('input', { class: 'nin', type: 'number', min: 0, step: 1, value: offsetBy, 'aria-label': 'Offset distance', title: 'Offset distance', oninput: ev => { const v = Number(ev.target.value); if (isFinite(v)) offsetBy = v; } }),
-        h('button', { class: 'fbtn', title: 'Shrink by the distance', onclick: () => pathEdit('offset', -Math.abs(offsetBy)) }, 'Inset'),
-        h('button', { class: 'fbtn', title: 'Grow by the distance', onclick: () => pathEdit('offset', Math.abs(offsetBy)) }, 'Outset')),
-      h('div', { class: 'row' },
-        h('button', { class: 'fbtn', title: 'Fewer nodes, same outline', onclick: () => pathEdit('simplify', 1.5) }, 'Simplify'),
-        h('button', { class: 'fbtn', title: 'Round off jags and corners', onclick: () => pathEdit('smooth', 0.5) }, 'Smooth')),
-      h('p', { class: 'hint' }, 'Exact path tools from VectorCraft.')));
-    if (free.some(vectorable)) out.push(sec('Vector', h('button', { class: 'fbtn', onclick: () => toVector(free) }, 'Convert to vector'), h('p', { class: 'hint' }, 'Turns shapes and drawings into paths you can reshape node by node.')));
+    const vsec = vectorSection(free, one, num);
+    if (vsec) out.push(vsec);
     if (one && one.type === 'table') {
       const tb = one;
       const resize = (cells, dr, dc) => { const r0 = rowsOf(tb), c0 = colsOf(tb); if (dc && tb.colw) tb.colw = dc > 0 ? sharesWithCol(colFractions(tb), c0) : sharesWithoutCol(colFractions(tb), c0 - 1); tb.cells = cells; if (dr) tb.h = Math.round(tb.h / r0 * (r0 + dr)); if (dc) tb.w = Math.round(tb.w / c0 * (c0 + dc)); fitText(tb); commit(); };
@@ -1376,9 +1361,9 @@ function openMenu(ev) {
     boolPieces().length >= 2 ? ['Intersect', () => boolOp('intersect')] : null, boolPieces().length >= 2 ? ['Exclude', () => boolOp('exclude')] : null,
     boolPieces().length >= 2 ? ['Flatten', flattenSel] : null,
     selEls().length >= 2 ? ['Use as mask', useAsMask] : null, selEls().some(e => e.mask || e.masking) ? ['Release mask', releaseMask] : null,
-    list.some(e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl)) ? ['Outline stroke', outlineStroke] : null,
-    PO.ready() && list.some(e => e.type === 'path') ? ['Simplify path', () => pathEdit('simplify', 1.5)] : null,
-    PO.ready() && list.some(e => e.type === 'path') ? ['Smooth path', () => pathEdit('smooth', 0.5)] : null,
+    list.some(strokable) ? ['Outline stroke', outlineStroke] : null,
+    PO.ready() && list.some(e => e.type === 'path') ? ['Simplify', () => pathEdit('simplify')] : null,
+    PO.ready() && list.some(e => e.type === 'path') ? ['Smooth', () => pathEdit('smooth')] : null,
     list.length === 1 && list[0].type === 'frame' ? [list[0].slide ? 'Remove from slides' : 'Use as slide', () => { SL.setSlide(board.els, list[0], !list[0].slide); commit(); }] : null,
     list.length === 1 && list[0].slide ? ['Present from here', () => present(SL.slidesOf(board.els).indexOf(list[0]))] : null,
     ['Duplicate', () => { copySel(); pasteEls(clip, 24); }], ['Copy', copySel], '-',
@@ -1404,7 +1389,8 @@ function toggleHelp() {
     h('div', { class: 'help-b', role: 'dialog', 'aria-label': 'Keyboard shortcuts' },
       h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { class: 'btn', onclick: toggleHelp }, 'Close')),
       h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
-      h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'))));
+      h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'),
+      h('p', { class: 'note credit' }, 'Vector booleans, outline stroke, offset, simplify, and smooth use the path engine from VectorCraft (MIT or Apache-2.0), by the ArtCraft Team and the VectorCraft contributors.'))));
 }
 
 /* ---------- Vector pen and node editing ---------- */
@@ -1559,22 +1545,22 @@ function flattenSel() {
 /** Turns strokes into filled shapes. A filled vector keeps its fill and gets its outline as a separate piece. */
 function outlineStroke() {
   if (editing) endEdit(); vedit = null;
-  const list = selEls().filter(e => !e.locked && ((e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl))); if (!list.length) return;
+  const list = selEls().filter(e => !e.locked && strokable(e)); if (!list.length) return;
   const made = [];
   for (const e of list) {
     const width = e.type === 'pen' ? e.sw || 2.5 : e.sw ?? 2, color = e.stroke && e.stroke !== 'none' ? e.stroke : '#1d2530';
-    let subs;
+    let subs, exact = null;
     try {
       if (e.type === 'pen' && shaped(e.brush)) { const sp = B.refitRing(brushOutline(e.pts, e.sw || BRUSHES[e.brush].width, e.brush).map(q => [e.x + q[0], e.y + q[1]])); subs = sp ? [sp] : []; }
       else {
-        const exact = X.outlineStroke(B.outlineOf(e), width, 'round', 'round');
+        exact = X.outlineStroke(B.outlineOf(e), width, 'round', 'round');
         subs = exact || B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75));
       }
     } catch (err) { continue; }
     if (!subs.length) continue;
     // The engine's outlines overlap where a stroke crosses itself, so they fill nonzero.
     const o = { id: uid('e'), type: 'path', z: e.z, x: 0, y: 0, w: 0, h: 0, fill: color, stroke: 'none' };
-    if (!PO.ready() || (e.type === 'pen' && shaped(e.brush))) o.rule = 'evenodd';
+    if (!exact) o.rule = 'evenodd';
     V.setWorldPaths(o, subs);
     if (e.type === 'pen' && shaped(e.brush) && e.rot) o.rot = e.rot;
     if (e.type === 'path' && e.fill && e.fill !== 'none') { e.stroke = 'none'; o.z = topZ() + 1; const g = e.g || uid('g'); e.g = o.g = g; board.els[o.id] = o; made.push(e.id, o.id); }
@@ -1582,24 +1568,82 @@ function outlineStroke() {
   }
   sel = new Set(made); commit();
 }
-/** Offset, simplify, or smooth the selected vectors with VectorCraft's engine. Rotation is kept. */
-function pathEdit(kind, amount) {
+const strokable = e => (e.type === 'path' && e.stroke !== 'none') || (e.type === 'pen' && !e.hl);
+const pathSel = () => selEls().filter(e => !e.locked && e.type === 'path');
+const allClosed = e => (e.paths || []).length > 0 && e.paths.every(sp => sp.closed);
+/** Simplify or smooth the selected vectors. Rotated vectors stay where they are. */
+function pathEdit(kind) {
   if (editing) endEdit(); vedit = null;
-  const list = selEls().filter(e => !e.locked && e.type === 'path'); if (!list.length) return;
+  const list = pathSel(); if (!list.length) return;
   let changed = 0;
   for (const e of list) {
-    const subs = V.worldPaths(e);
-    const out = kind === 'offset' ? X.offset(subs, amount) : kind === 'simplify' ? X.simplify(subs, amount) : X.smooth(subs, amount);
+    const before = JSON.stringify(e.paths);
+    const out = kind === 'simplify' ? X.simplify(V.worldPaths(e), 1.5) : X.smooth(V.worldPaths(e), 50);
     if (!out || !out.length) continue;
-    const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
-    V.setWorldPaths(e, out);
-    if (kind !== 'offset' && e.rot) { e.x = Math.round(cx - e.w / 2); e.y = Math.round(cy - e.h / 2); }
-    changed++;
+    V.placeWorldPaths(e, out);
+    if (JSON.stringify(e.paths) !== before) changed++;
   }
-  if (!changed) return toast(kind === 'offset' && amount < 0 ? 'The shape is too small to shrink that far.' : 'That vector could not be changed.');
+  if (!changed) return toast(kind === 'simplify' ? 'Already as simple as it can be without changing shape.' : 'Already smooth.');
   commit();
 }
-let offsetBy = 8;
+/**
+ * Offset is live: each value is applied to the shapes as they were when editing began, so typing or
+ * stepping with the arrow keys previews the result. Enter or leaving the field keeps it; Esc puts
+ * the shapes back.
+ */
+let offsetSnap = null;
+function offsetPreview(dist) {
+  const list = pathSel().filter(allClosed); if (!list.length) return;
+  if (!offsetSnap) offsetSnap = new Map(list.map(e => [e.id, clone({ x: e.x, y: e.y, w: e.w, h: e.h, vw: e.vw, vh: e.vh, paths: e.paths })]));
+  for (const e of list) {
+    const snap = offsetSnap.get(e.id); if (!snap) continue;
+    Object.assign(e, clone(snap));
+    if (dist) { const out = X.offset(V.worldPaths(e), dist); if (out && out.length) V.placeWorldPaths(e, out); }
+  }
+  draw();
+}
+function offsetEnd(keep) {
+  if (!offsetSnap) return;
+  if (!keep) for (const [id, snap] of offsetSnap) if (board.els[id]) Object.assign(board.els[id], snap);
+  offsetSnap = null;
+  if (keep) holdCommit(); else draw();
+}
+function offsetField() {
+  const closed = pathSel().every(allClosed);
+  const title = closed ? 'Grow the shape by a distance, or shrink it with a negative one. Arrow keys step by 1 (Shift for 10).' : 'Offset works on closed shapes';
+  const val = el => { const v = parseFloat(String(el.value).replace(/[^0-9.\-]/g, '')); return Number.isFinite(v) ? v : 0; };
+  const inp = h('input', { type: 'text', inputmode: 'decimal', id: 'vec-offset', value: '0', 'aria-label': 'Offset', disabled: !closed,
+    oninput: ev => offsetPreview(val(ev.target)),
+    onkeydown: ev => {
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') { ev.preventDefault(); const v = r2(val(ev.target) + (ev.key === 'ArrowUp' ? 1 : -1) * (ev.shiftKey ? 10 : 1)); ev.target.value = String(v); offsetPreview(v); }
+      else if (ev.key === 'Enter') ev.target.blur();
+      else if (ev.key === 'Escape') { ev.stopPropagation(); offsetEnd(false); ev.target.value = '0'; ev.target.blur(); }
+    },
+    onblur: ev => { offsetEnd(true); ev.target.value = '0'; } });
+  return h('label', { class: 'field' + (closed ? '' : ' off'), title }, h('span', null, 'Offset'), inp);
+}
+/** One Vector section for everything that reshapes paths: node editing, path tools, and conversion. */
+function vectorSection(free, one, num) {
+  const paths = free.filter(e => e.type === 'path'), solo = one && one.type === 'path' && !one.locked ? one : null;
+  const canStroke = free.some(strokable), canConvert = free.some(vectorable), exact = PO.ready() && paths.length > 0;
+  if (!paths.length && !canStroke && !canConvert) return null;
+  const btn = (label, title, fn, extra) => h('button', { class: 'fbtn', title, onclick: fn, ...extra }, label);
+  const kids = [];
+  if (solo) {
+    const subs = solo.paths || [], n = subs.reduce((a, sp) => a + sp.nodes.length, 0);
+    kids.push(h('div', { class: 'grid2' },
+      btn(vedit ? 'Done editing' : 'Edit nodes', 'Reshape node by node (Enter)', () => vedit ? exitVedit() : enterVedit(solo.id), { 'aria-pressed': String(!!vedit) }),
+      subs.length === 1 ? btn('Closed shape', 'Join the last node to the first', () => { if (subs[0].closed) delete subs[0].closed; else subs[0].closed = true; fitPath(solo); commit(); }, { 'aria-pressed': String(!!subs[0].closed) }) : h('span')));
+    kids.push(h('p', { class: 'hint' }, `${n} nodes${subs.length > 1 ? ' in ' + subs.length + ' parts' : ''}. ` + (vedit ? 'Drag nodes and handles. Click the outline to add a node; double-click a node to switch corner and smooth.' : 'Double-click the vector or press Enter to reshape it.')));
+  }
+  const tools = [];
+  if (exact) tools.push(btn('Simplify', 'Fewer nodes, same outline', () => pathEdit('simplify')), btn('Smooth', 'Even out bumps and jags; click again for more', () => pathEdit('smooth')));
+  if (canStroke) tools.push(btn('Outline stroke', 'Turn the stroke into a filled shape you can edit and combine (Ctrl+Shift+O)', outlineStroke));
+  if (exact) tools.push(offsetField());
+  if (canConvert) tools.push(btn('Convert to vector', 'Turn shapes and drawings into paths you can reshape node by node', () => toVector(free)));
+  if (tools.length) kids.push(h('div', { class: 'grid2' }, tools));
+  return h('section', { class: 'psec' }, h('h3', null, 'Vector'), ...kids);
+}
 /**
  * The bottom selected piece becomes a mask: it is no longer drawn and the other selected pieces are
  * clipped to its outline. They are grouped so they move together.
@@ -1664,7 +1708,7 @@ function layerEditor(e, kind, num) {
   return [h('div', { class: 'layers' }, rows), editor,
     h('div', { class: 'row' },
       h('button', { class: 'fbtn', onclick: () => { const top = list.length ? paintOf(list.length - 1) : (isFill ? '#ffffff' : ''); const np = PT.gradientFrom(hex6(PT.colorOf(top) || '#2447d6')); if (isFill) list.push(np); else list.push({ paint: np, width: list.length ? list[list.length - 1].width + 4 : 2 }); store(); paintSel = { id: e.id, k: kind, i: list.length - 1 }; commit(); } }, isFill ? 'Add fill' : 'Add stroke'),
-      list.length === 1 && chosen < 0 && !PT.isGrad(paintOf(0)) ? h('button', { class: 'fbtn', onclick: () => { paintSel = { id: e.id, k: kind, i: 0 }; renderProps(); } }, 'Gradient or custom color') : null)];
+      list.length === 1 && chosen < 0 && !PT.isGrad(paintOf(0)) ? h('button', { class: 'fbtn', title: 'Gradient or custom color', onclick: () => { paintSel = { id: e.id, k: kind, i: 0 }; renderProps(); } }, 'Gradient or color') : null)];
 }
 /** Small two-square pictures for the combine buttons, filled where the result has area. */
 function boolIcon(op) {
@@ -1940,11 +1984,12 @@ window.addEventListener('pointerdown', ev => { if (!(ev.target.closest && ev.tar
 window.addEventListener('keyup', ev => { if (ev.key === ' ') { spaceDown = false; if (cv) cv.classList.remove('pan'); } });
 window.addEventListener('pagehide', () => { if (board) saveNow(); });
 applyTheme(themePref());
+// The vector engine loads alongside storage; panels that offer its tools refresh once it is ready.
+PO.init().then(ok => { if (ok && board) renderProps(); });
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (board) draw(); });
 new MutationObserver(() => { if (board) draw(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 (async () => {
   await Store.init();
-  PO.init().then(ok => { if (ok && board) renderProps(); });
   let idx = await Store.get('index');
   if (!idx && Store.mode === 'cloud' && Store.local('index')) { idx = Store.local('index'); for (const b of idx.boards) { const d = Store.local('b_' + b.id); if (d) Store.put('b_' + b.id, d); } Store.put('index', idx); }
   if (!idx) { idx = seed(); Store.put('index', idx); }

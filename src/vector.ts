@@ -112,6 +112,21 @@ export function setWorldPaths(e: El, subs: SubPath[]) {
   e.x = r2(b.x); e.y = r2(b.y); e.w = e.vw = r2(b.w); e.h = e.vh = r2(b.h);
 }
 
+/**
+ * Like setWorldPaths, for a path whose geometry changed in its own (unrotated) frame: when the
+ * element is rotated, the box is shifted so that every unchanged point stays where it was drawn,
+ * rather than the shape swinging about its new center.
+ */
+export function placeWorldPaths(e: El, subs: SubPath[]) {
+  const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+  setWorldPaths(e, subs);
+  if (!e.rot) return;
+  const a = (e.rot * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  const dx = e.x + e.w / 2 - cx, dy = e.y + e.h / 2 - cy;
+  e.x = r2(e.x + (c - 1) * dx - s * dy);
+  e.y = r2(e.y + s * dx + (c - 1) * dy);
+}
+
 /** Bakes the element's stretch and rotation into its nodes, leaving rot unset and vw = w. */
 export function normalize(e: El) {
   let subs = worldPaths(e);

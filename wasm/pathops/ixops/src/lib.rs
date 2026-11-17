@@ -4,10 +4,10 @@
 //! The interface is a plain C ABI with a small text protocol so it needs no binding generator:
 //! the host writes a request into memory from `ix_alloc`, calls `ix_run`, and reads the reply from
 //! `ix_out_ptr` / `ix_out_len`. A request is lines:
-//!   1. the operation: union | subtract | intersect | exclude | outline | offset | simplify | smooth
+//!   1. the operation: union | subtract | intersect | exclude | outline | offset | simplify | smooth | smoothlevel
 //!   2. numbers for it (space separated, may be empty):
 //!      booleans: precision; outline: width cap join miter; offset: delta join miter;
-//!      simplify: tolerance; smooth: amount 0..1
+//!      simplify: tolerance; smooth: amount 0..1; smoothlevel: level 0..100
 //!   3+. one SVG path per line (absolute M L Q C Z), each optionally prefixed "E " for even-odd.
 //! The reply is one SVG path, or a line starting with "ERR ".
 
@@ -92,6 +92,8 @@ pub fn run(req: &str) -> Result<String, String> {
         "offset" => ops::try_offset_path(&first.0, n(0, 4.0), join(n(1, 1.0)), n(2, 4.0)).map_err(|e| e.to_string())?,
         "simplify" => ops::simplify(&first.0, n(0, 1.0)),
         "smooth" => ops::smooth(&first.0, n(0, 0.5)),
+        // VectorCraft's Object > Path > Smooth: smooths bumps and jags along the path, then refits.
+        "smoothlevel" => ops::smooth_level(&first.0, n(0, ops::SMOOTH_AUTO_LEVEL)),
         _ => return Err(format!("unknown operation {op}")),
     };
     Ok(out.to_bezpath().to_svg())
@@ -112,6 +114,7 @@ mod tests {
         assert!(run("offset\n8 1 4\nM0 0L100 0L100 100L0 100Z").unwrap().starts_with('M'));
         assert!(run("simplify\n1\nM0 0L10 0.1L20 0L30 0").unwrap().starts_with('M'));
         assert!(run("smooth\n0.5\nM0 0L50 50L100 0").unwrap().starts_with('M'));
+        assert!(run("smoothlevel\n50\nM0 0L10 3L20 0L30 4L40 0L50 3L60 0").unwrap().starts_with('M'));
         assert!(run("nope\n\nM0 0L1 1").is_err());
     }
 }

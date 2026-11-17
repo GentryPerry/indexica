@@ -37,6 +37,6 @@ describe('VectorCraft engine', () => {
   it('simplifies and smooths', () => {
     const wobbly = [{ nodes: [0, 10, 20, 30, 40].map((x, i) => ({ x, y: i % 2 ? 0.1 : 0 })) }];
     expect(X.simplify(wobbly, 1)![0].nodes.length).toBe(2);
-    expect(X.smooth(sq(0, 0), 0.5)![0].nodes.every(n => n.ix != null || n.ox != null)).toBe(true);
+    expect(X.smooth(sq(0, 0), 100)![0].nodes.every(n => n.ix != null || n.ox != null)).toBe(true);
   });
 });
