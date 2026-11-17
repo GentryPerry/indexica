@@ -80,3 +80,13 @@ describe('library edits', () => {
     expect(moveTargets(l, l.boards[2]).map(t => t.label)).toEqual(['Launch', 'Launch / Research', 'Ops']);
   });
 });
+
+describe('project colors', () => {
+  it('is stable per project and honors a chosen color', async () => {
+    const { projectColor, PROJECT_COLORS } = await import('../src/library');
+    const a = projectColor({ id: 'p1', name: 'A' });
+    expect(PROJECT_COLORS).toContain(a);
+    expect(projectColor({ id: 'p1', name: 'B' })).toBe(a);
+    expect(projectColor({ id: 'p1', name: 'A', color: '#123456' } as never)).toBe('#123456');
+  });
+});

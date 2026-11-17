@@ -110,3 +110,13 @@ export function moveTargets(lib: Library, b: BoardMeta): { label: string; projec
   }
   return out;
 }
+
+/** Tab colors for projects. Each project keeps the one picked for it, or one derived from its id. */
+export const PROJECT_COLORS = ['#2447d6', '#e5484d', '#f76b15', '#2a9460', '#8e4ec6', '#e0409a', '#0f9bb5', '#c98a14'];
+
+export function projectColor(p: Project & { color?: string }): string {
+  if (p.color) return p.color;
+  let n = 0;
+  for (const ch of p.id) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
+  return PROJECT_COLORS[n % PROJECT_COLORS.length];
+}

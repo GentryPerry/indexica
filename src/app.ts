@@ -20,7 +20,8 @@ import { Store } from './store';
 import { History } from './history';
 import { snapMove, snapPoint } from './snap';
 import * as L from './library';
-import { paintFill, outlineFor, inkOn, SURFACE } from './palette';
+import { paintFill, outlineFor, inkOn, SURFACE, adjust } from './palette';
+import { trayIcon } from './tray';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -59,16 +60,37 @@ function seed() {
   return { projects: [p], boards: [m] };
 }
 function thumbOf(els) {
-  return Object.values(els).filter(e => e.type !== 'conn' && e.type !== 'pen' && e.type !== 'text').slice(0, 80)
-    .map(e => [Math.round(e.x), Math.round(e.y), Math.round(e.w), Math.round(e.h), e.type === 'frame' ? '' : e.type === 'card' ? STATUS[e.status][1] : e.fill || '#ffffff']);
+  return Object.values(els).filter(e => e.type !== 'conn' && e.type !== 'pen' && e.type !== 'text').sort((a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - b.z : a.type === 'frame' ? -1 : 1).slice(0, 80)
+    .map(e => [Math.round(e.x), Math.round(e.y), Math.round(e.w), Math.round(e.h), e.type === 'frame' ? '' : e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? '#ffffff' : e.fill || '#ffffff', { card: 'c', sticky: 's', ellipse: 'e', diamond: 'd' }[e.type] || '']);
+}
+const themeNow = () => getComputedStyle(document.documentElement).getPropertyValue('color-scheme').trim() === 'dark' ? 'dark' : 'light';
+/** A tabbed folder drawn in its project's color, with a sheet peeking out for each of its first boards. */
+function folderArt(color, n) {
+  const dark = themeNow() === 'dark', back = adjust(color, ([l, c, hh]) => [dark ? 0.5 : 0.72, c * 0.75, hh]), front = adjust(color, ([l, c, hh]) => [dark ? 0.36 : 0.9, c * (dark ? 0.45 : 0.3), hh]);
+  return s('svg', { viewBox: '0 0 160 110', width: 150, height: 103, 'aria-hidden': 'true' },
+    s('path', { d: 'M14 20a7 7 0 0 1 7-7h36l10 10h72a7 7 0 0 1 7 7v62a7 7 0 0 1-7 7H21a7 7 0 0 1-7-7z', fill: back }),
+    [...Array(Math.min(3, n))].map((_, i) => s('rect', { x: 26 + i * 6, y: 28 - i * 5, width: 104 - i * 12, height: 50, rx: 4, style: 'fill:var(--frame);stroke:var(--line)', 'stroke-width': 1 })),
+    s('path', { d: 'M14 46a7 7 0 0 1 7-7h118a7 7 0 0 1 7 7v46a7 7 0 0 1-7 7H21a7 7 0 0 1-7-7z', fill: front }));
 }
 function thumbSvg(t) {
   if (!t || !t.length) return s('svg', { viewBox: '0 0 10 10' });
   const x0 = Math.min(...t.map(r => r[0])), y0 = Math.min(...t.map(r => r[1]));
   const x1 = Math.max(...t.map(r => r[0] + r[2])), y1 = Math.max(...t.map(r => r[1] + r[3]));
   const pad = Math.max(x1 - x0, y1 - y0) * 0.08 + 10;
+  const th = themeNow(), u = Math.max(x1 - x0, y1 - y0) / 160, bar = (x, y, w, fill) => s('rect', { x, y, width: w, height: 2.4 * u, rx: 1.2 * u, fill });
+  // A miniature of the board: frames as soft panels, notes and shapes in their colors with a hint of text,
+  // and task cards as white cards with a status chip.
   return s('svg', { viewBox: `${x0 - pad} ${y0 - pad} ${x1 - x0 + pad * 2} ${y1 - y0 + pad * 2}`, 'aria-hidden': 'true' },
-    t.map(r => s('rect', { x: r[0], y: r[1], width: r[2], height: r[3], rx: r[4] ? 2 : 0, fill: r[4] || null, stroke: r[4] ? 'none' : null, style: r[4] ? null : 'fill:var(--frame);stroke:var(--frame-line)', 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' })));
+    t.map(([x, y, w, ht, col, kind]) => {
+      const r = Math.min(w, ht) * 0.08, ink = th === 'dark' ? 'rgba(255,255,255,.28)' : 'rgba(23,32,45,.2)';
+      if (!col) return s('rect', { x, y, width: w, height: ht, rx: Math.min(w, ht) * 0.04, style: 'fill:var(--frame);stroke:var(--frame-line)', 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' });
+      if (kind === 'c') return s('g', null, s('rect', { x, y, width: w, height: ht, rx: r, fill: SURFACE[th].card, stroke: SURFACE[th].cardLine, 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' }),
+        bar(x + w * 0.08, y + ht * 0.2, w * 0.6, ink), s('rect', { x: x + w * 0.08, y: y + ht * 0.62, width: w * 0.26, height: ht * 0.2, rx: ht * 0.1, fill: col }));
+      const fill = paintFill(col, th), shape = kind === 'e' ? s('ellipse', { cx: x + w / 2, cy: y + ht / 2, rx: w / 2, ry: ht / 2, fill })
+        : kind === 'd' ? s('polygon', { points: `${x + w / 2},${y} ${x + w},${y + ht / 2} ${x + w / 2},${y + ht} ${x},${y + ht / 2}`, fill })
+        : s('rect', { x, y, width: w, height: ht, rx: kind === 's' ? r * 0.4 : r, fill, stroke: col.toLowerCase() === '#ffffff' ? outlineFor(col, th) : 'none', 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' });
+      return kind === 's' && w > 30 * u ? s('g', null, shape, bar(x + w * 0.1, y + ht * 0.16, w * 0.7, ink), bar(x + w * 0.1, y + ht * 0.16 + 5 * u, w * 0.5, ink)) : shape;
+    }));
 }
 
 /* ---------- Theme ---------- */
@@ -86,17 +108,24 @@ const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']];
 /* ---------- Shared chrome pieces ---------- */
 const STAR = 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z';
 const LOCK = 'M6.5 9V7a3.5 3.5 0 0 1 7 0v2M5 9h10v8H5z';
+const MI = { open: 'M8 4h8v8M16 4L5 15', rename: 'M4 16l1-3.5 8.5-8.5 2.5 2.5L7.5 15z', dup: 'M7.5 7.5h8.5v8.5H7.5zM4.5 12.5V4.5h8', tpl: 'M4 4h12v12H4zM4 8.5h12M8.5 8.5V16', trash: 'M4.5 6h11M8 6V4.5h4V6M6 6l.8 10h6.4L14 6', restore: 'M4.5 10a5.5 5.5 0 1 0 1.8-4.1M4.5 4.5v3h3', out: 'M11 4.5H5v11h6M9 10h7M13.5 7.5L16 10l-2.5 2.5',
+  image: 'M3.5 4.5h13v11h-13zM3.5 13l3.5-3.5 2.5 2.5 2-2 4 4', code: 'M7 6l-4 4 4 4M13 6l4 4-4 4', pdf: 'M5 3h6.5L15 6.5V17H5zM11.5 3v3.5H15', front: 'M10 16V7M6.5 10.5L10 7l3.5 3.5M5 4h10', back: 'M10 4v9M6.5 9.5L10 13l3.5-3.5M5 16h10', lock: 'M6.5 9V7a3.5 3.5 0 0 1 7 0v2M5 9h10v8H5z', copy: 'M7 7h9v9H7zM4 13V4h9', group: 'M3.5 3.5h5v5h-5zM11.5 11.5h5v5h-5zM8.5 6h3.5a2 2 0 0 1 2 2v3.5', grid: 'M4 4h5v5H4zM11 4h5v5h-5zM4 11h5v5H4zM11 11h5v5h-5z' };
 const FOLDER = 'M2.75 6A1.5 1.5 0 0 1 4.25 4.5h3.3l1.6 1.75h6.6a1.5 1.5 0 0 1 1.5 1.5v6.75a1.5 1.5 0 0 1-1.5 1.5H4.25a1.5 1.5 0 0 1-1.5-1.5z';
 const icon = (d, size = 14, extra = {}) => s('svg', { width: size, height: size, viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', ...extra }, s('path', { d }));
 const logo = () => h('span', { class: 'logo', 'aria-hidden': 'true' }, s('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', stroke: '#ffffff', 'stroke-width': 1.6, 'stroke-linecap': 'round' }, s('path', { d: 'M4 2v10M10 2v10M2 4h10M2 10h10' })));
 const fmtDate = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
 function closeMenu() { const m = $('#menu'); if (m) m.remove(); }
-/** A menu of [label, action, class] items at a screen point. '-' draws a divider; null items are skipped. */
+/**
+ * A menu of [label, action, class, icon] items at a screen point. '-' draws a divider, { head } a small
+ * group label; null items are skipped. An icon is a path drawn in a small tile before the label.
+ */
 function popupAt(x, y, items, alignRight = false) {
   closeMenu();
   const list = items.filter(Boolean).filter((it, i, a) => it !== '-' || (i > 0 && i < a.length - 1 && a[i - 1] !== '-'));
-  const m = h('div', { class: 'menu', id: 'menu', role: 'menu' }, list.map(it => it === '-' ? h('hr') : h('button', { class: it[2] || '', role: 'menuitem', onclick: () => { closeMenu(); it[1](); } }, it[0])));
+  const tiles = list.some(it => Array.isArray(it) && it[3]);
+  const m = h('div', { class: 'menu' + (tiles ? ' tiles' : ''), id: 'menu', role: 'menu' }, list.map(it => it === '-' ? h('hr') : it.head ? h('div', { class: 'menu-h', role: 'presentation' }, it.head)
+    : h('button', { class: it[2] || '', role: 'menuitem', onclick: () => { closeMenu(); it[1](); } }, tiles ? h('span', { class: 'mi', 'aria-hidden': 'true' }, it[3] ? icon(it[3], 14) : null) : null, h('span', { class: 'ml' }, it[0]))));
   document.body.append(m);
   const left = alignRight ? x - m.offsetWidth : x;
   m.style.left = Math.max(4, Math.min(left, innerWidth - m.offsetWidth - 6)) + 'px';
@@ -122,8 +151,9 @@ function renderHome() {
   if (scope.kind === 'all') home.filter = 'all';
   const count = f => L.boardsIn(index, L.scopeOf(index, f), true).length;
   const go = f => { home.filter = f; home.rename = null; home.newFolder = false; renderHome(); };
-  const nav = (f, label, sub) => h('button', { class: 'nav' + (sub ? ' sub' : '') + (home.filter === f ? ' on' : ''), 'aria-current': home.filter === f ? 'page' : null, onclick: () => go(f) },
-    h('span', { class: 'nav-l' }, sub ? icon(FOLDER, 12) : null, label), h('span', { class: 'num' }, String(count(f))));
+  const lead = (f, sub, color) => sub ? icon(FOLDER, 14, { style: 'color:' + color }) : color ? h('span', { class: 'pdot', style: 'background:' + color }) : icon({ all: MI.grid, fav: STAR, trash: MI.trash }[f], 14);
+  const nav = (f, label, sub, color) => h('button', { class: 'nav' + (sub ? ' sub' : '') + (home.filter === f ? ' on' : ''), 'aria-current': home.filter === f ? 'page' : null, onclick: () => go(f) },
+    h('span', { class: 'nav-l' }, h('span', { class: 'nav-i' }, lead(f, sub, color)), h('span', { class: 'nav-t' }, label)), h('span', { class: 'num' }, String(count(f))));
   const proj = scope.kind === 'project' || scope.kind === 'folder' ? scope.project : null, folder = scope.kind === 'folder' ? scope.folder : null;
   const q = home.q.trim().toLowerCase();
   const sorter = { edited: (a, b) => b.updated - a.updated, created: (a, b) => b.created - a.created, name: (a, b) => a.name.localeCompare(b.name) }[home.sort || 'edited'];
@@ -140,14 +170,16 @@ function renderHome() {
   const folderTile = f => {
     const n = index.boards.filter(b => !b.trashed && b.projectId === proj.id && b.folderId === f.id).length;
     return h('div', { class: 'card fcard' },
-      h('button', { class: 'thumb ftile', 'aria-label': 'Open folder ' + f.name, onclick: () => go(L.folderKey(f.id)) }, icon(FOLDER, 32, { 'stroke-width': 0.8 })),
+      h('button', { class: 'thumb ftile', 'aria-label': 'Open folder ' + f.name, onclick: () => go(L.folderKey(f.id)) }, folderArt(L.projectColor(proj), n)),
       h('div', { class: 'c-row' }, h('div', { class: 'c-text' }, h('div', { class: 'c-name' }, f.name), h('div', { class: 'meta' }, n === 1 ? '1 board' : n + ' boards'))));
   };
   const newFolderTile = home.newFolder ? h('div', { class: 'card fcard' },
-    h('div', { class: 'thumb ftile' }, icon(FOLDER, 32, { 'stroke-width': 0.8 })),
+    h('div', { class: 'thumb ftile' }, folderArt(L.projectColor(proj), 0)),
     h('input', { type: 'text', id: 'new-folder', class: 'inp', placeholder: 'Folder name', 'aria-label': 'New folder name',
       onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) addFolder(e.target.value.trim()); else if (e.key === 'Escape') { home.newFolder = false; renderHome(); } },
       onblur: e => { if (home.newFolder && e.target.value.trim()) addFolder(e.target.value.trim()); else if (home.newFolder) { home.newFolder = false; renderHome(); } } })) : null;
+  const nb = list.length, nf = folders.length;
+  const subline = [nf ? (nf === 1 ? '1 folder' : nf + ' folders') : '', nb === 1 ? '1 board' : nb + ' boards'].filter(Boolean).join(' · ') + (q ? ' matching "' + home.q.trim() + '"' : '');
   const deleteProject = () => { L.removeProject(index, proj.id); home.filter = 'all'; saveIndex(); renderHome(); toast('Project deleted. Its boards are in All boards.'); };
   const deleteFolder = () => { L.removeFolder(index, folder.id); home.filter = proj.id; saveIndex(); renderHome(); toast(`Folder deleted. Its boards are in ${proj.name}.`); };
   $('#app').replaceChildren(h('div', { class: 'home' },
@@ -159,13 +191,13 @@ function renderHome() {
       home.newProj ? h('input', { type: 'text', id: 'new-project', class: 'inp', placeholder: 'Project name', 'aria-label': 'New project name',
         onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) addProject(e.target.value.trim()); else if (e.key === 'Escape') { home.newProj = false; renderHome(); } },
         onblur: e => { if (!e.target.value.trim() && home.newProj) { home.newProj = false; renderHome(); } } }) : null,
-      index.projects.map(p => [nav(p.id, p.name), (p.folders || []).map(f => nav(L.folderKey(f.id), f.name, true))]).flat(2),
+      index.projects.map(p => [nav(p.id, p.name, false, L.projectColor(p)), (p.folders || []).map(f => nav(L.folderKey(f.id), f.name, true, L.projectColor(p)))]).flat(2),
       !index.projects.length && !home.newProj ? h('p', { class: 'lib-empty' }, 'No projects yet.') : null,
       h('div', { class: 'grow' }),
       h('div', { class: 'seg theme', role: 'group', 'aria-label': 'Theme' }, THEMES.map(([k, label]) => h('button', { 'aria-pressed': String(themePref() === k), title: k === 'auto' ? 'Match your system setting' : label + ' theme', onclick: () => setTheme(k) }, label))),
       h('div', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st)),
     h('main', { class: 'lib-main' },
-      h('header', { class: 'lib-top' }, title,
+      h('header', { class: 'lib-top' }, h('div', { class: 'h-block' }, title, h('div', { class: 'h-sub' }, subline)),
         folder ? h('button', { class: 'btn danger-t', onclick: deleteFolder }, 'Delete folder')
           : proj ? h('button', { class: 'btn danger-t', onclick: deleteProject }, 'Delete project') : null,
         scope.kind === 'project' ? h('button', { class: 'btn', onclick: () => { home.newFolder = true; renderHome(); $('#new-folder').focus(); } }, 'New folder') : null,
@@ -180,7 +212,9 @@ function boardCard(b) {
   const name = home.rename === b.id
     ? h('input', { class: 'inp', type: 'text', id: 'rename-' + b.id, value: b.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { home.rename = null; renderHome(); } }, onblur: e => { if (home.rename !== b.id) return; b.name = e.target.value.trim() || b.name; home.rename = null; saveIndex(); renderHome(); } })
     : h('div', { class: 'c-name' }, b.name);
+  const pc = index.projects.find(x => x.id === b.projectId);
   return h('div', { class: 'card' + (b.trashed ? ' gone' : '') },
+    pc ? h('span', { class: 'ctab', 'aria-hidden': 'true', style: 'background:' + L.projectColor(pc) }) : null,
     h('button', { class: 'thumb', 'aria-label': b.trashed ? b.name + ', in Trash' : 'Open ' + b.name, disabled: b.trashed, onclick: () => openBoard(b.id) }, thumbSvg(b.thumb)),
     h('div', { class: 'c-row' },
       h('div', { class: 'c-text' }, name, h('div', { class: 'meta' }, (where || 'No project') + ' · Edited ' + fmtDate(b.updated))),
@@ -189,17 +223,19 @@ function boardCard(b) {
 }
 function cardMenu(b, anchor) {
   const done = fn => () => { fn(); saveIndex(); renderHome(); };
+  const targets = L.moveTargets(index, b);
   popup(anchor, b.trashed ? [
-    ['Restore', done(() => { b.trashed = false; })],
-    ['Delete forever', done(() => { index.boards = index.boards.filter(x => x !== b); Store.del('b_' + b.id); (b.imgs || []).filter(i => !imgUsed(i)).forEach(i => Store.del('img_' + i)); }), 'danger']]
-  : [['Open', () => openBoard(b.id)],
-    ['Rename', () => { home.rename = b.id; renderHome(); const i = $('#rename-' + b.id); i.focus(); i.select(); }],
-    ['Duplicate', () => dupBoard(b)],
-    ['Save as template', async () => { const d = await Store.get('b_' + b.id); saveTemplate(b.name, migrateBoard(d, uid).pages); }], '-',
-    ...L.moveTargets(index, b).map(x => ['Move to ' + x.label, done(() => L.moveBoard(index, b, x.projectId, x.folderId))]),
-    b.folderId && L.folderOf(index, b) ? ['Move out of folder', done(() => L.moveBoard(index, b, b.projectId))] : null,
-    b.projectId ? ['Remove from project', done(() => L.moveBoard(index, b, ''))] : null, '-',
-    ['Move to Trash', done(() => { b.trashed = true; }), 'danger']]);
+    ['Restore', done(() => { b.trashed = false; }), '', MI.restore],
+    ['Delete forever', done(() => { index.boards = index.boards.filter(x => x !== b); Store.del('b_' + b.id); (b.imgs || []).filter(i => !imgUsed(i)).forEach(i => Store.del('img_' + i)); }), 'danger', MI.trash]]
+  : [['Open', () => openBoard(b.id), '', MI.open],
+    ['Rename', () => { home.rename = b.id; renderHome(); const i = $('#rename-' + b.id); i.focus(); i.select(); }, '', MI.rename],
+    ['Duplicate', () => dupBoard(b), '', MI.dup],
+    ['Save as template', async () => { const d = await Store.get('b_' + b.id); saveTemplate(b.name, migrateBoard(d, uid).pages); }, '', MI.tpl], '-',
+    targets.length ? { head: 'Move to' } : null,
+    ...targets.map(x => [x.label, done(() => L.moveBoard(index, b, x.projectId, x.folderId)), '', FOLDER]),
+    b.folderId && L.folderOf(index, b) ? ['Move out of folder', done(() => L.moveBoard(index, b, b.projectId)), '', MI.out] : null,
+    b.projectId ? ['Remove from project', done(() => L.moveBoard(index, b, '')), '', MI.out] : null, '-',
+    ['Move to Trash', done(() => { b.trashed = true; }), 'danger', MI.trash]]);
 }
 const imgsOf = pages => [...new Set(pages.flatMap(p => Object.values(p.els)).filter(e => e.type === 'image' && e.src).map(e => e.src))];
 const imgUsed = i => index.boards.some(x => (x.imgs || []).includes(i)) || (index.templates || []).some(x => (x.imgs || []).includes(i));
@@ -839,7 +875,7 @@ async function openBoard(id) {
       h('button', { class: 'o-foot', onclick: toggleHelp }, 'Keyboard shortcuts', h('kbd', null, '?'))),
     h('div', { class: 'stage' },
       h('nav', { class: 'toolbar', 'aria-label': 'Tools' }, BAR.map(t => t === '|' ? h('span', { class: 'tsep', 'aria-hidden': 'true' })
-        : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { tool = t; refresh(); } } }, icon(ICON[t], 18)))),
+        : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { tool = t; refresh(); } } }, trayIcon(t)))),
       h('div', { class: 'fly', id: 'fly', hidden: true }),
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
@@ -857,7 +893,7 @@ async function openBoard(id) {
           ...THEMES.map(([k, label]) => [(k === 'auto' ? 'Match system theme' : label + ' theme'), () => setTheme(k), themePref() === k ? 'cur' : ''])]) }, h('span', { id: 'zoomt' }, '100%'), icon('M6 8l4 4 4-4', 10, { 'stroke-width': 2 })),
         h('span', { class: 'grow' }),
         h('button', { class: 'btn', id: 'kanban-toggle', 'aria-pressed': 'false', title: 'Show task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, 'Kanban'),
-        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [['PNG image', () => exportAs('png')], ['SVG vector', () => exportAs('svg')], ['PDF, this page', () => exportPdf(false)], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true)] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
+        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [{ head: 'Export' }, ['PNG image', () => exportAs('png'), '', MI.image], ['SVG vector', () => exportAs('svg'), '', MI.code], ['PDF, this page', () => exportPdf(false), '', MI.pdf], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true), '', MI.pdf] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
       h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks')),
       h('div', { class: 'p-body', id: 'pdesign', role: 'tabpanel' }),
       h('div', { class: 'p-body', id: 'ptasks', role: 'tabpanel', hidden: true }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })))));
@@ -1010,7 +1046,7 @@ function renderProps() {
   const same = (els, key) => els.length && els.every(e => e[key] === els[0][key]) ? els[0][key] ?? '' : '';
   const sec = (title, ...kids) => h('section', { class: 'psec' }, title ? h('h3', null, title) : null, ...kids);
   const setAll = (els, key, val, field) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; fitText(e); }); field ? holdCommit() : commit(); };
-  const swatch = (c, on, fn, name, small) => h('button', { class: 'sw' + (small ? ' sm' : ''), style: 'background:' + c, title: name || c, 'aria-label': name || 'Color ' + c, 'aria-pressed': String(!!on), onclick: fn });
+  const swatch = (c, on, fn, name, small) => h('button', { class: 'sw' + (small ? ' sm' : ''), style: 'background:' + (paintFill(c, C.theme) || c), title: name || c, 'aria-label': name || 'Color ' + c, 'aria-pressed': String(!!on), onclick: fn });
   const num = (id, short, label, get, put, disabled) => {
     const inp = h('input', { type: 'text', inputmode: 'decimal', id, value: get(), 'aria-label': label, disabled,
       onkeydown: e => { if (e.key === 'Enter') e.target.blur(); else if (e.key === 'Escape') { e.target.value = get(); e.target.blur(); } },
@@ -1094,14 +1130,16 @@ function renderProps() {
     if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit)));
     if (free.filter(e => e.type !== 'conn').length > 1) out.push(sec('Align', h('div', { class: 'grid4' }, ALIGN.map(([k, label, d]) => h('button', { class: 'ibtn', title: label, 'aria-label': label, onclick: () => align(k) }, icon(d, 16))))));
     const locked = list.every(e => e.locked);
-    out.push(sec('Arrange', h('div', { class: 'grid2' },
-      h('button', { class: 'fbtn', onclick: () => arrange('front') }, 'Bring to front'),
-      h('button', { class: 'fbtn', onclick: () => arrange('back') }, 'Send to back'),
-      h('button', { class: 'fbtn', onclick: () => arrange(locked ? 'unlock' : 'lock') }, locked ? 'Unlock' : 'Lock'),
-      h('button', { class: 'fbtn', onclick: () => { copySel(); pasteEls(clip, 24); } }, 'Duplicate'),
-      list.length > 1 ? h('button', { class: 'fbtn', onclick: () => arrange('group') }, 'Group') : null,
-      list.some(e => e.g) ? h('button', { class: 'fbtn', onclick: () => arrange('ungroup') }, 'Ungroup') : null)));
-    out.push(h('div', { class: 'psec' }, h('button', { class: 'del', disabled: !free.length, onclick: removeSel }, list.length > 1 ? 'Delete selection' : 'Delete')));
+    const act = (label, d, fn, cls = '', disabled = false) => h('button', { class: 'ibtn' + cls, title: label, 'aria-label': label, disabled, onclick: fn }, icon(d, 16));
+    out.push(sec('Arrange', h('div', { class: 'irow' },
+      act('Bring to front', MI.front, () => arrange('front')),
+      act('Send to back', MI.back, () => arrange('back')),
+      act(locked ? 'Unlock' : 'Lock', MI.lock, () => arrange(locked ? 'unlock' : 'lock'), locked ? ' on' : ''),
+      act('Duplicate (Ctrl+D)', MI.copy, () => { copySel(); pasteEls(clip, 24); }),
+      act(list.length > 1 ? 'Delete selection' : 'Delete', MI.trash, removeSel, ' danger', !free.length)),
+      list.length > 1 || list.some(e => e.g) ? h('div', { class: 'row' },
+        list.length > 1 ? h('button', { class: 'fbtn', onclick: () => arrange('group') }, 'Group') : null,
+        list.some(e => e.g) ? h('button', { class: 'fbtn', onclick: () => arrange('ungroup') }, 'Ungroup') : null) : null));
   }
   el.replaceChildren(...out);
 }
@@ -1185,16 +1223,16 @@ function renderKanban() {
   el.replaceChildren(...Object.entries(STATUS).map(([k, [label, col]]) => h('section', { class: 'kcol', 'aria-label': label,
     ondragover: e => { e.preventDefault(); e.currentTarget.classList.add('over'); }, ondragleave: e => e.currentTarget.classList.remove('over'),
     ondrop: e => { e.preventDefault(); e.currentTarget.classList.remove('over'); const c = E(e.dataTransfer.getData('text/plain')); const c2 = c || board.pages.map(p => p.els[e.dataTransfer.getData('text/plain')]).find(Boolean); if (c2 && c2.type === 'card' && c2.status !== k) { c2.status = k; edFor = null; cardChanged(c2); } } },
-    h('header', null, h('b', { style: 'background:' + col }), label, h('span', null, String(groups[k].length))),
+    h('header', null, h('b', { style: 'background:' + col }), label, h('span', { class: 'kcount' }, String(groups[k].length))),
     h('div', { class: 'klist' }, groups[k].map(c => {
       const late = c.due && c.due < today() && c.status !== 'done';
-      return h('article', { class: 'kcard' + (sel.has(c.id) ? ' on' : ''), draggable: 'true', tabindex: '0', style: 'border-left-color:' + col,
+      return h('article', { class: 'kcard' + (sel.has(c.id) ? ' on' : ''), draggable: 'true', tabindex: '0',
         ondragstart: e => e.dataTransfer.setData('text/plain', c.id), onclick: () => { sel = new Set([c.id]); rightTab = 'design'; refresh(); },
         onkeydown: e => { if (e.key === 'Enter') { sel = new Set([c.id]); rightTab = 'design'; refresh(); } },
         ondblclick: () => { kanban = false; gotoCard(c); } },
         h('strong', null, c.text), multi ? h('small', null, (pageOf(c.id) || {}).name) : null, c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
     })),
-    h('button', { class: 'kadd', onclick: () => { kanban = false; addTask(k); } }, 'Add task'))));
+    h('button', { class: 'kadd', onclick: () => { kanban = false; addTask(k); } }, icon('M10 4.5v11M4.5 10h11', 14), 'Add task'))));
 }
 function openMenu(ev) {
   ev.preventDefault(); if (editing) endEdit();
