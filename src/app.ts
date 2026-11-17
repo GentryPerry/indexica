@@ -19,6 +19,7 @@ import * as G from './geometry';
 import { Store } from './store';
 import { History } from './history';
 import { snapMove, snapPoint } from './snap';
+import * as L from './library';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -84,6 +85,7 @@ const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']];
 /* ---------- Shared chrome pieces ---------- */
 const STAR = 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z';
 const LOCK = 'M6.5 9V7a3.5 3.5 0 0 1 7 0v2M5 9h10v8H5z';
+const FOLDER = 'M2.75 6A1.5 1.5 0 0 1 4.25 4.5h3.3l1.6 1.75h6.6a1.5 1.5 0 0 1 1.5 1.5v6.75a1.5 1.5 0 0 1-1.5 1.5H4.25a1.5 1.5 0 0 1-1.5-1.5z';
 const icon = (d, size = 14, extra = {}) => s('svg', { width: size, height: size, viewBox: '0 0 20 20', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', ...extra }, s('path', { d }));
 const logo = () => h('span', { class: 'logo', 'aria-hidden': 'true' }, s('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', stroke: '#ffffff', 'stroke-width': 1.6, 'stroke-linecap': 'round' }, s('path', { d: 'M4 2v10M10 2v10M2 4h10M2 10h10' })));
 const fmtDate = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -115,17 +117,38 @@ function menuKeys(ev) {
 function renderHome() {
   board = null; closeMenu();
   const live = index.boards.filter(b => !b.trashed);
-  const count = f => f === 'trash' ? index.boards.length - live.length : f === 'all' ? live.length : f === 'fav' ? live.filter(b => b.fav).length : live.filter(b => b.projectId === f).length;
-  const nav = (f, label) => h('button', { class: 'nav' + (home.filter === f ? ' on' : ''), 'aria-current': home.filter === f ? 'page' : null, onclick: () => { home.filter = f; home.rename = null; renderHome(); } }, h('span', { class: 'nav-l' }, label), h('span', { class: 'num' }, String(count(f))));
-  const proj = index.projects.find(p => p.id === home.filter);
+  const scope = L.scopeOf(index, home.filter);
+  if (scope.kind === 'all') home.filter = 'all';
+  const count = f => L.boardsIn(index, L.scopeOf(index, f), true).length;
+  const go = f => { home.filter = f; home.rename = null; home.newFolder = false; renderHome(); };
+  const nav = (f, label, sub) => h('button', { class: 'nav' + (sub ? ' sub' : '') + (home.filter === f ? ' on' : ''), 'aria-current': home.filter === f ? 'page' : null, onclick: () => go(f) },
+    h('span', { class: 'nav-l' }, sub ? icon(FOLDER, 12) : null, label), h('span', { class: 'num' }, String(count(f))));
+  const proj = scope.kind === 'project' || scope.kind === 'folder' ? scope.project : null, folder = scope.kind === 'folder' ? scope.folder : null;
   const q = home.q.trim().toLowerCase();
   const sorter = { edited: (a, b) => b.updated - a.updated, created: (a, b) => b.created - a.created, name: (a, b) => a.name.localeCompare(b.name) }[home.sort || 'edited'];
-  const list = index.boards.filter(b => (home.filter === 'trash' ? b.trashed : !b.trashed && (home.filter === 'all' || (home.filter === 'fav' ? b.fav : b.projectId === home.filter))) && (!q || b.name.toLowerCase().includes(q))).sort(sorter);
+  const list = L.boardsIn(index, scope, !!q).filter(b => !q || b.name.toLowerCase().includes(q)).sort(sorter);
+  const folders = scope.kind === 'project' && !q ? (proj.folders || []) : [];
   const [sc, st] = statParts();
-  const addProject = name => { const p = { id: uid('p'), name }; index.projects.push(p); home.filter = p.id; home.newProj = false; saveIndex(); renderHome(); };
-  const title = proj
-    ? h('input', { class: 'h-title', id: 'proj-name', type: 'text', value: proj.name, 'aria-label': 'Project name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onchange: e => { proj.name = e.target.value.trim() || proj.name; saveIndex(); renderHome(); } })
+  const addProject = name => { const p = { id: uid('p'), name, folders: [] }; index.projects.push(p); home.filter = p.id; home.newProj = false; saveIndex(); renderHome(); };
+  const addFolder = name => { const f = L.addFolder(index, proj.id, name, uid); home.newFolder = false; saveIndex(); if (f) go(L.folderKey(f.id)); };
+  const nameInput = (obj, id, label) => h('input', { class: 'h-title', id, type: 'text', value: obj.name, 'aria-label': label, onkeydown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = obj.name; e.target.blur(); } }, onchange: e => { obj.name = e.target.value.trim() || obj.name; saveIndex(); renderHome(); } });
+  const title = folder
+    ? h('div', { class: 'h-path' }, h('button', { class: 'crumb', onclick: () => go(proj.id) }, proj.name), h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }, '/'), nameInput(folder, 'folder-name', 'Folder name'))
+    : proj ? nameInput(proj, 'proj-name', 'Project name')
     : h('h1', { class: 'h-title' }, home.filter === 'fav' ? 'Favorites' : home.filter === 'trash' ? 'Trash' : 'All boards');
+  const folderTile = f => {
+    const n = index.boards.filter(b => !b.trashed && b.projectId === proj.id && b.folderId === f.id).length;
+    return h('div', { class: 'card fcard' },
+      h('button', { class: 'thumb ftile', 'aria-label': 'Open folder ' + f.name, onclick: () => go(L.folderKey(f.id)) }, icon(FOLDER, 32, { 'stroke-width': 0.8 })),
+      h('div', { class: 'c-row' }, h('div', { class: 'c-text' }, h('div', { class: 'c-name' }, f.name), h('div', { class: 'meta' }, n === 1 ? '1 board' : n + ' boards'))));
+  };
+  const newFolderTile = home.newFolder ? h('div', { class: 'card fcard' },
+    h('div', { class: 'thumb ftile' }, icon(FOLDER, 32, { 'stroke-width': 0.8 })),
+    h('input', { type: 'text', id: 'new-folder', class: 'inp', placeholder: 'Folder name', 'aria-label': 'New folder name',
+      onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) addFolder(e.target.value.trim()); else if (e.key === 'Escape') { home.newFolder = false; renderHome(); } },
+      onblur: e => { if (home.newFolder && e.target.value.trim()) addFolder(e.target.value.trim()); else if (home.newFolder) { home.newFolder = false; renderHome(); } } })) : null;
+  const deleteProject = () => { L.removeProject(index, proj.id); home.filter = 'all'; saveIndex(); renderHome(); toast('Project deleted. Its boards are in All boards.'); };
+  const deleteFolder = () => { L.removeFolder(index, folder.id); home.filter = proj.id; saveIndex(); renderHome(); toast(`Folder deleted. Its boards are in ${proj.name}.`); };
   $('#app').replaceChildren(h('div', { class: 'home' },
     h('nav', { class: 'lib', 'aria-label': 'Library' },
       h('div', { class: 'brand' }, logo(), h('span', { class: 'word' }, 'Indexica')),
@@ -135,29 +158,31 @@ function renderHome() {
       home.newProj ? h('input', { type: 'text', id: 'new-project', class: 'inp', placeholder: 'Project name', 'aria-label': 'New project name',
         onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) addProject(e.target.value.trim()); else if (e.key === 'Escape') { home.newProj = false; renderHome(); } },
         onblur: e => { if (!e.target.value.trim() && home.newProj) { home.newProj = false; renderHome(); } } }) : null,
-      index.projects.map(p => nav(p.id, p.name)),
+      index.projects.map(p => [nav(p.id, p.name), (p.folders || []).map(f => nav(L.folderKey(f.id), f.name, true))]).flat(2),
       !index.projects.length && !home.newProj ? h('p', { class: 'lib-empty' }, 'No projects yet.') : null,
       h('div', { class: 'grow' }),
       h('div', { class: 'seg theme', role: 'group', 'aria-label': 'Theme' }, THEMES.map(([k, label]) => h('button', { 'aria-pressed': String(themePref() === k), title: k === 'auto' ? 'Match your system setting' : label + ' theme', onclick: () => setTheme(k) }, label))),
       h('div', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st)),
     h('main', { class: 'lib-main' },
       h('header', { class: 'lib-top' }, title,
-        proj ? h('button', { class: 'btn danger-t', onclick: () => { index.boards.forEach(b => { if (b.projectId === proj.id) b.projectId = ''; }); index.projects = index.projects.filter(p => p !== proj); home.filter = 'all'; saveIndex(); renderHome(); toast('Project deleted. Its boards are in All boards.'); } }, 'Delete project') : null,
+        folder ? h('button', { class: 'btn danger-t', onclick: deleteFolder }, 'Delete folder')
+          : proj ? h('button', { class: 'btn danger-t', onclick: deleteProject }, 'Delete project') : null,
+        scope.kind === 'project' ? h('button', { class: 'btn', onclick: () => { home.newFolder = true; renderHome(); $('#new-folder').focus(); } }, 'New folder') : null,
         home.filter !== 'trash' ? h('select', { class: 'sel ghost', id: 'sort', 'aria-label': 'Sort boards', value: home.sort || 'edited', onchange: e => { home.sort = e.target.value; renderHome(); } },
           h('option', { value: 'edited' }, 'Last edited'), h('option', { value: 'created' }, 'Date created'), h('option', { value: 'name' }, 'Name')) : null,
         home.filter !== 'trash' ? h('button', { class: 'btn primary', onclick: newBoard }, 'New board') : null),
-      list.length ? h('div', { class: 'cards' }, list.map(boardCard))
-        : h('p', { class: 'empty' }, q ? 'No boards match that search.' : home.filter === 'trash' ? 'Trash is empty.' : 'No boards here yet. Select New board to start one.'))));
+      list.length || folders.length || newFolderTile ? h('div', { class: 'cards' }, folders.map(folderTile), newFolderTile, list.map(boardCard))
+        : h('p', { class: 'empty' }, q ? 'No boards match that search.' : home.filter === 'trash' ? 'Trash is empty.' : folder ? 'No boards in this folder yet. Select New board, or move a board here from its menu.' : 'No boards here yet. Select New board to start one.'))));
 }
 function boardCard(b) {
-  const p = index.projects.find(x => x.id === b.projectId);
+  const where = L.pathOf(index, b);
   const name = home.rename === b.id
     ? h('input', { class: 'inp', type: 'text', id: 'rename-' + b.id, value: b.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { home.rename = null; renderHome(); } }, onblur: e => { if (home.rename !== b.id) return; b.name = e.target.value.trim() || b.name; home.rename = null; saveIndex(); renderHome(); } })
     : h('div', { class: 'c-name' }, b.name);
   return h('div', { class: 'card' + (b.trashed ? ' gone' : '') },
     h('button', { class: 'thumb', 'aria-label': b.trashed ? b.name + ', in Trash' : 'Open ' + b.name, disabled: b.trashed, onclick: () => openBoard(b.id) }, thumbSvg(b.thumb)),
     h('div', { class: 'c-row' },
-      h('div', { class: 'c-text' }, name, h('div', { class: 'meta' }, (p ? p.name : 'No project') + ' · Edited ' + fmtDate(b.updated))),
+      h('div', { class: 'c-text' }, name, h('div', { class: 'meta' }, (where || 'No project') + ' · Edited ' + fmtDate(b.updated))),
       b.trashed ? null : h('button', { class: 'icon-btn sm star' + (b.fav ? ' on' : ''), title: b.fav ? 'Remove from favorites' : 'Add to favorites', 'aria-label': b.fav ? 'Remove from favorites' : 'Add to favorites', 'aria-pressed': String(!!b.fav), onclick: () => { b.fav = !b.fav; saveIndex(); renderHome(); } }, icon(STAR, 14, b.fav ? { fill: 'currentColor' } : {})),
       h('button', { class: 'icon-btn sm more', title: 'More', 'aria-label': 'More actions for ' + b.name, 'aria-haspopup': 'menu', onclick: e => cardMenu(b, e.currentTarget) }, icon('M4.5 10h.01M10 10h.01M15.5 10h.01', 14, { 'stroke-width': 2.6 }))));
 }
@@ -170,14 +195,15 @@ function cardMenu(b, anchor) {
     ['Rename', () => { home.rename = b.id; renderHome(); const i = $('#rename-' + b.id); i.focus(); i.select(); }],
     ['Duplicate', () => dupBoard(b)],
     ['Save as template', async () => { const d = await Store.get('b_' + b.id); saveTemplate(b.name, migrateBoard(d, uid).pages); }], '-',
-    ...index.projects.filter(x => x.id !== b.projectId).map(x => ['Move to ' + x.name, done(() => { b.projectId = x.id; })]),
-    b.projectId ? ['Remove from project', done(() => { b.projectId = ''; })] : null, '-',
+    ...L.moveTargets(index, b).map(x => ['Move to ' + x.label, done(() => L.moveBoard(index, b, x.projectId, x.folderId))]),
+    b.folderId && L.folderOf(index, b) ? ['Move out of folder', done(() => L.moveBoard(index, b, b.projectId))] : null,
+    b.projectId ? ['Remove from project', done(() => L.moveBoard(index, b, ''))] : null, '-',
     ['Move to Trash', done(() => { b.trashed = true; }), 'danger']]);
 }
 const imgsOf = pages => [...new Set(pages.flatMap(p => Object.values(p.els)).filter(e => e.type === 'image' && e.src).map(e => e.src))];
 const imgUsed = i => index.boards.some(x => (x.imgs || []).includes(i)) || (index.templates || []).some(x => (x.imgs || []).includes(i));
 function createBoard(name, pages) {
-  const b = { id: uid('b'), name, projectId: index.projects.some(p => p.id === home.filter) ? home.filter : '', fav: false, trashed: false, created: Date.now(), updated: Date.now(), thumb: thumbOf(pages[0].els), imgs: imgsOf(pages) };
+  const b = { id: uid('b'), name, ...L.homeOf(L.scopeOf(index, home.filter)), fav: false, trashed: false, created: Date.now(), updated: Date.now(), thumb: thumbOf(pages[0].els), imgs: imgsOf(pages) };
   index.boards.push(b); Store.put('b_' + b.id, { pages }); saveIndex(); openBoard(b.id);
 }
 function newBoard() { templatePicker(); }
@@ -781,7 +807,7 @@ async function openBoard(id) {
       h('div', { class: 'o-head' },
         h('button', { class: 'back', onclick: () => { if (editing) endEdit(); saveNow(); renderHome(); } }, logo(), icon('M12.5 4.5L7 10l5.5 5.5', 10, { 'stroke-width': 2 }), 'All boards'),
         h('input', { class: 'b-name', id: 'board-name', type: 'text', value: m.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onchange: e => { m.name = e.target.value.trim() || m.name; e.target.value = m.name; saveIndex(); } }),
-        h('div', { class: 'b-meta' }, proj ? h('span', null, proj.name) : null, h('span', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st))),
+        h('div', { class: 'b-meta' }, proj ? h('span', null, L.pathOf(index, m)) : null, h('span', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st))),
       h('div', { class: 'o-label o-split' }, 'Pages', h('button', { class: 'icon-btn sm', title: 'Add page', 'aria-label': 'Add page', onclick: addPage }, icon('M10 4v12M4 10h12', 12))),
       h('div', { class: 'pages', id: 'plist' }),
       h('div', { class: 'o-label' }, 'Outline'),
@@ -1186,7 +1212,32 @@ function pageSvg(els, list) {
   const get = id => els[id], b = G.bounds(list, get); if (!b) return null;
   const pad = 36, w = Math.ceil(b.w + pad * 2), ht = Math.ceil(b.h + pad * 2), x = Math.floor(b.x - pad), y = Math.floor(b.y - pad), rc = { ...rctx(true), get };
   const svg = s('svg', { viewBox: `${x} ${y} ${w} ${ht}`, width: w, height: ht }, s('rect', { x, y, width: w, height: ht, fill: '#ffffff' }), [...list].sort(byLayer).map(e => renderEl(e, rc)));
-  return { str: new XMLSerializer().serializeToString(svg), w, ht };
+  return { str: new XMLSerializer().serializeToString(svg), w, ht, x, y, svg };
+}
+/**
+ * Every line of text in an export SVG, placed for the PDF's invisible text layer. `k` is points per
+ * board unit. Rotated pieces keep their angle; each line is stretched to the width it has on screen.
+ */
+function textLayer(sv, k) {
+  const out = [], H = sv.ht * k;
+  for (const t of sv.svg.querySelectorAll('text')) {
+    const size = parseFloat(t.getAttribute('font-size')) || 12, anchor = t.getAttribute('text-anchor') || 'start', weight = Number(t.getAttribute('font-weight')) || 400;
+    const family = t.getAttribute('font-family') || G.FONT, italic = t.getAttribute('font-style') === 'italic';
+    const g = t.closest('[data-id]'), m = g && /rotate\(([-\d.e]+) ([-\d.e]+) ([-\d.e]+)\)/.exec(g.getAttribute('transform') || '');
+    const deg = m ? Number(m[1]) : 0, cx = m ? Number(m[2]) : 0, cy = m ? Number(m[3]) : 0, r = deg * Math.PI / 180;
+    const spans = [...t.querySelectorAll('tspan')], lines = spans.length ? spans : [t];
+    let y = parseFloat(t.getAttribute('y')) || 0;
+    lines.forEach((sp, i) => {
+      if (spans.length && i) y += parseFloat(sp.getAttribute('dy')) || 0;
+      const str = (sp.textContent || '').replace(/\u00a0/g, ' ').trimEnd(); if (!str.trim()) return;
+      const w = G.measure(str, size, weight, family, italic), hw = G.measure(str, size, 400, 'Helvetica, Arial, sans-serif', false) || w;
+      let x = parseFloat(sp.getAttribute('x') ?? t.getAttribute('x')) || 0;
+      if (anchor === 'middle') x -= w / 2; else if (anchor === 'end') x -= w;
+      const px = deg ? cx + (x - cx) * Math.cos(r) - (y - cy) * Math.sin(r) : x, py = deg ? cy + (x - cx) * Math.sin(r) + (y - cy) * Math.cos(r) : y;
+      out.push({ str, x: (px - sv.x) * k, y: H - (py - sv.y) * k, size: size * k, angle: -r, scale: Math.max(20, Math.min(300, w / hw * 100)) });
+    });
+  }
+  return out;
 }
 /** Draw an SVG string onto a canvas, at up to 2x and never more than `max` pixels on a side. */
 function rasterize(sv, max) {
@@ -1216,7 +1267,7 @@ async function exportPdf(allPages) {
       const sv = pageSvg(pg.els, !allPages && sel.size ? selEls() : Object.values(pg.els)); if (!sv) continue;
       const c = await rasterize(sv, 4000), blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92)); if (!blob) throw new Error('encode');
       const k = Math.min(0.75, 14000 / Math.max(sv.w, sv.ht));
-      out.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), px: c.width, py: c.height, w: sv.w * k, h: sv.ht * k });
+      out.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), px: c.width, py: c.height, w: sv.w * k, h: sv.ht * k, texts: textLayer(sv, k) });
     }
   } catch (e) { return toast('The PDF could not be made. Try PNG instead.'); }
   if (!out.length) return toast('Nothing to export yet.');

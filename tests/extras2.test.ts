@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPdf } from '../src/pdf';
+import { buildPdf, pageContent, winAnsi } from '../src/pdf';
 import { densify, hashId, roughPath, shapeOutline } from '../src/sketch';
 import { cellAt, cellBox, colFractions, emptyCells, resizeCols, sharesWithCol, sharesWithoutCol } from '../src/table';
 import type { El } from '../src/types';
@@ -57,7 +57,30 @@ describe('PDF export', () => {
     const start = Number(/startxref\n(\d+)/.exec(text)![1]);
     expect(text.slice(start, start + 4)).toBe('xref');
     const offs = [...text.slice(start).matchAll(/^(\d{10}) 00000 n $/gm)].map(m => Number(m[1]));
-    expect(offs).toHaveLength(8);
+    expect(offs).toHaveLength(9);
     offs.forEach((o, i) => expect(text.slice(o, o + `${i + 1} 0 obj`.length)).toBe(`${i + 1} 0 obj`));
+  });
+});
+
+describe('PDF text layer', () => {
+  it('encodes text the standard fonts can show, and marks the rest', () => {
+    expect(winAnsi('Caf\u00e9 \u2019ok\u2019')).toEqual([67, 97, 102, 0xe9, 32, 0x92, 111, 107, 0x92]);
+    expect(winAnsi('\u4f60')).toEqual([0x3f]);
+  });
+  it('lays invisible text over the page image', () => {
+    const c = new TextDecoder('latin1').decode(pageContent({ jpeg: new Uint8Array(), px: 1, py: 1, w: 200, h: 100, texts: [{ str: 'Plan (draft)', x: 10, y: 80, size: 12, scale: 95 }] }, 'Im0'));
+    expect(c).toContain('/Im0 Do');
+    expect(c).toContain('BT 3 Tr');
+    expect(c).toContain('/F1 12 Tf 95 Tz 1 0 0 1 10 80 Tm (Plan \\(draft\\)) Tj');
+  });
+  it('rotates text with its piece', () => {
+    const c = new TextDecoder('latin1').decode(pageContent({ jpeg: new Uint8Array(), px: 1, py: 1, w: 10, h: 10, texts: [{ str: 'a', x: 0, y: 0, size: 10, angle: Math.PI / 2 }] }, 'Im0'));
+    expect(c).toContain('0 1 -1 0 0 0 Tm');
+  });
+  it('links the shared font from every page', () => {
+    const pg = (n: number) => ({ jpeg: new Uint8Array([0xff, 0xd8, n, 0xff, 0xd9]), px: 10, py: 5, w: 400, h: 200 });
+    const text = new TextDecoder('latin1').decode(buildPdf([pg(1), pg(2)]));
+    expect(text).toContain('/BaseFont /Helvetica');
+    expect((text.match(/\/Font << \/F1 3 0 R >>/g) || []).length).toBe(2);
   });
 });
