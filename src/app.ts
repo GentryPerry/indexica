@@ -40,6 +40,7 @@ import { readPptx } from './pptx-read';
 import * as X from './exact';
 import * as LB from './livebool';
 import * as VE from './vecerase';
+import * as TC from './touch';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -301,6 +302,8 @@ let hist = new History();
 const hists = new Map();
 let cam = { x: 0, y: 0, z: 1 }, tool = 'select', sel = new Set(), editing = null, clip = [];
 let mode = null, spaceDown = false, lastDown = { t: 0, x: 0, y: 0 }, saveT = 0;
+// True while the last press came from a finger: handles get larger targets and drags a larger dead zone.
+let touchUI = typeof matchMedia !== 'undefined' && matchMedia('(pointer:coarse)').matches;
 let rightTab = 'design', panelHold = false, fieldSync = [], outlineSig = '', outlineKey = '', taskFilter = 'all', edFor = null, taskView = 'list', calDay = '';
 let cal = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let stamp = { type: 'sticker', shape: 'star', pattern: 'stripes', fill: VIVID[2] }, connStyle = 'straight', connColor = '';
@@ -554,6 +557,7 @@ function drawFrame() {
   const changed = drawEls(rctx(false));
   drawOverlay();
   const zv = $('#zoomt'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
+  const mp = $('#m-props'); if (mp) mp.classList.toggle('m-sel', sel.size > 0);
   // The minimap's pieces follow edits and drags, not the camera.
   drawMini(changed && (miniVer !== editVer || !!mode)); miniVer = editVer;
 }
@@ -758,7 +762,7 @@ function boxFrac(e, p) {
   return [(x - e.x) / (e.w || 1), (y - e.y) / (e.h || 1)];
 }
 function drawOverlay(extra) {
-  if (vedit && E(vedit.id)) { ov.replaceChildren(nodeMarks(E(vedit.id)), ...(extra ? [extra] : [])); return; }
+  if (vedit && E(vedit.id)) { ov.replaceChildren(nodeMarks(E(vedit.id)), ...(extra ? [extra] : [])); touchTargets(); return; }
   const k = 1 / cam.z, list = selEls(), out = [], solo = panelEls().length === 1 && list.length === 1 && !editing;
   for (const e of list) {
     const col = e.locked ? '#b93232' : C.accent;
@@ -823,7 +827,7 @@ function drawOverlay(extra) {
   }
   if (extra) out.push(extra);
   const hm = hoverMark(k); if (hm) out.unshift(hm);
-  ov.replaceChildren(...out);
+  ov.replaceChildren(...out); touchTargets();
 }
 /** Ids that move together: the unlocked selection plus everything sitting inside a selected frame. */
 function moveSet() {
@@ -851,6 +855,7 @@ function refresh() {
   if (vedit && !(sel.size === 1 && sel.has(vedit.id) && E(vedit.id))) vedit = null;
   draw(); renderRight(); renderPages(); renderOutline(); renderFly(); renderKanban();
   const u = $('#undo'), r = $('#redo'); if (u) { u.disabled = !hist.undo.length; r.disabled = !hist.redo.length; }
+  const mu = $('#m-undo'), mr = $('#m-redo'); if (mu) { mu.disabled = !hist.undo.length; mr.disabled = !hist.redo.length; }
   if (cv) cv.style.cursor = tool === 'pen' ? (penMode === 'erase' ? 'cell' : 'crosshair') : tool === 'select' ? '' : 'crosshair';
   document.querySelectorAll('.toolbar button').forEach(b => { const on = b.dataset.tool === tool; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
 }
@@ -947,8 +952,10 @@ function zoomAt(f, sx, sy, soon = false) {
 function fit(list) {
   const r = cvBox(), b = bounds(list || all());
   if (!b || !r.width) { cam = { x: r.width / 2 || 300, y: r.height / 2 || 200, z: 1 }; return draw(); }
-  const z = Math.min(1.25, Math.max(0.1, Math.min((r.width - 100) / Math.max(b.w, 1), (r.height - 120) / Math.max(b.h, 1))));
-  cam = { z, x: r.width / 2 - (b.x + b.w / 2) * z, y: r.height / 2 - (b.y + b.h / 2) * z + 14 }; draw();
+  // On small screens the floating bar sits over the top of the canvas, so fit below it.
+  const mb = $('.mbar'), top = mb && mb.offsetParent ? mb.offsetTop + mb.offsetHeight : 0;
+  const mx = Math.min(100, r.width * 0.1), my = Math.min(120, r.height * 0.16), z = Math.min(1.25, Math.max(0.1, Math.min((r.width - mx) / Math.max(b.w, 1), (r.height - top - my) / Math.max(b.h, 1))));
+  cam = { z, x: r.width / 2 - (b.x + b.w / 2) * z, y: top + (r.height - top) / 2 - (b.y + b.h / 2) * z + (top ? 0 : 14) }; draw();
 }
 /** The color of the last sticky note colored by hand, used for the next new one (as FigJam does). */
 let lastSticky = null;
@@ -1268,12 +1275,75 @@ function idAt(target, ev) {
   }
   return null;
 }
+/* ---------- Touch: two fingers pan and pinch, a held finger opens the menu ---------- */
+const fingers = new TC.Touches();
+let pinch = null, fingerHold = 0, pressAt = null, lastTouch = 0;
+const canvasPt = (q, r) => ({ x: q.x - r.left, y: q.y - r.top });
+function canvasDown(ev) {
+  touchUI = ev.pointerType === 'touch';
+  if (!touchUI) return onDown(ev);
+  lastTouch = Date.now();
+  const at = { x: ev.clientX, y: ev.clientY };
+  fingers.down(ev.pointerId, at); cv.setPointerCapture(ev.pointerId);
+  if (fingers.count === 2 && !pinch) { startPinch(); return; }
+  if (fingers.count > 1 || pinch || (mode && mode.k === 'fingers')) return;
+  onDown(ev);
+  clearTimeout(fingerHold); pressAt = at;
+  if (tool === 'select' && !vedit && !editing && !cropId && (!mode || ['drag', 'pan'].includes(mode.k))) fingerHold = setTimeout(() => longPress(at), TC.LONG_PRESS_MS);
+}
+/** A second finger takes over: whatever the first finger started is undone, and the board pans and zooms. */
+function startPinch() {
+  clearTimeout(fingerHold); pressAt = null;
+  const m = mode; mode = null;
+  if (m && m.k !== 'pan' && m.k !== 'create' && m.k !== 'pen' && m.k !== 'conn') { if (hist.revert(board.els, m.start ? m.start.map(e => e.id) : undefined).length) editVer++; }
+  if (m && m.k === 'marquee') sel = m.keep;
+  const [a, b] = fingers.pair(), r = cvBox();
+  pinch = { cam: { ...cam }, a: canvasPt(a, r), b: canvasPt(b, r) };
+  refresh();
+}
+function canvasMove(ev) {
+  if (ev.pointerType === 'touch' && fingers.move(ev.pointerId, { x: ev.clientX, y: ev.clientY })) {
+    lastTouch = Date.now();
+    if (pressAt && TC.movedPast(pressAt, { x: ev.clientX, y: ev.clientY })) { clearTimeout(fingerHold); pressAt = null; }
+    if (pinch) { const [a, b] = fingers.pair(), r = cvBox(); cam = TC.pinchCam(pinch, canvasPt(a, r), canvasPt(b, r)); drawSoon(); return; }
+    if (mode && mode.k === 'fingers') return;
+  }
+  onMove(ev);
+}
+function canvasUp(ev) {
+  if (ev.pointerType !== 'touch' || !fingers.has(ev.pointerId)) return onUp(ev);
+  fingers.up(ev.pointerId); lastTouch = Date.now(); clearTimeout(fingerHold); pressAt = null;
+  if (pinch) { if (fingers.count < 2) { pinch = null; mode = fingers.count ? { k: 'fingers' } : null; draw(); } return; }
+  if (mode && mode.k === 'fingers') { if (!fingers.count) mode = null; return; }
+  if (ev.type === 'pointercancel' && mode) { const m = mode; mode = null; if (m.start && hist.revert(board.els, m.start.map(e => e.id)).length) editVer++; refresh(); return; }
+  onUp(ev); hoverId = null;
+}
+/** A finger held still opens the same menu as a right-click, for the piece under it or the board. */
+function longPress(at) {
+  fingerHold = 0; pressAt = null;
+  if (fingers.count !== 1 || pinch) return;
+  if (mode && mode.start && hist.revert(board.els, mode.start.map(e => e.id)).length) editVer++;
+  mode = { k: 'fingers' };
+  if (navigator.vibrate) try { navigator.vibrate(8); } catch { /* not allowed here */ }
+  openMenu({ preventDefault() {}, clientX: at.x, clientY: at.y, target: document.elementFromPoint(at.x, at.y) });
+}
+/** Small handles get an invisible ring of extra target so a fingertip can catch them. */
+function touchTargets() {
+  if (!touchUI) return;
+  const rad = TC.TOUCH_HIT / cam.z;
+  for (const n of [...ov.querySelectorAll('[data-h]')]) {
+    if (n.tagName === 'g' || n.closest('.qc') && n.tagName !== 'circle') continue;
+    let b; try { b = n.getBBox(); } catch { continue; }
+    if (Math.max(b.width, b.height) * cam.z > TC.TOUCH_HIT * 1.5) continue;
+    n.before(s('circle', { 'data-h': n.getAttribute('data-h'), cx: b.x + b.width / 2, cy: b.y + b.height / 2, r: rad, fill: 'transparent', class: 'hit' }));
+  }
+}
 function onDown(ev) {
   closeMenu(); if (ev.button === 2) return;
   const act = document.activeElement; if (act && act !== document.body && act.blur) act.blur();
   if (editing) endEdit();
   const p = pt(ev), now = Date.now(); let id = idAt(ev.target, ev); hoverId = null;
-  const dbl = now - lastDown.t < 350 && Math.hypot(ev.clientX - lastDown.x, ev.clientY - lastDown.y) < 6; lastDown = { t: dbl ? 0 : now, x: ev.clientX, y: ev.clientY };
+  const dbl = now - lastDown.t < 350 && Math.hypot(ev.clientX - lastDown.x, ev.clientY - lastDown.y) < (ev.pointerType === 'touch' ? 24 : 6); lastDown = { t: dbl ? 0 : now, x: ev.clientX, y: ev.clientY };
   cv.setPointerCapture(ev.pointerId);
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
   if (vedit && vEditDown(ev, p, id, dbl)) return;
@@ -1328,6 +1398,8 @@ function onDown(ev) {
       const move = moveSet();
       mode = { k: 'drag', p, id, had, dup: ev.altKey, moved: false, start: [...move].map(i => clone(E(i))), box0: bounds([...move].map(E)), others: otherBoxes(move) }; refresh(); return;
     }
+    // A finger on empty space pans the board; a tap there clears the selection.
+    if (ev.pointerType === 'touch') { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y, tap: true }; return; }
     if (!ev.shiftKey) sel.clear(); mode = { k: 'marquee', p, keep: new Set(sel) }; refresh(); return;
   }
   if (tool === 'pen' && penMode === 'erase') { mode = { k: 'erase' }; eraseAt(ev); return; }
@@ -1396,7 +1468,7 @@ function onMove(ev) {
     const n = mode.e.paths[mode.si].nodes[mode.i]; V.dragHandle(n, mode.which, p.x - mode.e.x, p.y - mode.e.y, ev.altKey); draw(); drawOverlay();
   }
   else if (mode.k === 'drag') {
-    let dx = p.x - mode.p.x, dy = p.y - mode.p.y, guides = [], gaps = []; if (!mode.moved && Math.hypot(dx, dy) * cam.z < 3) return; mode.moved = true;
+    let dx = p.x - mode.p.x, dy = p.y - mode.p.y, guides = [], gaps = []; if (!mode.moved && Math.hypot(dx, dy) * cam.z < (touchUI ? 8 : 3)) return; mode.moved = true;
     if (ev.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
     if (mode.box0 && !ev.ctrlKey && !ev.metaKey) { const r = snapMove({ x: mode.box0.x + dx, y: mode.box0.y + dy, w: mode.box0.w, h: mode.box0.h }, mode.others, 6 / cam.z); dx += r.dx; dy += r.dy; guides = r.guides; gaps = r.gaps; }
     for (const o of mode.start) { const e = E(o.id); if (e.type === 'conn') { e.ax = o.ax + dx; e.ay = o.ay + dy; e.bx = o.bx + dx; e.by = o.by + dy; } else { e.x = Math.round(o.x + dx); e.y = Math.round(o.y + dy); } }
@@ -1468,6 +1540,7 @@ function onMove(ev) {
 }
 function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
+  if (m.k === 'pan') { if (m.tap && sel.size && !TC.movedPast({ x: m.sx, y: m.sy }, { x: ev.clientX, y: ev.clientY })) { sel.clear(); refresh(); } return; }
   if (m.k === 'vhandle') { drawDraft(); return; }
   if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
   if (m.k === 'drag') { if (m.dup) commit(); else if (m.moved) commitIds(m.start.map(e => e.id)); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else if (sel.size === 1 && emptyPh(E(m.id))) phClick(E(m.id)); else drawOverlay(); }
@@ -1571,17 +1644,27 @@ async function openBoard(id) {
   const proj = index.projects.find(p => p.id === m.projectId), [sc, st] = statParts(), label = Object.fromEntries(TOOLS);
   const tab = (k, text) => h('button', { role: 'tab', id: 'tab-' + k, 'aria-controls': 'p' + k, onclick: () => { rightTab = k; edFor = null; renderRight(); } }, text);
   $('#app').replaceChildren(h('div', { class: 'board' },
-    h('aside', { class: 'outline', 'aria-label': 'Outline' },
+    // In the small-screen drawer, picking a page or a row closes it (after a beat, so a double-click to rename still lands).
+    h('aside', { class: 'outline', 'aria-label': 'Outline', onclick: e => { if (!e.target.closest('.orow')) return; clearTimeout(olClose); if (e.detail < 2) olClose = setTimeout(() => sidePanel(null), 380); } },
       h('div', { class: 'o-head' },
         h('button', { class: 'back', onclick: () => { if (editing) endEdit(); saveNow(); renderHome(); } }, logo(), icon('M12.5 4.5L7 10l5.5 5.5', 10, { 'stroke-width': 2 }), 'All boards'),
-        h('input', { class: 'b-name', id: 'board-name', type: 'text', value: m.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onchange: e => { m.name = e.target.value.trim() || m.name; e.target.value = m.name; saveIndex(); } }),
+        h('input', { class: 'b-name', id: 'board-name', type: 'text', value: m.name, 'aria-label': 'Board name', onkeydown: e => { if (e.key === 'Enter') e.target.blur(); }, onchange: e => { m.name = e.target.value.trim() || m.name; e.target.value = m.name; const mn = $('#m-name'); if (mn) mn.textContent = m.name; saveIndex(); } }),
         h('div', { class: 'b-meta' }, proj ? h('span', null, L.pathOf(index, m)) : null, h('span', { class: 'stat', id: 'stat' }, h('span', { class: 'dot ' + sc }), st))),
       h('div', { class: 'o-label o-split' }, 'Pages', h('button', { class: 'icon-btn sm', title: 'Add page', 'aria-label': 'Add page', onclick: addPage }, icon('M10 4v12M4 10h12', 12))),
       h('div', { class: 'pages', id: 'plist' }),
       h('div', { class: 'o-label' }, 'Outline'),
       h('div', { class: 'o-list', id: 'olist' }),
       h('button', { class: 'o-foot', onclick: toggleHelp }, 'Keyboard shortcuts', h('kbd', null, '?'))),
+    h('div', { class: 'scrim', 'aria-hidden': 'true', onclick: () => sidePanel(null) }),
     h('div', { class: 'stage' },
+      // On small screens the docked panels fold away; this floating bar opens them.
+      h('div', { class: 'mbar', role: 'toolbar', 'aria-label': 'Board' },
+        h('button', { class: 'icon-btn', id: 'm-outline', title: 'Pages and outline', 'aria-label': 'Pages and outline', onclick: () => sidePanel('ol') }, icon('M3.5 5.5h13M3.5 10h13M3.5 14.5h13', 16)),
+        h('button', { class: 'm-name', id: 'm-name', onclick: () => sidePanel('ol') }, m.name),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'icon-btn m-tab', id: 'm-undo', title: 'Undo', 'aria-label': 'Undo', onclick: () => travel('undo') }, icon('M7.5 5L4 8.5 7.5 12M4 8.5h8.5a3.5 3.5 0 0 1 0 7H10', 16)),
+        h('button', { class: 'icon-btn m-tab', id: 'm-redo', title: 'Redo', 'aria-label': 'Redo', onclick: () => travel('redo') }, icon('M12.5 5L16 8.5 12.5 12M16 8.5H7.5a3.5 3.5 0 0 0 0 7H10', 16)),
+        h('button', { class: 'icon-btn m-only', id: 'm-props', title: 'Design, tasks, and slides', 'aria-label': 'Design, tasks, and slides', onclick: () => sidePanel('pr') }, icon('M4 6h7M14 6h2M4 14h2M9 14h7M12.5 4v4M7.5 12v4', 16))),
       h('nav', { class: 'toolbar', 'aria-label': 'Tools' }, BAR.map(t => t === '|' ? h('span', { class: 'tsep', 'aria-hidden': 'true' })
         : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { endDraft(); tool = t; refresh(); } } }, trayIcon(t)))),
       h('div', { class: 'fly', id: 'fly', hidden: true }),
@@ -1606,6 +1689,7 @@ async function openBoard(id) {
         h('span', { class: 'grow' }),
         h('button', { class: 'icon-btn', id: 'present-btn', title: 'Present (Ctrl+Enter)', 'aria-label': 'Present', onclick: e => presentMenu(e.currentTarget) }, icon('M7 4.5l8.5 5.5L7 15.5z', 16)),
         h('button', { class: 'icon-btn', id: 'kanban-toggle', 'aria-pressed': 'false', 'aria-label': 'Kanban', title: 'Kanban: task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, icon('M3.5 4h3.5v12H3.5zM8.25 4h3.5v8h-3.5zM13 4h3.5v10H13z', 16)),
+        h('button', { class: 'icon-btn m-only', title: 'Close', 'aria-label': 'Close panel', onclick: () => sidePanel(null) }, icon('M5 5l10 10M15 5L5 15', 16)),
         h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [{ head: 'Export' }, ['PNG image', () => exportAs('png'), '', MI.image], ['SVG vector', () => exportAs('svg'), '', MI.code], ['PDF, this page', () => exportPdf(false), '', MI.pdf], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true), '', MI.pdf] : null, deckOf('all').length ? ['PDF, slides', () => exportSlides(), '', MI.pdf] : null, SL.slidesOf(board.els).length ? ['PowerPoint, this page\'s slides', () => exportPptx(), '', MI.pdf] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
       h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks'), tab('slides', 'Slides')),
       h('div', { class: 'p-body', id: 'pdesign', role: 'tabpanel' }),
@@ -1625,12 +1709,20 @@ async function openBoard(id) {
   mini.addEventListener('pointerdown', ev => { miniDrag = true; mini.setPointerCapture(ev.pointerId); miniGo(ev); });
   mini.addEventListener('pointermove', ev => { if (miniDrag) miniGo(ev); });
   const miniEnd = () => { miniDrag = false; draw(); }; mini.addEventListener('pointerup', miniEnd); mini.addEventListener('pointercancel', miniEnd);
-  cv.addEventListener('contextmenu', openMenu);
+  // Android opens a context menu on a long press by itself; the long-press timer below already did.
+  cv.addEventListener('contextmenu', ev => { if (fingers.count || Date.now() - lastTouch < 900) { ev.preventDefault(); return; } openMenu(ev); });
   cv.addEventListener('dragover', ev => ev.preventDefault());
   cv.addEventListener('drop', async ev => { ev.preventDefault(); const p = pt(ev); let i = 0; for (const f of [...ev.dataTransfer.files]) { if (/\.pptx$/i.test(f.name)) { await importPptx(f); continue; } await addImage(f, { x: p.x + i * 24, y: p.y + i++ * 24 }); } });
-  cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerleave', () => { if (hoverId) { hoverId = null; drawOverlay(); } }); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
+  cv.addEventListener('pointerdown', canvasDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', canvasMove); cv.addEventListener('pointerleave', () => { if (hoverId) { hoverId = null; drawOverlay(); } }); cv.addEventListener('pointerup', canvasUp); cv.addEventListener('pointercancel', canvasUp);
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy, true); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; drawSoon(); } }, { passive: false });
   fit(); refresh(); loadImages();
+}
+/** Open the outline drawer ('ol') or the properties sheet ('pr') on small screens, or close both (null). */
+let olClose = 0;
+function sidePanel(which) {
+  const bd = $('.board'); if (!bd) return;
+  const on = which && !bd.classList.contains(which + '-open') ? which : null;
+  bd.classList.toggle('ol-open', on === 'ol'); bd.classList.toggle('pr-open', on === 'pr');
 }
 /* ---------- Tasks across pages ---------- */
 const pageOf = id => board.pages.find(p => p.els[id]);
@@ -2896,6 +2988,22 @@ window.addEventListener('paste', onPaste);
 window.addEventListener('pointerdown', ev => { if (!(ev.target.closest && ev.target.closest('#menu'))) closeMenu(); }, true);
 window.addEventListener('keyup', ev => { if (ev.key === ' ') { spaceDown = false; if (cv) cv.classList.remove('pan'); } });
 window.addEventListener('pagehide', () => { if (board) saveNow(); });
+// Phones and tablets: the page itself never zooms (the board does), the keyboard never hides the text
+// being typed, and presentations follow swipes.
+document.addEventListener('gesturestart', ev => ev.preventDefault());
+if (window.visualViewport) visualViewport.addEventListener('resize', () => {
+  cvRect = null; if (!board || !editing) return;
+  const e = E(editing), ed = e && (richEd(e) ? $('#red') : $('#ed')); if (!ed) return;
+  const r = ed.getBoundingClientRect(), bottom = visualViewport.offsetTop + visualViewport.height - 16;
+  if (r.bottom > bottom) { cam.y -= Math.min(r.bottom - bottom, Math.max(0, r.top - 72)); draw(); placeEditor(); }
+});
+let swipe0 = null;
+document.addEventListener('touchstart', ev => { swipe0 = show && ev.touches.length === 1 ? { x: ev.touches[0].clientX, y: ev.touches[0].clientY } : null; }, { passive: true });
+document.addEventListener('touchend', ev => {
+  if (!show || !swipe0 || ev.target.closest('.pz-bar')) return;
+  const q = ev.changedTouches[0], dx = q.clientX - swipe0.x, dy = q.clientY - swipe0.y; swipe0 = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) goShow(dx < 0 ? 1 : -1);
+});
 applyTheme(themePref());
 // The vector engine loads alongside storage; panels that offer its tools refresh once it is ready.
 PO.init().then(ok => { if (ok && board) renderProps(); });

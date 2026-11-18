@@ -365,13 +365,12 @@ input.h-title:focus{background:var(--field);box-shadow:inset 0 0 0 1.5px var(--a
 @keyframes ixflow{to{stroke-dashoffset:-12.1}}
 @media (prefers-reduced-motion:reduce){.flow,.menu,.help-b,.toast{animation:none}*{transition:none!important}}
 .qc circle{transition:transform .1s}
-@media (max-width:1100px){.outline{display:none}}
 @media (max-width:760px){
   .home{flex-direction:column}
   .lib{width:auto;flex-direction:row;flex-wrap:wrap;align-items:center;border-right:0;border-bottom:1px solid var(--line);padding:8px}
   .lib .nav{width:auto}.lib-h,.lib .grow,.lib .stat,.lib-empty{display:none}
   .brand{padding:0 8px 0 4px}.search{width:160px;margin:0}
-  .props{width:232px}.mini{display:none}
+  .mini{display:none}
   .kan{grid-template-columns:repeat(4,220px)}
 }
 
@@ -666,3 +665,70 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color
 /* Zoomed far out: no paper shadows, and below that no text (too small to read), to keep panning smooth */
 #cv .far [filter]{filter:none}
 #cv .very-far text{display:none}
+
+/* Small screens and touch.
+   Up to 1100px wide the outline is a drawer opened from a floating bar that also holds undo and redo.
+   On phones (up to 760px wide, or a short touch screen held sideways) the properties are a bottom sheet
+   too, opened from the same bar. Fingers get 40px+ targets. */
+html{touch-action:manipulation;-webkit-text-size-adjust:100%}
+html,body,#app{height:100dvh}
+.mbar,.scrim,.m-only,.m-tab{display:none}
+@media (max-width:1100px){
+  .board{position:relative}
+  .outline{position:fixed;z-index:21;top:0;bottom:0;left:0;width:min(300px,86vw);transform:translateX(-104%);transition:transform .24s var(--ease),box-shadow .24s var(--ease);padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+  .board.ol-open .outline{transform:none;box-shadow:var(--lift)}
+  .board.ol-open .scrim{display:block;position:fixed;inset:0;z-index:20;background:rgba(11,13,14,.25)}
+  .mbar{display:flex;position:absolute;z-index:3;top:calc(12px + env(safe-area-inset-top));left:12px;max-width:calc(100% - 24px);align-items:center;gap:2px;padding:4px;border-radius:var(--r3);background:var(--panel);box-shadow:var(--float)}
+  .m-name{min-width:0;max-width:220px;height:32px;padding:0 8px;border-radius:var(--r1);font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .m-name:hover{background:var(--hover)}
+  .mbar .grow{display:none}
+  .m-tab{display:grid}
+  #undo,#redo{display:none}
+  .mini{bottom:84px}
+}
+@media (max-width:760px),(max-height:500px) and (pointer:coarse){
+  .board{position:relative}
+  .outline{position:fixed;z-index:21;top:0;bottom:0;left:0;width:min(300px,86vw);transform:translateX(-104%);transition:transform .24s var(--ease),box-shadow .24s var(--ease)}
+  .board.ol-open .outline{transform:none;box-shadow:var(--lift)}
+  .board.ol-open .scrim{display:block;position:fixed;inset:0;z-index:20;background:rgba(11,13,14,.25)}
+  .mbar{display:flex;position:absolute;z-index:3;top:calc(12px + env(safe-area-inset-top));left:12px;right:12px;align-items:center;gap:2px;padding:4px;border-radius:var(--r3);background:var(--panel);box-shadow:var(--float)}
+  .mbar .grow{display:block;flex:1}
+  .m-only,.m-tab{display:grid}
+  #undo,#redo,.mini{display:none}
+  .m-name{min-width:0;max-width:none;height:32px;padding:0 8px;border-radius:var(--r1);font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #m-props{position:relative}
+  #m-props.m-sel::after{content:'';position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--accent-fill);box-shadow:0 0 0 2px var(--panel)}
+  .props{position:fixed;z-index:21;left:0;right:0;bottom:0;width:auto;height:min(64dvh,600px);border-left:0;border-radius:var(--r4) var(--r4) 0 0;transform:translateY(104%);transition:transform .26s var(--ease),box-shadow .26s var(--ease);padding-bottom:env(safe-area-inset-bottom)}
+  .board.pr-open .props{transform:none;box-shadow:var(--lift)}
+  .props::before{content:'';position:absolute;top:6px;left:50%;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--border)}
+  .p-head{padding-top:6px}
+  .toolbar{bottom:calc(12px + env(safe-area-inset-bottom));left:12px;right:12px;transform:none;max-width:none;justify-content:flex-start;scrollbar-width:none}
+  .toolbar::-webkit-scrollbar{display:none}
+  .fly{bottom:calc(76px + env(safe-area-inset-bottom));width:min(300px,calc(100% - 24px))}
+  .toast{bottom:calc(84px + env(safe-area-inset-bottom));max-width:calc(100% - 24px)}
+  .help{padding:0;place-items:end stretch}
+  .help-b{border-radius:var(--r4) var(--r4) 0 0;max-height:88dvh;padding:20px 16px calc(20px + env(safe-area-inset-bottom))}
+}
+@media (max-height:500px) and (pointer:coarse){
+  .props{left:auto;top:0;width:min(340px,60vw);height:auto;border-radius:var(--r4) 0 0 var(--r4);transform:translateX(104%);padding-bottom:0}
+  .props::before{display:none}
+  .toolbar{right:auto;max-width:calc(100% - 24px)}
+}
+@media (max-width:760px){
+  .lib-top{padding:20px 16px 12px}
+  .cards{padding:8px 16px 32px;gap:24px 14px;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+}
+.menu{max-height:calc(100dvh - 12px);overflow:auto}
+@media (pointer:coarse){
+  .icon-btn{width:40px;height:40px}
+  .icon-btn.sm{width:32px;height:32px}
+  .p-head .icon-btn{width:34px;height:40px}
+  .m-name{height:40px}
+  .toolbar button{width:44px;height:44px}
+  .tabs button{height:44px}
+  .menu button{height:44px}
+  .menu.tiles button{height:46px}
+  .orow.pg{height:40px}
+  .present .pz-bar{opacity:1;transform:translate(-50%,0)}
+  .pz-btn{min-width:40px;height:40px}
+}

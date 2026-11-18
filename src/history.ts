@@ -41,6 +41,22 @@ export class History {
     return true;
   }
 
+  /**
+   * Put els back to the last committed state, dropping uncommitted changes (a drag cut short by a
+   * second finger). `only` limits the work to the given ids. Returns the ids that changed.
+   */
+  revert(els: Els, only?: Iterable<string>): string[] {
+    const changed: string[] = [];
+    for (const id of only ? new Set(only) : new Set([...Object.keys(this.shadow), ...Object.keys(els)])) {
+      const b = this.shadow[id] ?? null;
+      const a = els[id] ? JSON.stringify(els[id]) : null;
+      if (a === b) continue;
+      if (b) els[id] = JSON.parse(b); else delete els[id];
+      changed.push(id);
+    }
+    return changed;
+  }
+
   /** Apply one undo or redo step to els. Returns ids that were removed, or null if there was nothing to do. */
   step(els: Els, dir: 'undo' | 'redo'): string[] | null {
     const from = dir === 'undo' ? this.undo : this.redo;
