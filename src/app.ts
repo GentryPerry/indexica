@@ -32,6 +32,7 @@ import * as B from './boolean';
 import { BRUSHES, PROFILES, brushOutline, outlineD, profileOutline, shaped, eraseStroke, touches } from './brush';
 import * as PT from './paint';
 import * as PO from './pathops';
+import * as PG from './presetgeom';
 import * as X from './exact';
 import * as LB from './livebool';
 import * as VE from './vecerase';
@@ -492,7 +493,7 @@ const drawn = new Map();
 let drawnKey = '', drawnIds = '';
 const geo = x => x ? [x.type, x.x, x.y, x.w, x.h, x.rot, x.paths, x.pts, x.shape, x.style] : null;
 function drawEls(rc) {
-  const key = [C.theme, C.ink, C.muted, C.line, C.accentFill, C.frame, editing, editCell && editCell.join()].join('|');
+  const key = [C.theme, C.ink, C.muted, C.line, C.accentFill, C.frame, editing, editCell && editCell.join(), PG.presetsReady()].join('|');
   if (key !== drawnKey) { drawn.clear(); drawnKey = key; }
   const r = cvBox(), pad = 120 / cam.z;
   const view = { x: -cam.x / cam.z - pad, y: -cam.y / cam.z - pad, w: r.width / cam.z + 2 * pad, h: r.height / cam.z + 2 * pad };
@@ -647,6 +648,12 @@ function drawOverlay(extra) {
         g.append(edgeGrip('n', e.x, e.y - gw / 2, e.w, gw, 'ns'), edgeGrip('s', e.x, y1 - gw / 2, e.w, gw, 'ns'), edgeGrip('w', e.x - gw / 2, e.y, gw, e.h, 'ew'), edgeGrip('e', x1 - gw / 2, e.y, gw, e.h, 'ew'));
         for (const [n, px, py, cur] of [['nw', e.x, e.y, 'nwse'], ['ne', x1, e.y, 'nesw'], ['sw', e.x, y1, 'nesw'], ['se', x1, y1, 'nwse']]) g.append(handleSq(n, px, py, 4 * k, k, cur));
       }
+      // Adjust handles go on top of the edge grips so they can be caught where they overlap.
+      const pdef = e.preset && PG.presetDef(e.preset);
+      if (pdef && e.type === 'rect') for (const hd of PG.presetHandles(pdef, e.w, e.h, e.adj)) {
+        const hx = e.x + hd.x, hy = e.y + hd.y, r = 5 * k;
+        g.append(s('path', { 'data-h': 'adj-' + hd.i, class: 'adjh', d: `M${hx} ${hy - r}L${hx + r} ${hy}L${hx} ${hy + r}L${hx - r} ${hy}Z`, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.25 * k, style: 'cursor:pointer' }, s('title', null, 'Drag to adjust the shape')));
+      }
     }
     out.push(g);
     if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k, !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode && !e.rot));
@@ -796,7 +803,18 @@ function fit(list) {
 }
 /** The color of the last sticky note colored by hand, used for the next new one (as FigJam does). */
 let lastSticky = null;
+function makeShape(x, y, w, ht, keep) {
+  const drawn = w > 8 && ht > 8, sq = SQUARE_SHAPES.test(shapePick), dw = sq ? 120 : 180, dh = sq ? 120 : 100;
+  const e = { id: uid('e'), type: 'rect', preset: shapePick, z: topZ() + 1, x: Math.round(drawn ? x : x - dw / 2), y: Math.round(drawn ? y : y - dh / 2), w: Math.round(drawn ? Math.max(w, 20) : dw), h: Math.round(drawn ? Math.max(ht, 20) : dh), text: '', fill: '#ffffff' };
+  // On a slide a shape takes the theme's first accent, as PowerPoint's default shape style does.
+  if (slideAt(e)) { const th = deckTheme(); DK.linkTheme(e, 'fill', 'accent1', th); DK.linkTheme(e, 'stroke', 'accent1', th); e.color = '#ffffff'; }
+  board.els[e.id] = e; sel = new Set([e.id]); if (!keep) tool = 'select'; commit(); startEdit(e.id);
+}
+/** The preset the Shapes tool places, and the shapes that start square. */
+let shapePick = 'rightArrow';
+const SQUARE_SHAPES = /^(star|irregularSeal|ellipse|flowChartConnector|flowChartOr|flowChartSummingJunction|smileyFace|sun|moon|heart|noSmoking|donut|blockArc|pie|chord|teardrop|octagon|hexagon|heptagon|decagon|dodecagon|pentagon|plus|math|cloud|gear|cube|can|frame|lightningBolt|circularArrow|quadArrow|triangle|rtTriangle|diamond|flowChartDecision|flowChartSort|flowChartCollate)/;
 function makeBox(type, x, y, w, ht, keep = false) {
+  if (type === 'shape') { makeShape(x, y, w, ht, keep); return; }
   const d = { sticky: [G.STICKY_SIDE, G.STICKY_SIDE], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320], sticker: [84, 84], tape: [220, 32], table: [360, 120] }[type];
   const drawn = w > 8 && ht > 8, e = { id: uid('e'), type, z: topZ() + 1, x: Math.round(drawn ? x : x - d[0] / 2), y: Math.round(drawn ? y : y - d[1] / 2), w: Math.round(drawn && type !== 'card' ? Math.max(w, 30) : d[0]), h: Math.round(drawn && type !== 'card' && type !== 'text' ? Math.max(ht, 30) : d[1]), text: '' };
   if (type === 'sticky') { e.fill = lastSticky || FILLS[0]; if (Store.uid) e.author = Store.uid; }
@@ -1072,6 +1090,7 @@ function onDown(ev) {
       }
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
       if (hd.startsWith('gr-')) { const gt = gradTarget(e); if (gt) { mode = { k: 'grad', e, which: hd.slice(3), lk: gt.k, li: gt.i }; return; } }
+      if (hd.startsWith('adj-')) { mode = { k: 'adjh', e, i: Number(hd.slice(4)) }; return; }
       if (hd.startsWith('col-')) { mode = { k: 'colsz', e, i: Number(hd.slice(4)), fr: colFractions(e), p }; return; }
       if (hd.startsWith('qc-')) { const side = hd.slice(3); mode = { k: 'conn', quick: true, a: e.id, as: side, p: sidePoint(e, side), sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
       if (hd === 'rot') {
@@ -1177,6 +1196,15 @@ function onMove(ev) {
     if (mode.box0 && !ev.ctrlKey && !ev.metaKey) { const r = snapMove({ x: mode.box0.x + dx, y: mode.box0.y + dy, w: mode.box0.w, h: mode.box0.h }, mode.others, 6 / cam.z); dx += r.dx; dy += r.dy; guides = r.guides; gaps = r.gaps; }
     for (const o of mode.start) { const e = E(o.id); if (e.type === 'conn') { e.ax = o.ax + dx; e.ay = o.ay + dy; e.bx = o.bx + dx; e.by = o.by + dy; } else { e.x = Math.round(o.x + dx); e.y = Math.round(o.y + dy); } }
     draw(); drawOverlay(s('g', null, guideMarks(guides), gapMarks(gaps)));
+  } else if (mode.k === 'adjh') {
+    // Adjust handle: the pointer in the shape's own unturned box sets its adjust values.
+    const e = mode.e, def = PG.presetDef(e.preset); if (!def) return;
+    let lx = p.x, ly = p.y;
+    if (e.rot) { const a = -e.rot * Math.PI / 180, cx = e.x + e.w / 2, cy = e.y + e.h / 2, dx = p.x - cx, dy = p.y - cy; lx = cx + dx * Math.cos(a) - dy * Math.sin(a); ly = cy + dx * Math.sin(a) + dy * Math.cos(a); }
+    const next = PG.dragHandle(def, e.w, e.h, e.adj || {}, mode.i, lx - e.x, ly - e.y), dflt = PG.defaultAdj(def);
+    for (const k of Object.keys(next)) if (next[k] === dflt[k]) delete next[k];
+    if (Object.keys(next).length) e.adj = next; else delete e.adj;
+    draw(); drawOverlay();
   } else if (mode.k === 'resize' && mode.crop) {
     const { e, o, hd } = mode, r = G.resizeBox(o, hd, p.x - mode.p.x, p.y - mode.p.y, 10, ev.shiftKey ? o.w / o.h : undefined);
     PIC.setWindow(e, r, mode.crop); draw(); drawOverlay();
@@ -1238,7 +1266,7 @@ function onUp(ev) {
   if (m.k === 'vhandle') { drawDraft(); return; }
   if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
   if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else if (sel.size === 1 && emptyPh(E(m.id))) phClick(E(m.id)); else drawOverlay(); }
-  else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale' || m.k === 'cpan') commit();
+  else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale' || m.k === 'cpan' || m.k === 'adjh') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
   else if (m.k === 'grad') commit();
@@ -1316,7 +1344,7 @@ function onKey(ev) {
   else if (k === 'enter' && liveOne()) { sel = new Set(LB.operandsOf(board.els, liveOne().id).flatMap(o => withKids(o.id))); refresh(); }
   else if (k === 'enter' && panelEls().length === 1 && panelEls()[0].type === 'path' && !panelEls()[0].live) enterVedit(panelEls()[0].id);
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
-  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', g: 'table', h: 'pen', e: 'pen', b: 'vpen' }[k];
+  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', u: 'shape', g: 'table', h: 'pen', e: 'pen', b: 'vpen' }[k];
     if (t) endDraft();
     if (k === 'p') penMode = 'pen'; if (k === 'h') penMode = 'hl'; if (k === 'e') penMode = 'erase'; if (k === 'h' || k === 'e' || k === 'p') penWidth = 0;
     if (k === 'i') $('#img-file').click(); else if (t) { tool = t; refresh(); } else done = false; }
@@ -1326,8 +1354,8 @@ function onKey(ev) {
 /* ---------- Board chrome ---------- */
 const ICON = { path: 'M10 2.5l5 5.5-2.7 7H7.7L5 8zM10 2.5v6.5M10 10.5a1.2 1.2 0 1 0 .01 0', vpen: 'M10 2.5l5 5.5-2.7 7H7.7L5 8zM10 2.5v6.5M10 10.5a1.2 1.2 0 1 0 .01 0', select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
   diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z', table: 'M3 4h14v12H3zM3 8h14M3 12h14M8 4v12M13 4v12', image: 'M3 4h14v12H3zM3 13.5l4-4 3 3 2.5-2 4.5 4M13.2 7.6a.6.6 0 1 0 .01 0' };
-const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['card', 'Task card (C)'], ['table', 'Table (G)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['vpen', 'Pen: curves and shapes (B)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
-const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'conn', 'pen', 'vpen', '|', 'card', 'table', 'frame', 'stamp', 'image'];
+const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['shape', 'Shapes (U)'], ['card', 'Task card (C)'], ['table', 'Table (G)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['vpen', 'Pen: curves and shapes (B)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
+const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'shape', 'conn', 'pen', 'vpen', '|', 'card', 'table', 'frame', 'stamp', 'image'];
 async function openBoard(id) {
   const m = meta(id); if (!m) return;
   closeMenu(); $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
@@ -1556,7 +1584,7 @@ function renderProps() {
         h('button', { class: 'fbtn', onclick: () => fit() }, 'Fit everything on screen')),
       sec(null, h('p', { class: 'hint' }, 'Select a piece to change it here. Double-click empty space to add a sticky note, or pick a tool from the bar under the board.')));
   } else {
-    out.push(h('div', { class: 'psec p-top' }, h('div', { class: 'p-title' }, one ? (one.live ? LIVE_NAMES[one.live] : TYPE_NAMES[one.type]) : `${list.length} pieces selected`,
+    out.push(h('div', { class: 'psec p-top' }, h('div', { class: 'p-title' }, one ? (one.live ? LIVE_NAMES[one.live] : one.preset ? PG.presetLabel(one.preset) : TYPE_NAMES[one.type]) : `${list.length} pieces selected`,
       list.some(e => e.locked) ? h('span', { class: 'lockchip' }, list.every(e => e.locked) ? 'Locked' : 'Some locked') : null)));
     if (one && one.type !== 'conn') {
       const e = one, lock = !!e.locked, keep = e.type === 'image' || e.type === 'sticker', pen = e.type === 'pen';
@@ -1637,6 +1665,13 @@ function renderProps() {
         h('p', { class: 'hint' }, 'Double-click a cell to type. Tab moves to the next cell.')));
     }
     if (one && one.type === 'image') out.push(pictureSection(one, num, pick, swatch));
+    if (one && one.type === 'rect' && one.preset) {
+      const sh = one, def = PG.presetDef(sh.preset);
+      out.push(sec('Shape',
+        h('select', { class: 'sel', id: 'shape-kind', 'aria-label': 'Shape', value: sh.preset, onchange: ev => { sh.preset = ev.target.value; delete sh.adj; commit(); } },
+          PG.SHAPE_GROUPS.map(([group, names]) => h('optgroup', { label: group }, names.map(n => h('option', { value: n }, PG.presetLabel(n)))))),
+        def && def.ah && def.ah.length ? h('div', { class: 'row' }, h('span', { class: 'hint grow' }, 'Drag the diamond handles on the shape to adjust it.'), h('button', { class: 'fbtn', disabled: !sh.adj, onclick: () => { delete sh.adj; commit(); } }, 'Reset')) : null));
+    }
     const vivid = of(['sticker', 'tape']), tapes = of(['tape']);
     if (vivid.length) out.push(sec('Color', h('div', { class: 'swatches' }, VIVID.map(c => swatch(c, same(vivid, 'fill') === c, () => setAll(vivid, 'fill', c)))),
       tapes.length ? pick('tape-pattern', 'Tape pattern', Object.entries(TAPES), same(tapes, 'pattern') || 'stripes', v => setAll(tapes, 'pattern', v, true)) : null));
@@ -1699,8 +1734,23 @@ function renderProps() {
   }
   el.replaceChildren(...out);
 }
+/** A small line drawing of a preset shape, for menus. */
+function shapeIcon(name, size = 22) {
+  const def = PG.presetDef(name); if (!def) return null;
+  const sq = SQUARE_SHAPES.test(name), w = sq ? 20 : 22, ht = sq ? 20 : 14, ps = PG.presetPaths(def, w, ht);
+  return s('svg', { viewBox: `${-(24 - w) / 2} ${-(24 - ht) / 2} 24 24`, width: size, height: size, 'aria-hidden': 'true' },
+    ps.map(p => s('path', { d: p.d, fill: p.fill === 'none' ? 'none' : 'var(--shape-fill)', stroke: p.stroke ? 'currentColor' : 'none', 'stroke-width': 1.1, 'stroke-linejoin': 'round' })));
+}
 function renderFly() {
-  const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp' && tool !== 'conn' && tool !== 'pen'; if (el.hidden) return;
+  const el = $('#fly'); if (!el) return; el.hidden = tool !== 'stamp' && tool !== 'conn' && tool !== 'pen' && tool !== 'shape'; if (el.hidden) return;
+  if (tool === 'shape') {
+    if (!PG.presetsReady()) { el.replaceChildren(h('p', { class: 'fly-n' }, 'Loading shapes...')); return; }
+    el.replaceChildren(...PG.SHAPE_GROUPS.flatMap(([group, names]) => [
+      h('div', { class: 'fly-h' }, group),
+      h('div', { class: 'fly-s' }, names.map(n => h('button', { class: shapePick === n ? 'on' : '', title: PG.presetLabel(n), 'aria-label': PG.presetLabel(n), onclick: () => { shapePick = n; renderFly(); } }, shapeIcon(n))))]),
+      h('p', { class: 'fly-n' }, 'Click the board to place the shape, or drag to set its size. Drag a shape\'s diamond handles to adjust its arrowheads, corners, and tails.'));
+    return;
+  }
   if (tool === 'pen') {
     const modes = [['pen', 'Pen', ICON.pen], ['brush', 'Brush', 'M15 3l2 2-6.2 6.2-2-2zM8.3 9.7l2 2c0 3-2.6 4.8-5.8 4.8 1-1 1.1-2.3 1.1-3.4 0-1.9 1.2-3.4 2.7-3.4z'], ['pencil', 'Pencil', 'M4 16l1-4 8.5-8.5 3 3L8 15zM12 5l3 3M5 12l3 3'], ['marker', 'Marker', 'M7.5 12.5l5.5-8.5 3 2-5.5 8.5zM7.5 12.5L6 16.5l3.5-1.5M4 18h12'], ['hl', 'Highlighter', 'M5 15l7-7 3 3-7 7H5zM12 8l2-2 3 3-2 2M4 18h12'], ['erase', 'Eraser', 'M8 16l-4-4 7-7 6 6-5 5zM8 16h9M7.5 9.5l5 5']];
     const colors = penMode === 'hl' ? HL_COLORS.map(c => [c, c, 'Color ' + c]) : [['', C.ink, 'Default'], ...VIVID.map(c => [c, c, 'Color ' + c])];
@@ -1818,7 +1868,7 @@ function openMenu(ev) {
     ['Select all', () => { sel = new Set(Object.keys(board.els)); refresh(); }], ['Fit everything', () => fit()], ['Keyboard shortcuts', toggleHelp]]);
 }
 const KEYS = [
-  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['H', 'Highlighter'], ['E', 'Eraser (drawings and vectors; Alt removes whole pieces)'], ['G', 'Table'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
+  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['U', 'Shapes: arrows, stars, callouts, flowchart'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['H', 'Highlighter'], ['E', 'Eraser (drawings and vectors; Alt removes whole pieces)'], ['G', 'Table'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Alt while placing', 'Keep the tool to place several'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
@@ -1833,6 +1883,7 @@ function toggleHelp() {
       h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { class: 'btn', onclick: toggleHelp }, 'Close')),
       h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
       h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'),
+      h('p', { class: 'note credit' }, 'Preset shapes are the 187 shapes of the Office Open XML standard (ECMA-376), drawn from its shape definitions.'),
       h('p', { class: 'note credit' }, 'Deck themes and slide layouts come from DeckCraft (MIT or Apache-2.0), by the ArtCraft Team and the DeckCraft contributors.'),
       h('p', { class: 'note credit' }, 'Vector booleans, outline stroke, offset, simplify, and smooth use the path engine from VectorCraft (MIT or Apache-2.0), by the ArtCraft Team and the VectorCraft contributors.'))));
 }
@@ -2548,6 +2599,8 @@ window.addEventListener('pagehide', () => { if (board) saveNow(); });
 applyTheme(themePref());
 // The vector engine loads alongside storage; panels that offer its tools refresh once it is ready.
 PO.init().then(ok => { if (ok && board) renderProps(); });
+// Preset shapes unpack in the background; shapes drawn before that show as plain boxes and redraw once they are ready.
+PG.loadPresets().then(() => { if (board) { draw(); renderFly(); renderProps(); } }).catch(() => {});
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (board) draw(); });
 new MutationObserver(() => { if (board) draw(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 (async () => {

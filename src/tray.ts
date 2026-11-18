@@ -10,6 +10,8 @@ export const LINE: Record<string, string> = {
   rect: 'M5 7h14v10H5z',
   ellipse: 'M3.5 12a8.5 6 0 1 0 17 0a8.5 6 0 1 0-17 0',
   diamond: 'M12 3.5l8.5 8.5-8.5 8.5L3.5 12z',
+  // A triangle and a circle, for the preset shapes gallery.
+  shape: 'M3.5 20l5.5-9.5 5.5 9.5zM16 4a4 4 0 1 0 .01 0',
   conn: 'M5 19C11 19 9 6 18.5 5.5M14.5 3.5l4 2-2 4',
   frame: 'M8 3.5v17M16 3.5v17M3.5 8h17M3.5 16h17',
   table: 'M4 5h16v14H4zM4 9.7h16M4 14.3h16M9.3 5v14M14.7 5v14',

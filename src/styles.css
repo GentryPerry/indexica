@@ -281,6 +281,9 @@ input.h-title:focus{background:var(--field);box-shadow:inset 0 0 0 1.5px var(--a
 .fly button.on{background:var(--picked);box-shadow:inset 0 0 0 1.5px var(--accent)}
 .fly-g svg{width:100%;aspect-ratio:1;display:block}
 .fly-t svg{width:100%;display:block}
+.fly-s{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;color:var(--ink-2);--shape-fill:var(--field)}
+.fly-s button{aspect-ratio:1;display:grid;place-items:center;border-radius:var(--r1);padding:0}
+.fly-s button:hover{background:var(--hover)}
 .fly-c{display:flex;flex-wrap:wrap;gap:6px;padding:2px}
 .fly-n{font-size:11px;color:var(--muted);margin:8px 0 0}
 
@@ -634,6 +637,7 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color
 .seg.grow{flex:1}
 .seg.grow button{flex:1;padding:0 4px}
 .slider{display:grid;grid-template-columns:72px 1fr 28px;align-items:center;gap:8px;font-size:12px;color:var(--ink-2)}
+.hint.grow{flex:1}
 .slider-v{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* Zoomed far out: no paper shadows, and below that no text (too small to read), to keep panning smooth */

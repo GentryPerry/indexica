@@ -109,6 +109,10 @@ export interface El {
   header?: boolean;
   /** Table style (see `TABLE_KINDS` in `table.ts`) with its accent color, and which parts it marks:
    *  banded rows, first column, total row. Unset style means the board's plain card table. */
+  /** A preset shape (one of the 187 in `presetgeom.ts`) drawn in a rect piece's box, with its adjust
+   *  values (guide name to value, as in DrawingML) where they differ from the defaults. */
+  preset?: string;
+  adj?: Record<string, number>;
   tstyle?: string;
   tacc?: string;
   band?: boolean;

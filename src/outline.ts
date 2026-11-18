@@ -1,4 +1,5 @@
 import { bbox } from './geometry';
+import { presetLabel } from './presetgeom';
 import { STICKERS } from './stickers';
 import type { El, Lookup } from './types';
 
@@ -22,6 +23,7 @@ export function elLabel(e: El, get: Lookup, depth = 0): string {
   }
   if (e.type === 'sticker') return `${(STICKERS[e.shape || ''] || STICKERS.star).label} sticker`;
   if (e.live) return LIVE_NAMES[e.live];
+  if (e.preset) return presetLabel(e.preset);
   return TYPE_NAMES[e.type];
 }
 

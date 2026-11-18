@@ -7,6 +7,7 @@ import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
 import { cellBox, cellLook, colFractions, rowsOf } from './table';
 import { adjustments } from './picture';
+import { presetDef, presetPaths, presetText } from './presetgeom';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
 import { flatten, pathD, scaleOf } from './vector';
@@ -213,6 +214,24 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (who) {
       const t = textBlock([who.length > 32 ? who.slice(0, 31) + '…' : who], x + 14, y + h - 12, { size: 11, weight: 500, family: FONTS.sans.stack, italic: false }, ink);
       t.setAttribute('fill-opacity', '0.6'); g.append(t);
+    }
+  } else if (e.type === 'rect' && e.preset && presetDef(e.preset)) {
+    // A preset shape: each of its paths fills and outlines on its own, as DrawingML draws them.
+    const def = presetDef(e.preset)!, fill = paintFill(e.fill, c.theme) || 'none', line = outline(e, c), ps = presetPaths(def, w, h, e.adj);
+    const sw = e.sw ?? 1.5, pg = s('g', { transform: `translate(${x} ${y})` });
+    for (const p of ps) {
+      if (p.fill !== 'none') {
+        pg.append(s('path', { d: p.d, fill }));
+        const shadeBy: Record<string, [string, number]> = { darken: ['#000000', 0.4], darkenLess: ['#000000', 0.2], lighten: ['#ffffff', 0.4], lightenLess: ['#ffffff', 0.2] };
+        const sh = shadeBy[p.fill]; if (sh) pg.append(s('path', { d: p.d, fill: sh[0], 'fill-opacity': sh[1], 'pointer-events': 'none' }));
+      }
+      if (p.stroke && e.stroke !== 'none') pg.append(s('path', { d: p.d, fill: 'none', stroke: line, 'stroke-width': sw, 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, sw), 'pointer-events': p.fill === 'none' ? 'stroke' : null }));
+      if (p.fill === 'none' && !c.exp) pg.append(s('path', { d: p.d, fill: 'none', stroke: 'transparent', 'stroke-width': 12 }));
+    }
+    g.append(pg);
+    if (!hide && e.text) {
+      const tb = presetText(def, w, h, e.adj), bx = x + tb.x, by = y + tb.y, ls = wrapEl(e, tb.w - 16), [tx, anchor] = lineStart(e, bx, tb.w, 8, 'center');
+      g.append(textBlock(ls, tx, by + tb.h / 2 - ls.length * lh / 2 + st.size * 0.97, st, inkOn(fill === 'none' ? c.under?.(e) : fill, e.color, c.theme), anchor));
     }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
     const fill = paintFill(e.fill, c.theme), line = outline(e, c);

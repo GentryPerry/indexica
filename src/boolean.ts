@@ -5,7 +5,8 @@
  */
 import pc from 'polygon-clipping';
 import type { MultiPolygon, Polygon, Ring } from 'polygon-clipping';
-import { diamondPath, ellipsePath, flatten, mapPaths, rectPath, simplify, smoothThrough, worldPaths, type SubPath, type VNode } from './vector';
+import { diamondPath, ellipsePath, flatten, fromD, mapPaths, rectPath, simplify, smoothThrough, worldPaths, type SubPath, type VNode } from './vector';
+import { presetDef, presetPaths } from './presetgeom';
 import type { El } from './types';
 
 export type BoolOp = 'union' | 'subtract' | 'intersect' | 'exclude';
@@ -27,6 +28,7 @@ export function outlineOf(e: El): SubPath[] {
   if (e.type === 'pen') return rotateSubs(e, mapPaths([smoothThrough(simplify(e.pts || [], 1.2))], (x, y) => [e.x + x, e.y + y]));
   if (e.type === 'ellipse') local = ellipsePath(e.w, e.h);
   else if (e.type === 'diamond') local = diamondPath(e.w, e.h);
+  else if (e.type === 'rect' && e.preset && presetDef(e.preset)) local = presetPaths(presetDef(e.preset)!, e.w, e.h, e.adj).filter(p => p.fill !== 'none').flatMap(p => fromD(p.d));
   else if (e.type === 'rect') local = rectPath(e.w, e.h, Math.min(10, e.w / 4, e.h / 4));
   else if (e.type === 'card') local = rectPath(e.w, e.h, 10);
   else if (e.type === 'sticky') local = rectPath(e.w, e.h, 3);
