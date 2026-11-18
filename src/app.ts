@@ -827,7 +827,7 @@ function drawOverlay(extra) {
   }
   if (extra) out.push(extra);
   const hm = hoverMark(k); if (hm) out.unshift(hm);
-  ov.replaceChildren(...out); touchTargets();
+  ov.replaceChildren(...out); touchTargets(); placeSelBar();
 }
 /** Ids that move together: the unlocked selection plus everything sitting inside a selected frame. */
 function moveSet() {
@@ -1307,6 +1307,10 @@ function canvasMove(ev) {
     if (pressAt && TC.movedPast(pressAt, { x: ev.clientX, y: ev.clientY })) { clearTimeout(fingerHold); pressAt = null; }
     if (pinch) { const [a, b] = fingers.pair(), r = cvBox(); cam = TC.pinchCam(pinch, canvasPt(a, r), canvasPt(b, r)); drawSoon(); return; }
     if (mode && mode.k === 'fingers') return;
+    if (mode && mode.k === 'hold') {
+      if (!TC.movedPast(mode.at, { x: ev.clientX, y: ev.clientY })) return;
+      sel.clear(); mode = { k: 'marquee', p: mode.p, keep: new Set() };
+    }
   }
   onMove(ev);
 }
@@ -1315,6 +1319,8 @@ function canvasUp(ev) {
   fingers.up(ev.pointerId); lastTouch = Date.now(); clearTimeout(fingerHold); pressAt = null;
   if (pinch) { if (fingers.count < 2) { pinch = null; mode = fingers.count ? { k: 'fingers' } : null; draw(); } return; }
   if (mode && mode.k === 'fingers') { if (!fingers.count) mode = null; return; }
+  if (mode && mode.k === 'hold') { const at = mode.at; mode = null; drawOverlay(); // After the click that follows the lift, so it does not land on the new menu.
+    if (ev.type !== 'pointercancel') setTimeout(() => openMenu({ preventDefault() {}, clientX: at.x, clientY: at.y, target: cv }), 80); return; }
   if (ev.type === 'pointercancel' && mode) { const m = mode; mode = null; if (m.start && hist.revert(board.els, m.start.map(e => e.id)).length) editVer++; refresh(); return; }
   onUp(ev); hoverId = null;
 }
@@ -1322,10 +1328,40 @@ function canvasUp(ev) {
 function longPress(at) {
   fingerHold = 0; pressAt = null;
   if (fingers.count !== 1 || pinch) return;
+  if (navigator.vibrate) try { navigator.vibrate(8); } catch { /* not allowed here */ }
+  // On empty space a held finger arms box-select: moving now draws a selection box, lifting opens the menu.
+  if (mode && mode.k === 'pan') {
+    const r = cvBox(), sx = at.x - r.left, sy = at.y - r.top;
+    mode = { k: 'hold', at, p: { sx, sy, x: (sx - cam.x) / cam.z, y: (sy - cam.y) / cam.z } };
+    drawOverlay(s('circle', { cx: mode.p.x, cy: mode.p.y, r: 22 / cam.z, fill: C.accent, 'fill-opacity': 0.12, stroke: C.accent, 'stroke-width': 1.5 / cam.z, 'pointer-events': 'none' }));
+    return;
+  }
   if (mode && mode.start && hist.revert(board.els, mode.start.map(e => e.id)).length) editVer++;
   mode = { k: 'fingers' };
-  if (navigator.vibrate) try { navigator.vibrate(8); } catch { /* not allowed here */ }
   openMenu({ preventDefault() {}, clientX: at.x, clientY: at.y, target: document.elementFromPoint(at.x, at.y) });
+}
+/**
+ * On touch screens a small bar floats over the selection with the commands a keyboard would give:
+ * edit, duplicate, delete, and the full menu.
+ */
+function placeSelBar() {
+  const bar = $('#selbar'); if (!bar) return;
+  const list = touchUI && sel.size && !mode && !editing && !vedit && !cropId && !pinch && !kanban ? panelEls() : [];
+  const b = list.length ? bounds(list) : null;
+  if (!b) { bar.hidden = true; return; }
+  const one = list.length === 1 ? list[0] : null, texty = one && TEXTY.includes(one.type) && !one.locked;
+  const btn = (label, d, fn, cls = '') => h('button', { class: 'icon-btn ' + cls, title: label, 'aria-label': label, onclick: ev => { ev.stopPropagation(); fn(ev); } }, icon(d, 16));
+  bar.replaceChildren(...[
+    texty ? btn('Edit text', MI.rename, () => startEdit(one.id)) : null,
+    btn('Duplicate', MI.dup, () => { copySel(); pasteEls(clip, 24); }),
+    btn('Delete', MI.trash, removeSel, 'danger'),
+    h('span', { class: 'tsep', 'aria-hidden': 'true' }),
+    btn('More', 'M5 10h.01M10 10h.01M15 10h.01', ev => { const r = ev.currentTarget.getBoundingClientRect(); openMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 6, target: $('#cv [data-id="' + list[0].id + '"]') || cv }); })].filter(Boolean));
+  bar.hidden = false;
+  const r = cvBox(), w = bar.offsetWidth, ht = bar.offsetHeight, mb = $('.mbar'), top = mb && mb.offsetParent ? mb.offsetTop + mb.offsetHeight + 8 : 8;
+  const cx = cam.x + (b.x + b.w / 2) * cam.z, y0 = cam.y + b.y * cam.z - ht - 30, y1 = cam.y + (b.y + b.h) * cam.z + 30;
+  bar.style.left = Math.max(8, Math.min(r.width - w - 8, cx - w / 2)) + 'px';
+  bar.style.top = Math.max(top, Math.min(r.height - ht - 76, y0 >= top ? y0 : y1)) + 'px';
 }
 /** Small handles get an invisible ring of extra target so a fingertip can catch them. */
 function touchTargets() {
@@ -1668,6 +1704,7 @@ async function openBoard(id) {
       h('nav', { class: 'toolbar', 'aria-label': 'Tools' }, BAR.map(t => t === '|' ? h('span', { class: 'tsep', 'aria-hidden': 'true' })
         : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { endDraft(); tool = t; refresh(); } } }, trayIcon(t)))),
       h('div', { class: 'fly', id: 'fly', hidden: true }),
+      h('div', { class: 'selbar', id: 'selbar', role: 'toolbar', 'aria-label': 'Selection', hidden: true }),
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
       h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { const slot = imgSlot; imgSlot = null; e.target.multiple = true; for (const f of [...e.target.files]) await addImage(f, null, slot); e.target.value = ''; } }),

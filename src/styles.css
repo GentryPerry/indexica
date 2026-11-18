@@ -673,6 +673,10 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color
 html{touch-action:manipulation;-webkit-text-size-adjust:100%}
 html,body,#app{height:100dvh}
 .mbar,.scrim,.m-only,.m-tab{display:none}
+.selbar{position:absolute;z-index:3;display:flex;align-items:center;gap:2px;padding:4px;border-radius:var(--r3);background:var(--panel);box-shadow:var(--float)}
+.selbar[hidden]{display:none}
+.selbar .icon-btn.danger{color:var(--danger)}
+.selbar .tsep{height:20px;margin:0 2px}
 @media (max-width:1100px){
   .board{position:relative}
   .outline{position:fixed;z-index:21;top:0;bottom:0;left:0;width:min(300px,86vw);transform:translateX(-104%);transition:transform .24s var(--ease),box-shadow .24s var(--ease);padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
