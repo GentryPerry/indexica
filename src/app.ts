@@ -35,6 +35,8 @@ import * as PO from './pathops';
 import * as PG from './presetgeom';
 import * as CH from './chart';
 import * as LOD from './lod';
+import { writePptx } from './pptx-write';
+import { readPptx } from './pptx-read';
 import * as X from './exact';
 import * as LB from './livebool';
 import * as VE from './vecerase';
@@ -1604,7 +1606,7 @@ async function openBoard(id) {
         h('span', { class: 'grow' }),
         h('button', { class: 'icon-btn', id: 'present-btn', title: 'Present (Ctrl+Enter)', 'aria-label': 'Present', onclick: e => presentMenu(e.currentTarget) }, icon('M7 4.5l8.5 5.5L7 15.5z', 16)),
         h('button', { class: 'icon-btn', id: 'kanban-toggle', 'aria-pressed': 'false', 'aria-label': 'Kanban', title: 'Kanban: task cards as columns by status', onclick: () => { if (editing) endEdit(); kanban = !kanban; refresh(); } }, icon('M3.5 4h3.5v12H3.5zM8.25 4h3.5v8h-3.5zM13 4h3.5v10H13z', 16)),
-        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [{ head: 'Export' }, ['PNG image', () => exportAs('png'), '', MI.image], ['SVG vector', () => exportAs('svg'), '', MI.code], ['PDF, this page', () => exportPdf(false), '', MI.pdf], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true), '', MI.pdf] : null, deckOf('all').length ? ['PDF, slides', () => exportSlides(), '', MI.pdf] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
+        h('button', { class: 'btn primary', 'aria-haspopup': 'menu', onclick: e => popup(e.currentTarget, [{ head: 'Export' }, ['PNG image', () => exportAs('png'), '', MI.image], ['SVG vector', () => exportAs('svg'), '', MI.code], ['PDF, this page', () => exportPdf(false), '', MI.pdf], board.pages.length > 1 ? ['PDF, all pages', () => exportPdf(true), '', MI.pdf] : null, deckOf('all').length ? ['PDF, slides', () => exportSlides(), '', MI.pdf] : null, SL.slidesOf(board.els).length ? ['PowerPoint, this page\'s slides', () => exportPptx(), '', MI.pdf] : null, '-', ['Save board as template', () => { saveNow(); saveTemplate(meta(board.id).name, JSON.parse(JSON.stringify(board.pages))); }]]) }, 'Export')),
       h('div', { class: 'tabs', role: 'tablist' }, tab('design', 'Design'), tab('tasks', 'Tasks'), tab('slides', 'Slides')),
       h('div', { class: 'p-body', id: 'pdesign', role: 'tabpanel' }),
       h('div', { class: 'p-body', id: 'ptasks', role: 'tabpanel', hidden: true }, h('div', { id: 'thead' }), h('div', { id: 'ted' }), h('div', { class: 'tlist', id: 'tlist' })),
@@ -1625,7 +1627,7 @@ async function openBoard(id) {
   const miniEnd = () => { miniDrag = false; draw(); }; mini.addEventListener('pointerup', miniEnd); mini.addEventListener('pointercancel', miniEnd);
   cv.addEventListener('contextmenu', openMenu);
   cv.addEventListener('dragover', ev => ev.preventDefault());
-  cv.addEventListener('drop', async ev => { ev.preventDefault(); const p = pt(ev); let i = 0; for (const f of [...ev.dataTransfer.files]) await addImage(f, { x: p.x + i * 24, y: p.y + i++ * 24 }); });
+  cv.addEventListener('drop', async ev => { ev.preventDefault(); const p = pt(ev); let i = 0; for (const f of [...ev.dataTransfer.files]) { if (/\.pptx$/i.test(f.name)) { await importPptx(f); continue; } await addImage(f, { x: p.x + i * 24, y: p.y + i++ * 24 }); } });
   cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerleave', () => { if (hoverId) { hoverId = null; drawOverlay(); } }); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy, true); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; drawSoon(); } }, { passive: false });
   fit(); refresh(); loadImages();
@@ -2557,7 +2559,7 @@ function addSlide(layout) {
   sel = new Set([made[0].id]); commit(); fit([made[0]]);
 }
 function layoutMenu(anchor) {
-  popup(anchor, [{ head: 'New slide' }, ...Object.entries(DK.LAYOUTS).map(([k, v]) => [v.label, () => addSlide(k), '', v.icon])]);
+  popup(anchor, [{ head: 'New slide' }, ...Object.entries(DK.LAYOUTS).map(([k, v]) => [v.label, () => addSlide(k), '', v.icon]), '-', ['Open a PowerPoint file', () => pickPptx(), '', 'M5 3h7l4 4v10H5zM12 3v4h4M8 11h2.5a1.5 1.5 0 0 1 0 3H8v-5v8']]);
 }
 /** Lays a slide out again from a layout: content moves into the new placeholders. */
 function relayout(f, key) {
@@ -2717,6 +2719,77 @@ function showKey(ev) {
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && show && show.full) endShow(); });
 
 /* ---------- Export ---------- */
+/* ---------- PowerPoint files ---------- */
+/** Picture bytes PowerPoint can open: PNG, JPEG, and GIF as stored; anything else (WebP) redrawn as PNG. */
+async function pptxPicture(url) {
+  const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(url || ''); if (!m) return undefined;
+  const kind = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/gif': 'gif' }[m[1]];
+  if (kind) return { bytes: Uint8Array.from(atob(m[2]), c => c.charCodeAt(0)), ext: kind };
+  try {
+    const bmp = await createImageBitmap(await (await fetch(url)).blob()), c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), ext: 'png' };
+  } catch (e) { return undefined; }
+}
+/** Export as PowerPoint: the slides on this page, in deck order. */
+async function exportPptx() {
+  if (editing) endEdit();
+  const slides = SL.slidesOf(board.els); if (!slides.length) return toast('Make a slide first: Slides tab, New slide.');
+  const pics = new Map();
+  for (const f of slides) for (const e of SL.slideMembers(board.els, f, E)) if (e.type === 'image' && e.src && !pics.has(e.src)) pics.set(e.src, await pptxPicture(images.get(e.src)));
+  try {
+    const bytes = await writePptx(board.els, E, { image: src => pics.get(src), today: DK.footDate(), title: meta(board.id).name });
+    saveFile(fileName() + '.pptx', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }), 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  } catch (e) { toast('The PowerPoint file could not be made: ' + (e && e.message || e)); }
+}
+function pickPptx() {
+  const inp = h('input', { type: 'file', accept: '.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation', style: 'display:none', onchange: async ev => { const f = ev.target.files[0]; inp.remove(); if (f) await importPptx(f); } });
+  document.body.append(inp); inp.click();
+}
+/** Stores an imported picture the way added pictures are stored (shrunk to fit one storage document). */
+async function storePicture(bytes, mime) {
+  let url = '';
+  try {
+    const bmp = await createImageBitmap(new Blob([bytes], { type: mime }));
+    let scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    for (let i = 0; i < 9; i++) { url = encodeImage(bmp, scale, mime !== 'image/jpeg'); if (url.length < 220000) break; scale *= 0.8; }
+    if (url.length >= 220000) return null;
+  } catch (e) { return null; }
+  const id = uid('i'); images.set(id, url); Store.put('img_' + id, { url }); return id;
+}
+/** Open a PowerPoint file: its slides become JAM slides, side by side on a new page named after the file. */
+async function importPptx(file) {
+  if (!board) return;
+  if (editing) endEdit();
+  toast('Opening ' + file.name + '...');
+  let deck;
+  try { deck = await readPptx(await file.arrayBuffer()); } catch (e) { return toast('That file could not be opened: ' + (e && e.message || e)); }
+  if (!deck.slides.length) return toast('That file has no slides.');
+  const srcMap = new Map();
+  for (const [src, img] of deck.images) srcMap.set(src, await storePicture(img.bytes, img.mime));
+  const els = {}, gap = 160, W = Math.round(deck.w), H = Math.round(deck.h);
+  let z = 1, lost = 0;
+  deck.slides.forEach((sl, i) => {
+    const fx = i * (W + gap), f = { id: uid('e'), type: 'frame', z: z++, x: fx, y: 0, w: W, h: H, slide: i + 1, text: sl.name || `Slide ${i + 1}`, fill: sl.fill || '#ffffff', theme: 'standard' };
+    if (sl.notes) f.notes = sl.notes;
+    els[f.id] = f;
+    const groups = new Map();
+    for (const e0 of sl.els) {
+      const e = { ...e0, id: uid('e'), z: z++ };
+      if (e.type === 'conn') { e.ax += fx; e.bx += fx; } else { e.x += fx; }
+      if (e.g) { if (!groups.has(e.g)) groups.set(e.g, uid('g')); e.g = groups.get(e.g); }
+      if (e.type === 'image') { const id = srcMap.get(e.src); if (!id) { lost++; continue; } e.src = id; }
+      if (e.type === 'text' || e.type === 'sticky') fitText(e);
+      els[e.id] = e;
+    }
+  });
+  const pg = { id: uid('pg'), name: file.name.replace(/\.pptx$/i, ''), els };
+  board.pages.push(pg); saveNow(); switchPage(pg.id);
+  hist.reset(board.els); fit(); refresh();
+  rightTab = 'slides'; renderRight();
+  toast(`Opened ${deck.slides.length} slide${deck.slides.length === 1 ? '' : 's'}${lost ? `; ${lost} picture${lost === 1 ? '' : 's'} could not be stored` : ''}.`);
+}
 async function saveFile(name, data, mime) {
   const dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null;
   if (dl) { try { await dl.save({ filename: name, data }); } catch (e) { if (!e || e.code !== 'declined') toast('Export failed. ' + ((e && e.message) || '')); } return; }
