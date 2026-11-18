@@ -15,7 +15,7 @@ export const SLIDE_SIZES: Record<SlideSize, { label: string; w: number; h: numbe
 };
 
 /** Slide backgrounds: white, paper, mist, butter, mint, ink, and the accent. */
-export const SLIDE_BGS: [string, string][] = [['#ffffff', 'White'], ['#f6f3ec', 'Paper'], ['#eef1fb', 'Mist'], ['#fff6db', 'Butter'], ['#e6f5ec', 'Mint'], ['#17202d', 'Ink'], ['#2447d6', 'Indexica blue']];
+export const SLIDE_BGS: [string, string][] = [['#ffffff', 'White'], ['#f6f3ec', 'Paper'], ['#eef1fb', 'Mist'], ['#fff6db', 'Butter'], ['#e6f5ec', 'Mint'], ['#17202d', 'Ink'], ['#2447d6', 'Cobalt']];
 
 /** The size preset a frame matches, if any. */
 export function sizeOf(f: El): SlideSize | null {

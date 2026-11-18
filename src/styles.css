@@ -1,41 +1,57 @@
-/* Indexica chrome: a flat workbench, from the Indexica style reference.
+/* JAM chrome: a flat workbench, restyled after MUI Joy UI.
    Docked panels divided by hairlines; only floating pieces cast a shadow.
    Chrome stays neutral: color belongs to board content, status, and the accent. */
 :root{
-  --panel:#ffffff; --field:#f5f6f8; --canvas:#eef0f3; --hover:#eef0f4; --picked:#e4eaff; --line:#e3e6eb;
-  --ink:#17202d; --ink-2:#3a4555; --muted:#5d697c; --faint:#aab3c2; --accent:#2447d6; --accent-fill:#2447d6; --accent-hi:#1f3cba; --accent-ink:#ffffff;
-  --danger:#b93232; --danger-bg:#fbeaea; --danger-line:#f0c4c4; --swatch-ring:#ffffff;
-  --todo:#7d8798; --doing:#2f6fed; --blocked:#d64545; --done:#2a9460;
-  --frame:#ffffff; --frame-line:#dce1e8; --conn:#5b6679; --dot:#c9ced7; --sh-c:#17202d; --sh-a1:.16; --sh-a2:.07;
-  --float:0 0 0 1px rgba(23,32,45,.08),0 4px 14px rgba(23,32,45,.14);
-  --lift:0 0 0 1px rgba(23,32,45,.06),0 10px 24px -6px rgba(23,32,45,.18);
-  --sw-line:rgba(23,32,45,.14);
-  --r1:6px; --r2:10px; --r3:14px; --ease:cubic-bezier(.2,.7,.2,1);
+  /* JAM chrome follows MUI Joy UI's default theme: its grey and blue scales, 6/8/12/16 px radii,
+     soft and solid button variants, outlined fields, and shadow levels. */
+  --panel:#ffffff; --surface:#fbfcfe; --field:#f0f4f8; --canvas:#f0f4f8; --hover:#f0f4f8; --soft-hi:#dde7ee; --picked:#e3effb; --line:rgba(99,107,116,.2);
+  --border:#cdd7e1; --border-hi:#9fa6ad;
+  --ink:#171a1c; --ink-2:#32383e; --muted:#555e68; --icon:#636b74; --faint:#9fa6ad;
+  --accent:#0b6bcb; --accent-fill:#0b6bcb; --accent-hi:#185ea5; --accent-lo:#12467b; --accent-ink:#ffffff; --accent-soft:#12467b;
+  --danger:#c41c1c; --danger-bg:#fce4e4; --danger-line:#f09898; --swatch-ring:#ffffff;
+  --todo:#636b74; --doing:#0b6bcb; --blocked:#c41c1c; --done:#1f7a1f;
+  --frame:#ffffff; --frame-line:#dde7ee; --conn:#555e68; --dot:#c4ced8; --sh-c:#151515; --sh-a1:.14; --sh-a2:.06;
+  --sh-xs:0 1px 2px 0 rgba(21,21,21,.08);
+  --sh-sm:0 1px 2px 0 rgba(21,21,21,.08),0 2px 4px 0 rgba(21,21,21,.08);
+  --sh-md:0 2px 8px -2px rgba(21,21,21,.08),0 6px 12px -2px rgba(21,21,21,.08);
+  --sh-lg:0 2px 8px -2px rgba(21,21,21,.08),0 12px 16px -4px rgba(21,21,21,.08);
+  --float:0 0 0 1px rgba(99,107,116,.16),0 2px 8px -2px rgba(21,21,21,.08),0 12px 16px -4px rgba(21,21,21,.1);
+  --lift:0 0 0 1px rgba(99,107,116,.12),0 2px 8px -2px rgba(21,21,21,.08),0 20px 24px -4px rgba(21,21,21,.1);
+  --sw-line:rgba(21,21,21,.14);
+  --r1:6px; --r2:8px; --r3:12px; --r4:16px; --ease:cubic-bezier(.2,.7,.2,1);
   --word:'Bricolage Grotesque','Trebuchet MS',sans-serif;
-  --ui:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
-  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%235d697c' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
+  --ui:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%23636b74' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
   color-scheme:light;
 }
-/* Dark theme: same structure, deep neutral surfaces. Board content keeps its own colors. */
+/* Dark theme: Joy UI's dark color scheme. Board content keeps its own colors. */
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --panel:#1c2129; --field:#252c37; --canvas:#13171d; --hover:#2b3340; --picked:#25325c; --line:#2d3542;
-    --ink:#e7ebf1; --ink-2:#c3cad6; --muted:#9aa5b6; --faint:#5e6979; --accent:#7b96ff; --accent-fill:#3d5ce0; --accent-hi:#4d6bec;
-    --danger:#ff8f8f; --danger-bg:#3a2226; --danger-line:#5a2f35; --swatch-ring:#1c2129;
-    --frame:#1d232c; --frame-line:#323a47; --conn:#9aa5b6; --dot:#2e3540; --sh-c:#000000; --sh-a1:.55; --sh-a2:.35;
-    --float:0 0 0 1px rgba(0,0,0,.45),0 6px 18px rgba(0,0,0,.45); --lift:0 0 0 1px rgba(255,255,255,.06),0 12px 28px -6px rgba(0,0,0,.6); --sw-line:rgba(255,255,255,.14);
-    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%239aa5b6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
+    --panel:#0b0d0e; --surface:#0b0d0e; --field:#171a1c; --canvas:#000000; --hover:#171a1c; --soft-hi:#32383e; --picked:#0a2744; --line:rgba(99,107,116,.24);
+    --border:#32383e; --border-hi:#555e68;
+    --ink:#f0f4f8; --ink-2:#cdd7e1; --muted:#9fa6ad; --icon:#9fa6ad; --faint:#555e68;
+    --accent:#97c3f0; --accent-fill:#0b6bcb; --accent-hi:#185ea5; --accent-lo:#12467b; --accent-soft:#c7dff7;
+    --danger:#f09898; --danger-bg:#430a0a; --danger-line:#7d1212; --swatch-ring:#0b0d0e;
+    --frame:#171a1c; --frame-line:#32383e; --conn:#9fa6ad; --dot:#2a2f34; --sh-c:#000000; --sh-a1:.6; --sh-a2:.4;
+    --sh-xs:0 1px 2px 0 rgba(0,0,0,.6); --sh-sm:0 1px 2px 0 rgba(0,0,0,.6),0 2px 4px 0 rgba(0,0,0,.6);
+    --sh-md:0 2px 8px -2px rgba(0,0,0,.6),0 6px 12px -2px rgba(0,0,0,.6); --sh-lg:0 2px 8px -2px rgba(0,0,0,.6),0 12px 16px -4px rgba(0,0,0,.6);
+    --float:0 0 0 1px rgba(99,107,116,.3),0 2px 8px -2px rgba(0,0,0,.6),0 12px 16px -4px rgba(0,0,0,.6); --lift:0 0 0 1px rgba(99,107,116,.3),0 20px 24px -4px rgba(0,0,0,.6); --sw-line:rgba(255,255,255,.16);
+    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%239fa6ad' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
     color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
-  --panel:#1c2129; --field:#252c37; --canvas:#13171d; --hover:#2b3340; --picked:#25325c; --line:#2d3542;
-  --ink:#e7ebf1; --ink-2:#c3cad6; --muted:#9aa5b6; --faint:#5e6979; --accent:#7b96ff; --accent-fill:#3d5ce0; --accent-hi:#4d6bec;
-  --danger:#ff8f8f; --danger-bg:#3a2226; --danger-line:#5a2f35; --swatch-ring:#1c2129;
-  --frame:#1d232c; --frame-line:#323a47; --conn:#9aa5b6; --dot:#2e3540; --sh-c:#000000; --sh-a1:.55; --sh-a2:.35;
-  --float:0 0 0 1px rgba(0,0,0,.45),0 6px 18px rgba(0,0,0,.45); --lift:0 0 0 1px rgba(255,255,255,.06),0 12px 28px -6px rgba(0,0,0,.6); --sw-line:rgba(255,255,255,.14);
-  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%239aa5b6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
-  color-scheme:dark;
+    --panel:#0b0d0e; --surface:#0b0d0e; --field:#171a1c; --canvas:#000000; --hover:#171a1c; --soft-hi:#32383e; --picked:#0a2744; --line:rgba(99,107,116,.24);
+    --border:#32383e; --border-hi:#555e68;
+    --ink:#f0f4f8; --ink-2:#cdd7e1; --muted:#9fa6ad; --icon:#9fa6ad; --faint:#555e68;
+    --accent:#97c3f0; --accent-fill:#0b6bcb; --accent-hi:#185ea5; --accent-lo:#12467b; --accent-soft:#c7dff7;
+    --danger:#f09898; --danger-bg:#430a0a; --danger-line:#7d1212; --swatch-ring:#0b0d0e;
+    --frame:#171a1c; --frame-line:#32383e; --conn:#9fa6ad; --dot:#2a2f34; --sh-c:#000000; --sh-a1:.6; --sh-a2:.4;
+    --sh-xs:0 1px 2px 0 rgba(0,0,0,.6); --sh-sm:0 1px 2px 0 rgba(0,0,0,.6),0 2px 4px 0 rgba(0,0,0,.6);
+    --sh-md:0 2px 8px -2px rgba(0,0,0,.6),0 6px 12px -2px rgba(0,0,0,.6); --sh-lg:0 2px 8px -2px rgba(0,0,0,.6),0 12px 16px -4px rgba(0,0,0,.6);
+    --float:0 0 0 1px rgba(99,107,116,.3),0 2px 8px -2px rgba(0,0,0,.6),0 12px 16px -4px rgba(0,0,0,.6); --lift:0 0 0 1px rgba(99,107,116,.3),0 20px 24px -4px rgba(0,0,0,.6); --sw-line:rgba(255,255,255,.16);
+    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%239fa6ad' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4l3 3 3-3'/%3E%3C/svg%3E");
+    color-scheme:dark;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -442,3 +458,141 @@ input.h-title:focus{background:var(--field);box-shadow:inset 0 0 0 1.5px var(--a
 .adj-l{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-top:-2px}
 .adj input[type=range]{width:100%;margin:2px 0;accent-color:var(--accent-fill);cursor:pointer}
 .orow.op .ol{color:var(--ink-2)}
+
+/* ---------- Joy UI component layer ----------
+   Variants as in MUI Joy: plain (icon buttons, rows), soft (secondary buttons, selection), solid
+   (primary actions), outlined (fields, menus, cards). Sizes follow Joy's sm scale: 32px controls,
+   6px corners, 600-weight button labels, uppercase 0.1em list subheaders. */
+body{font:400 13px/18px var(--ui);letter-spacing:-.003em}
+:focus-visible{outline:2px solid var(--accent-fill);outline-offset:2px}
+kbd{font:500 11px/18px var(--ui);background:var(--surface);border:1px solid var(--border);border-radius:var(--r1);padding:0 6px;color:var(--ink-2);box-shadow:var(--sh-xs)}
+
+/* Buttons: plain by default, soft for secondary, solid for primary */
+.btn{height:32px;padding:0 10px;border-radius:var(--r1);font-weight:500;color:var(--ink-2);transition:background .12s var(--ease),color .12s var(--ease)}
+.btn:hover:not(:disabled){background:var(--hover);color:var(--ink)}
+.btn.primary{background:var(--accent-fill);color:var(--accent-ink);font-weight:600;padding:0 14px}
+.btn.primary:hover:not(:disabled){background:var(--accent-hi);color:var(--accent-ink)}
+.btn.primary:active{background:var(--accent-lo)}
+.btn.on{background:var(--picked);color:var(--accent-soft);font-weight:600}
+.btn.sm{height:30px;border-radius:var(--r1)}
+.icon-btn{border-radius:var(--r1);color:var(--icon);transition:background .12s var(--ease),color .12s var(--ease)}
+.icon-btn:hover:not(:disabled){background:var(--hover);color:var(--ink)}
+.icon-btn.on{background:var(--picked);color:var(--accent-soft)}
+.fbtn,.ibtn{height:32px;border-radius:var(--r1);background:var(--field);color:var(--ink-2);font-weight:600;transition:background .12s var(--ease),color .12s var(--ease)}
+.fbtn{padding:0 12px}
+.fbtn:hover:not(:disabled),.ibtn:hover:not(:disabled){background:var(--soft-hi);color:var(--ink)}
+.fbtn:active:not(:disabled),.ibtn:active:not(:disabled){background:var(--border)}
+.fbtn[aria-pressed="true"],.ibtn.on,.ibtn[aria-pressed="true"]{background:var(--picked);color:var(--accent-soft)}
+.fbtn.primary{background:var(--accent-fill);color:var(--accent-ink)}
+.fbtn.primary:hover:not(:disabled){background:var(--accent-hi);color:var(--accent-ink)}
+.irow .ibtn{height:36px}
+.del{height:32px;padding:0 12px;border-radius:var(--r1);border:1px solid var(--danger-line);background:transparent;color:var(--danger);font-weight:600}
+.logo{border-radius:var(--r1);background:var(--accent-fill)}
+
+/* Fields: outlined, with Joy's xs shadow and a 2px focus ring in the primary color */
+.inp,.sel,.field,.search{height:32px;border:1px solid var(--border);border-radius:var(--r1);background-color:var(--surface);box-shadow:var(--sh-xs);transition:border-color .12s var(--ease),box-shadow .12s var(--ease)}
+.inp:hover,.sel:hover,.field:hover,.search:hover{border-color:var(--border-hi)}
+.inp:focus,.sel:focus,.field:focus-within,.search:focus,input.h-title:focus,.b-name:focus{border-color:var(--accent-fill);box-shadow:inset 0 0 0 1px var(--accent-fill),var(--sh-xs);outline:none}
+.field{padding:0 10px}
+.field span{font-size:12px;color:var(--muted);font-weight:500}
+.field.off{background:var(--field);box-shadow:none}
+textarea.inp{padding:7px 10px;line-height:18px}
+.sel{padding-left:10px;padding-right:26px;background-position:right 9px center}
+.sel.ghost{border-color:transparent;box-shadow:none;background-color:transparent}
+.sel.ghost:hover{background-color:var(--hover);border-color:transparent}
+.peditor .field,.tsel .inp,.tsel .sel{background-color:var(--panel)}
+.b-name:focus,input.h-title:focus{background:var(--surface)}
+
+/* Sidebar and lists: Joy list items with soft-primary selection */
+.lib{background:var(--surface);padding:14px 10px}
+.brand{padding:4px 8px 14px}
+.word{font:700 19px/1 var(--word);letter-spacing:.02em}
+.nav{height:34px;border-radius:var(--r1);color:var(--ink-2);font-weight:500}
+.nav:hover{background:var(--hover);color:var(--ink)}
+.nav-i{color:var(--icon)}
+.nav.on{background:var(--picked);color:var(--accent-soft);font-weight:600}
+.nav.on .nav-i,.nav.on .num{color:var(--accent-soft)}
+.lib-h,.o-label,.menu-h,.tpl-h,.help-g h3,.fly-h,.pz-lab{font-size:11px;line-height:16px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.orow,.lrow,.trow,.sitem{border-radius:var(--r1)}
+.orow{height:30px}
+.orow:hover,.trow:hover,.lrow:hover,.sitem:hover{background:var(--hover)}
+.orow.on,.trow.on,.lrow.on,.sitem.on{background:var(--picked);color:var(--accent-soft)}
+.orow.on .oi,.orow.on .ol{color:var(--accent-soft)}
+
+/* Home */
+.h-title,.crumb{font-size:28px;line-height:36px;font-weight:700;letter-spacing:-.025em}
+.crumb-sep{font-size:28px}
+.h-sub{font-size:13px;color:var(--muted)}
+.thumb{border-radius:var(--r3);border:1px solid var(--line);background-color:var(--canvas)}
+.c-name{font-size:14px;line-height:20px;font-weight:600;color:var(--ink)}
+.meta{font-size:12px;color:var(--muted)}
+
+/* Board chrome */
+.o-head{padding:10px 10px 12px}
+.b-name{font-size:14px;line-height:20px;font-weight:600;border:1px solid transparent}
+.b-meta{font-size:12px}
+.p-head{height:52px}
+.tabs{gap:2px;padding:6px 10px 0}
+.tabs button{height:38px;padding:0 10px;font-weight:500;color:var(--muted);border-bottom-width:2px}
+.tabs button:hover{color:var(--ink)}
+.tabs button[aria-selected="true"]{color:var(--ink);font-weight:600;border-bottom-color:var(--accent-fill)}
+.psec{gap:12px;padding:16px}
+.psec h3{font-size:13px;line-height:18px;font-weight:600;color:var(--ink)}
+.p-title{font-size:15px;line-height:22px;font-weight:600}
+.hint{font-size:12px;line-height:17px;color:var(--muted)}
+.f-label{font-size:12px;font-weight:600;color:var(--muted)}
+.seg{padding:3px;border-radius:var(--r2);background:var(--field)}
+.seg button{height:26px;border-radius:var(--r1);font-weight:500}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--ink);box-shadow:var(--sh-sm);font-weight:600}
+.chip{height:26px;padding:0 10px;border-radius:var(--r4);background:var(--field);color:var(--ink-2);font-weight:500;font-size:12px}
+.chip:hover{background:var(--soft-hi)}
+.chip.on{background:var(--accent-fill);color:var(--accent-ink)}
+.lockchip{border-radius:var(--r1);font-weight:600}
+
+/* Floating tool tray */
+.toolbar{gap:2px;padding:6px;border-radius:var(--r3);box-shadow:var(--float);color:var(--icon)}
+.toolbar button{width:40px;height:40px;border-radius:var(--r2)}
+.toolbar button:hover{background:var(--hover);color:var(--ink)}
+.toolbar button.on{background:var(--picked);color:var(--accent-soft)}
+.tsep{background:var(--line)}
+.mini{border-radius:var(--r3);box-shadow:var(--float)}
+.fly{border-radius:var(--r3);box-shadow:var(--float);padding:10px 12px 12px}
+.fly-g button,.fly-t button{border-radius:var(--r1);background:var(--field)}
+.fly-g button:hover,.fly-t button:hover{background:var(--soft-hi)}
+.fly button.on{background:var(--picked);box-shadow:inset 0 0 0 2px var(--accent-fill)}
+
+/* Menus: Joy's outlined popup with the md shadow */
+.menu{border-radius:var(--r2);padding:6px;background:var(--panel);box-shadow:0 0 0 1px var(--line),var(--sh-md)}
+.menu button{height:34px;padding:0 10px;border-radius:var(--r1);font-weight:500;color:var(--ink-2)}
+.menu button:hover,.menu button:focus-visible{background:var(--hover);color:var(--ink)}
+.menu button.cur{color:var(--accent-soft);background:var(--picked)}
+.menu.tiles button{height:40px}
+.mi{width:28px;height:28px;border-radius:var(--r1);background:var(--field);box-shadow:none;color:var(--icon)}
+.menu button:hover .mi{background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.menu hr{border-top-color:var(--line)}
+
+/* Modal, toast, sliders */
+.help{background:rgba(11,13,14,.25);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.help-b{border-radius:var(--r3);padding:24px;box-shadow:0 0 0 1px var(--line),var(--sh-lg)}
+.help-t h2{font-size:20px;line-height:28px;font-weight:700;letter-spacing:-.025em}
+.toast{background:#171a1c;color:#f0f4f8;border-radius:var(--r2);padding:10px 14px;box-shadow:var(--sh-lg);font-weight:500}
+.toast-act{color:#97c3f0}
+.adj,.peditor{border-radius:var(--r2);background:var(--field)}
+.adj .fbtn{background:var(--panel);box-shadow:0 0 0 1px var(--border)}
+.adj .fbtn.primary{background:var(--accent-fill);box-shadow:none}
+input[type=range]{-webkit-appearance:none;appearance:none;height:18px;background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:linear-gradient(var(--accent-fill),var(--accent-fill)) 0/var(--fill,50%) 100% no-repeat,var(--soft-hi)}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:var(--soft-hi)}
+input[type=range]::-moz-range-progress{height:6px;border-radius:3px;background:var(--accent-fill)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;margin-top:-6px;border-radius:50%;background:var(--panel);border:2px solid var(--accent-fill);box-shadow:var(--sh-sm)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--panel);border:2px solid var(--accent-fill);box-shadow:var(--sh-sm)}
+input[type=range]:focus-visible{outline:none}
+input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color-mix(in srgb,var(--accent-fill) 25%,transparent)}
+
+/* Kanban and slides */
+.kcol{border-radius:var(--r3);background:var(--surface);box-shadow:inset 0 0 0 1px var(--line)}
+.kcard{border-radius:var(--r2);box-shadow:0 0 0 1px var(--line),var(--sh-xs)}
+.kcount{border-radius:var(--r4);background:var(--field)}
+.sthumb{border-radius:var(--r1)}
+.sitem.on .sthumb{box-shadow:0 0 0 2px var(--accent-fill)}
+.sitem.on .snum{color:var(--accent-soft)}

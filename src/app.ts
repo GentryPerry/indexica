@@ -47,7 +47,7 @@ const saveIndex = () => Store.put('index', index);
 const meta = id => index.boards.find(b => b.id === id);
 
 function seed() {
-  const p = { id: uid('p'), name: 'Indexica build' };
+  const p = { id: uid('p'), name: 'JAM build' };
   const id = uid('b'), els = {}; let z = 0;
   const add = o => { o.id = uid('e'); o.z = ++z; els[o.id] = o; return o.id; };
   add({ type: 'frame', x: 0, y: 0, w: 700, h: 340, text: 'Sample board: how Stage 1 fits together' });
@@ -193,7 +193,7 @@ function renderHome() {
   const deleteFolder = () => { L.removeFolder(index, folder.id); home.filter = proj.id; saveIndex(); renderHome(); toast(`Folder deleted. Its boards are in ${proj.name}.`); };
   $('#app').replaceChildren(h('div', { class: 'home' },
     h('nav', { class: 'lib', 'aria-label': 'Library' },
-      h('div', { class: 'brand' }, logo(), h('span', { class: 'word' }, 'Indexica')),
+      h('div', { class: 'brand' }, logo(), h('span', { class: 'word' }, 'JAM')),
       h('input', { type: 'search', id: 'board-search', class: 'search', placeholder: 'Search boards', 'aria-label': 'Search boards', value: home.q, oninput: e => { home.q = e.target.value; renderHome(); const i = $('#board-search'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }),
       nav('all', 'All boards'), nav('fav', 'Favorites'), nav('trash', 'Trash'),
       h('div', { class: 'lib-h' }, 'Projects', h('button', { class: 'icon-btn sm', title: 'New project', 'aria-label': 'New project', onclick: () => { home.newProj = true; renderHome(); $('#new-project').focus(); } }, icon('M10 4v12M4 10h12', 12))),
@@ -1849,7 +1849,7 @@ function adjuster() {
   const d = ADJ[adj.kind];
   return h('div', { class: 'adj' },
     h('div', { class: 'adj-h' }, h('span', null, d.label), h('span', { class: 'adj-n', id: 'adj-n' }, `${nodeCount(adj.ids.map(E).filter(Boolean))} of ${adj.before} nodes`)),
-    h('input', { type: 'range', id: 'adj-range', min: 0, max: 100, step: 1, value: adj.value, 'aria-label': d.label + ' amount', oninput: ev => adjQueue(Number(ev.target.value)),
+    h('input', { type: 'range', id: 'adj-range', min: 0, max: 100, step: 1, value: adj.value, style: `--fill:${adj.value}%`, 'aria-label': d.label + ' amount', oninput: ev => { ev.target.style.setProperty('--fill', ev.target.value + '%'); adjQueue(Number(ev.target.value)); },
       onkeydown: ev => { if (ev.key === 'Enter' || ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); adjFinish(ev.key === 'Enter'); } } }),
     h('div', { class: 'adj-l' }, h('span', null, d.left), h('span', null, d.right)),
     h('div', { class: 'grid2' }, h('button', { class: 'fbtn', onclick: () => adjFinish(false) }, 'Cancel'), h('button', { class: 'fbtn primary', onclick: () => adjFinish(true) }, 'Apply')));
