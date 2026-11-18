@@ -1,6 +1,7 @@
 import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
-import { measure, textStyle, wrap, wrapEl, type TextStyle } from './geometry';
+import { layoutText, measure, textStyle, wrap, wrapEl, type TextStyle } from './geometry';
+import { isRich } from './richtext';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
@@ -59,9 +60,24 @@ function lineStart(e: El, x: number, w: number, pad: number, fallback: 'left' | 
 
 /** Baseline of a placeholder's first line, anchored top, middle, or bottom in its box. */
 function phTop(e: El, lines: number, size: number): number {
-  const lh = size * 1.3, block = lines * lh;
-  const top = e.va === 'bottom' ? e.y + e.h - block - 4 : e.va === 'middle' ? e.y + (e.h - block) / 2 : e.y + 4;
-  return top + size * 0.95;
+  return blockTop(e, lines * size * 1.3) + size * 0.95;
+}
+/** Top of a text piece's lines: placeholders anchor them top, middle, or bottom in their box. */
+function blockTop(e: El, height: number): number {
+  if (!e.ph) return e.y + 4;
+  return e.va === 'bottom' ? e.y + e.h - height - 4 : e.va === 'middle' ? e.y + (e.h - height) / 2 : e.y + 4;
+}
+/** Text with paragraphs (levels, bullets, numbers, spacing): one text node per line, so each can have its own size. */
+function richText(e: El, ink: string): SVGElement {
+  const st = textStyle(e), { lines, height } = layoutText(e, e.w - 4), top = blockTop(e, height), g = s('g', { 'pointer-events': 'none' });
+  const a = e.align || 'left';
+  for (const ln of lines) {
+    const ls: TextStyle = { ...st, size: ln.size };
+    const tx = a === 'center' ? e.x + 2 + ln.x + (e.w - 4 - ln.x) / 2 : a === 'right' ? e.x + e.w - 2 : e.x + 2 + ln.x;
+    if (ln.marker) g.append(textBlock([ln.marker], e.x + 2 + ln.bx!, top + ln.base, ls, ink));
+    if (ln.text) g.append(textBlock([ln.text], tx, top + ln.base, ls, ink, a === 'center' ? 'middle' : a === 'right' ? 'end' : 'start'));
+  }
+  return g;
 }
 
 function textBlock(lines: string[], x: number, y: number, st: TextStyle, fill: string, anchor = 'start'): SVGElement {
@@ -174,13 +190,16 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       // An empty placeholder shows a dashed box and its prompt on the board, and nothing in exports.
       if (!c.exp) {
         g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: 'none', stroke: c.muted, 'stroke-width': 1, 'stroke-dasharray': '5 4', 'vector-effect': 'non-scaling-stroke', 'stroke-opacity': 0.55, 'pointer-events': 'none' }));
-        if (!hide) {
+        if (!hide && e.bullets && e.ph !== 'picture') {
+          const t = richText({ ...e, text: phPrompt(e.ph), weight: Math.min(st.weight, 500) }, ink); t.setAttribute('fill-opacity', '0.45'); g.append(t);
+        } else if (!hide) {
           const pst = { ...st, weight: Math.min(st.weight, 500) }, ls = wrap(phPrompt(e.ph), w - 4, pst.size, pst.weight, pst.family, pst.italic);
           const [tx, anchor] = e.ph === 'picture' ? [x + w / 2, 'middle'] : lineStart(e, x, w, 2, 'left');
           const t = textBlock(ls, tx, phTop(e, ls.length, pst.size), pst, ink, anchor); t.setAttribute('fill-opacity', '0.45'); g.append(t);
         }
       }
-    } else if (!hide) { const ls = wrapEl(e, w - 4), [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(ls, tx, e.ph ? phTop(e, ls.length, st.size) : y + 4 + st.size * 0.95, st, ink, anchor)); }
+    } else if (!hide && isRich(e)) g.append(richText(e, ink));
+    else if (!hide) { const ls = wrapEl(e, w - 4), [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(ls, tx, e.ph ? phTop(e, ls.length, st.size) : y + 4 + st.size * 0.95, st, ink, anchor)); }
   } else if (e.type === 'card') {
     const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';
     const sf = SURFACE[c.theme], ch = chip(col, c.theme), done = status === 'done';

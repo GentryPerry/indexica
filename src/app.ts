@@ -24,6 +24,8 @@ import { paintFill, outlineFor, inkOn, SURFACE, adjust } from './palette';
 import { trayIcon } from './tray';
 import * as SL from './slides';
 import * as DK from './deck';
+import * as RT from './richtext';
+import * as RE from './richedit';
 import * as V from './vector';
 import * as B from './boolean';
 import { BRUSHES, PROFILES, brushOutline, outlineD, profileOutline, shaped, eraseStroke, touches } from './brush';
@@ -401,7 +403,7 @@ async function addImage(file, at, slotId) {
   board.els[e.id] = e; sel = new Set([e.id]); tool = 'select'; commit();
 }
 function onPaste(ev) {
-  const tgt = ev.target; if (!board || kanban || (tgt && ['INPUT', 'TEXTAREA', 'SELECT'].includes(tgt.tagName))) return;
+  const tgt = ev.target; if (!board || kanban || (tgt && (['INPUT', 'TEXTAREA', 'SELECT'].includes(tgt.tagName) || tgt.isContentEditable))) return;
   const data = ev.clipboardData, file = data && [...data.files].find(f => f.type.startsWith('image/')), text = data ? data.getData('text/plain').trim() : '';
   const r = cvBox(), at = { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
   if (file) addImage(file);
@@ -880,13 +882,17 @@ function quickAdd(src, side) {
 }
 
 /* ---------- Text editing ---------- */
+/** Text pieces edit in the paragraph editor; everything else in the plain one. */
+const richEd = e => !!e && e.type === 'text';
 function placeEditor() {
-  const ed = $('#ed'), e = editing && E(editing); if (!e) return;
+  const e = editing && E(editing); if (!e) return;
+  const ed = richEd(e) ? $('#red') : $('#ed');
   const onCanvas = ['text', 'frame', 'conn'].includes(e.type), z = cam.z, st = G.textStyle(e), lab = e.type === 'conn' ? connGeom(e, E).label : null, centered = !!lab || ['rect', 'ellipse', 'diamond'].includes(e.type);
   const cb = e.type === 'table' && editCell ? cellBox(e, editCell[0], editCell[1]) : null, fk = e.type === 'frame' ? 1 / Math.min(1, Math.max(0.2, cam.z)) : 1, chipW = e.slide ? (G.measure(String(e.slide), 11, 600) + 18) * fk : 0;
   const box = cb ? [cb.x, cb.y, cb.w, cb.h] : lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 12, e.y + 4, e.w - 20, 44] : e.type === 'frame' ? [e.x - 2 + chipW, e.y - 22 * fk, Math.max(e.w - chipW, 160), 20 * fk]
     : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
-  Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
+  if (richEd(e)) RE.styleRich(ed, e, z);
+  Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: richEd(e) ? 'auto' : Math.max(box[3] * z, 24) + 'px', minHeight: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z * fk + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
     padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px', paddingTop: phPad(e, st) * z + 'px',
     textAlign: e.align || (centered ? 'center' : 'left'), ...editorPaint(e, onCanvas),
@@ -896,7 +902,7 @@ function placeEditor() {
 function phPad(e, st) {
   if (e.type === 'sticky') return 10;
   if (!e.ph || e.type !== 'text' || !e.va || e.va === 'top') return ['frame', 'text', 'conn'].includes(e.type) ? 2 : 8;
-  const block = Math.max(1, G.wrapEl(e, e.w - 4).length) * st.size * 1.3;
+  const block = Math.max(st.size * 1.3, G.textHeight(e, e.w - 4));
   return Math.max(2, e.va === 'bottom' ? e.h - block - 2 : (e.h - block) / 2 + 2);
 }
 /** Background and text color for the text editor, matching the piece as it is painted on screen. */
@@ -909,11 +915,33 @@ function editorPaint(e, onCanvas) {
 function startEdit(id, cell) {
   const e = E(id); if (!e || e.locked || !TEXTY.includes(e.type)) return;
   if (e.type === 'table') { e.cells = normCells(e.cells); editCell = cell || [0, 0]; } else editCell = null;
-  editing = id; const ed = $('#ed'); ed.value = e.type === 'table' ? e.cells[editCell[0]][editCell[1]] : e.text || ''; placeEditor(); refresh(); ed.focus(); ed.select();
+  editing = id;
+  if (richEd(e)) {
+    const red = $('#red'); RE.fillRich(red, e.text); placeEditor(); refresh(); red.focus();
+    const r = document.createRange(); r.selectNodeContents(red); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r);
+    return;
+  }
+  const ed = $('#ed'); ed.value = e.type === 'table' ? e.cells[editCell[0]][editCell[1]] : e.text || ''; placeEditor(); refresh(); ed.focus(); ed.select();
+}
+/** After typing in the paragraph editor: tidy its structure, refit the piece, and redraw. */
+function richInput() {
+  const e = editing && E(editing), red = $('#red'); if (!e) return;
+  RE.normalizeRich(red); e.text = RE.readRich(red); fitText(e); placeEditor(); draw();
+}
+function richKey(ev) {
+  ev.stopPropagation();
+  const e = editing && E(editing), red = ev.currentTarget, mod = ev.ctrlKey || ev.metaKey;
+  if (ev.key === 'Tab') { ev.preventDefault(); if (RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
+  if (mod && ev.shiftKey && (ev.key === '*' || ev.key === '8' || ev.key === '&' || ev.key === '7') && e) {
+    ev.preventDefault(); const kind = ev.key === '8' || ev.key === '*' ? 'disc' : 'num';
+    if (e.bullets === kind) delete e.bullets; else e.bullets = kind; richInput(); return;
+  }
+  if (ev.key === 'Escape' || (ev.key === 'Enter' && mod)) { ev.preventDefault(); red.blur(); }
 }
 function endEdit() {
-  if (!editing) return; const e = E(editing), ed = $('#ed'); editing = null; ed.style.display = 'none';
-  if (e && e.type === 'table') { const [r, c] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[r][c] = ed.value.replace(/\s+$/, ''); fitText(e); editCell = null; }
+  if (!editing) return; const e = E(editing), ed = $('#ed'), red = $('#red'), rich = richEd(e); editing = null; ed.style.display = 'none'; red.style.display = 'none';
+  if (e && rich) { RE.normalizeRich(red); e.text = RE.readRich(red).replace(/\s+$/, ''); red.replaceChildren(); if (!e.text.trim() && !e.ph) delete board.els[e.id]; else { if (!e.text.trim()) e.text = ''; fitText(e); } }
+  else if (e && e.type === 'table') { const [r, c] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[r][c] = ed.value.replace(/\s+$/, ''); fitText(e); editCell = null; }
   else if (e) { e.text = ed.value.replace(/\s+$/, ''); if (e.type === 'text' && !e.text && !e.ph) delete board.els[e.id]; else { if (e.type === 'frame' && !e.text) e.text = 'Frame'; if (e.type === 'card' && !e.text) e.text = 'Untitled task'; fitText(e); } }
   edFor = null; commit();
 }
@@ -1141,7 +1169,7 @@ function onKey(ev) {
   if (show) { showKey(ev); return; }
   if (menuKeys(ev)) return;
   if (ev.key === 'Escape' && $('#tpl')) { $('#tpl').remove(); return; }
-  if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT');
+  if (!board) return; const tgt = ev.target, typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT' || tgt.isContentEditable);
   if (typing || (tgt && tgt.tagName === 'BUTTON' && (ev.key === 'Enter' || ev.key === ' ') && !(ev.ctrlKey || ev.metaKey))) return;
   const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let done = true;
   if (vdraft) {
@@ -1229,6 +1257,8 @@ async function openBoard(id) {
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
       h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { const slot = imgSlot; imgSlot = null; e.target.multiple = true; for (const f of [...e.target.files]) await addImage(f, null, slot); e.target.value = ''; } }),
+      h('div', { id: 'red', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Edit text', spellcheck: 'true', onblur: endEdit, oninput: richInput, onkeydown: richKey,
+        onpaste: ev => { ev.preventDefault(); ev.stopPropagation(); RE.pastePlain(document, ev.clipboardData ? ev.clipboardData.getData('text/plain') : ''); } }),
       h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit,
         oninput: ev => { const e = editing && E(editing); if (e && (e.type === 'sticky' || e.ph)) { e.text = ev.target.value; const h0 = e.h; fitText(e); placeEditor(); if (e.h !== h0) draw(); } },
         onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
@@ -1538,6 +1568,21 @@ function renderProps() {
           h('button', { class: 'fbtn', style: 'font-style:italic', 'aria-pressed': String(ital), onclick: () => setAll(texty, 'italic', !ital) }, 'Italic')),
         themeSw(texty, 'color'),
         h('div', { class: 'swatches', role: 'group', 'aria-label': 'Text color' }, TEXT_COLORS.map(([c, name]) => swatch(c, col === c || (c === '#1d2530' && texty.every(e => !e.color)), () => setAll(texty, 'color', c === '#1d2530' ? '' : c), name, true)))));
+      const paraEls = texty.filter(e => e.type === 'text');
+      if (paraEls.length) {
+        const bl = same(paraEls, 'bullets') || (paraEls.every(e => !e.bullets) ? 'none' : '');
+        const shift = by => { paraEls.forEach(e => { e.text = RT.indentParas(e.text, 0, Infinity, by); fitText(e); }); commit(); };
+        out.push(sec('Paragraph',
+          h('div', { class: 'row' },
+            h('div', { class: 'seg', role: 'group', 'aria-label': 'List style' }, [['none', 'No bullets', 'M4 6h12M4 10h12M4 14h12'], ['disc', 'Bullets (Ctrl+Shift+8)', 'M4 6h.01M4 10h.01M4 14h.01M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5'], ['num', 'Numbers (Ctrl+Shift+7)', 'M3.5 5h1v3M3.5 12h2l-2 2.5h2M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5']]
+              .map(([k, label, d]) => h('button', { title: label, 'aria-label': label, 'aria-pressed': String(bl === k), onclick: () => setAll(paraEls, 'bullets', k === 'none' ? '' : k) }, icon(d, 14, k === 'none' ? {} : { 'stroke-linecap': 'round' })))),
+            h('div', { class: 'seg', role: 'group', 'aria-label': 'Indent' },
+              h('button', { title: 'Decrease indent (Shift+Tab while typing)', 'aria-label': 'Decrease indent', disabled: paraEls.every(e => !/(^|\n)\t/.test(e.text || '')), onclick: () => shift(-1) }, icon('M9 6h7M9 10h7M9 14h7M6 8l-2.5 2L6 12', 14)),
+              h('button', { title: 'Increase indent (Tab while typing)', 'aria-label': 'Increase indent', onclick: () => shift(1) }, icon('M9 6h7M9 10h7M9 14h7M3.5 8L6 10l-2.5 2', 14)))),
+          h('div', { class: 'grid2' },
+            pick('line-sp', 'Line spacing', [[1, 'Single'], [1.15, '1.15'], [1.5, '1.5'], [2, 'Double']], same(paraEls, 'lsp') || 1, v => setAll(paraEls, 'lsp', Number(v) === 1 ? '' : Number(v))),
+            pick('para-sp', 'Space between paragraphs', [['', 'Auto'], [0, 'None'], [6, '6 px'], [12, '12 px'], [18, '18 px'], [24, '24 px']], same(paraEls, 'psp') ?? '', v => { paraEls.forEach(e => { if (v === '') delete e.psp; else e.psp = Number(v); fitText(e); }); commit(); }))));
+      }
     }
     if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit)));
     if (free.filter(e => e.type !== 'conn').length > 1) out.push(sec('Align', h('div', { class: 'grid4' }, ALIGN.map(([k, label, d]) => h('button', { class: 'ibtn', title: label, 'aria-label': label, onclick: () => align(k) }, icon(d, 16))))));
@@ -1679,6 +1724,7 @@ const KEYS = [
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Alt while placing', 'Keep the tool to place several'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
   ['Vectors', [['B', 'Pen: click for corners, drag for curves'], ['Click the first node', 'Close the shape'], ['Enter or Esc', 'Finish the path'], ['Double-click a vector', 'Edit its nodes'], ['Click the outline', 'Add a node there'], ['Double-click a node', 'Switch between corner and smooth'], ['Alt+drag a handle', 'Bend one side only'], ['Delete', 'Remove the selected nodes'], ['Ctrl+Alt+U / S / I / X', 'Union, subtract, intersect, exclude'], ['Double-click a boolean', 'Select the shape under the pointer'], ['Enter on a boolean', 'Select the shapes inside it'], ['Esc on a shape inside', 'Back to the boolean'], ['Ctrl+E', 'Flatten the selection, or bake a boolean'], ['Ctrl+Shift+O', 'Outline stroke'], ['Ctrl+Alt+M', 'Use the bottom piece as a mask, or release it']]],
+  ['Typing in a text box', [['Tab / Shift+Tab', 'Indent or outdent the paragraph'], ['Ctrl+Shift+8', 'Bullets on or off'], ['Ctrl+Shift+7', 'Numbers on or off'], ['Esc or Ctrl+Enter', 'Finish typing']]],
   ['Presenting', [['Ctrl+Enter', 'Present (from the selected slide)'], ['Right, Space, Enter', 'Next slide'], ['Left, Backspace', 'Previous slide'], ['Home / End', 'First or last slide'], ['P', 'Presenter view with notes'], ['F', 'Full screen'], ['Esc', 'Stop presenting']]],
   ['View', [['Space+drag', 'Pan'], ['Ctrl+scroll', 'Zoom'], ['+ and -', 'Zoom in and out'], ['Shift+1', 'Fit everything'], ['M', 'Show or hide the minimap'], ['Right-click', 'Open the menu'], ['?', 'Show this list'], ['Esc', 'Deselect or close']]]];
 function toggleHelp() {

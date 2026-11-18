@@ -121,9 +121,11 @@ interface PhDef {
   /** Font role and text color, as theme values. */
   font: 'major' | 'minor';
   color: string;
+  /** Body text starts bulleted, as in DeckCraft's master. */
+  bullets?: boolean;
 }
 const TITLE: PhDef = { ph: 'title', box: [60, 29, 840, 104], size: 44, weight: 600, va: 'middle', font: 'major', color: 'dk2' };
-const BODY: PhDef = { ph: 'body', box: [60, 144, 840, 343], size: 28, va: 'top', font: 'minor', color: 'dk1' };
+const BODY: PhDef = { ph: 'body', box: [60, 144, 840, 343], size: 28, va: 'top', font: 'minor', color: 'dk1', bullets: true };
 
 export interface Layout { label: string; icon: string; phs: PhDef[] }
 /** DeckCraft's layouts, less the two vertical-text ones. Keys of the older layouts are kept. */
@@ -176,7 +178,8 @@ function place(e: El, d: PhDef, f: El, th: DeckTheme) {
   e.size = Math.round(d.size * k);
   if (d.weight) e.weight = d.weight; else delete e.weight;
   if (d.align) e.align = d.align; else delete e.align;
-  delete e.italic; delete e.fit;
+  delete e.italic; delete e.fit; delete e.lsp; delete e.psp;
+  if (d.bullets) e.bullets = 'disc'; else delete e.bullets;
   e.tc = {};
   linkTheme(e, 'font', d.font, th);
   linkTheme(e, 'color', d.color, th);

@@ -1,5 +1,6 @@
 import { connGeom } from './connectors';
 import { colFractions } from './table';
+import { indentOf, isRich, levelRatio, markers, parasOf, spaceBefore } from './richtext';
 import { FONTS, type Box, type El, type Lookup } from './types';
 
 export { ends } from './connectors';
@@ -56,6 +57,26 @@ export function wrapEl(e: El, maxW: number): string[] {
   const st = textStyle(e);
   return wrap(e.text, maxW, st.size, st.weight, st.family, st.italic);
 }
+
+/** One laid-out line of a text piece. `x` and `bx` are from the text box's left, `base` from its top. */
+export interface TLine { text: string; size: number; x: number; base: number; level: number; marker?: string; bx?: number }
+/** Lines of a text piece placed in a width, with paragraph levels, markers, and spacing, and its height. */
+export function layoutText(e: El, width: number): { lines: TLine[]; height: number } {
+  const st = textStyle(e), ps = parasOf(e.text), marks = markers(ps, e.bullets), lsp = e.lsp || 1, lines: TLine[] = [];
+  let y = 0;
+  ps.forEach((p, i) => {
+    const size = Math.max(4, Math.round(st.size * levelRatio(e, p.level) * 10) / 10), lh = size * 1.3 * lsp;
+    const ind = indentOf(p.level, st.size, e.bullets);
+    if (i) y += spaceBefore(e, p.level, st.size);
+    wrap(p.text, Math.max(size, width - ind.text), size, st.weight, st.family, st.italic).forEach((t, j) => {
+      lines.push({ text: t, size, x: ind.text, base: y + lh - size * 0.35, level: p.level, ...(j === 0 && marks[i] ? { marker: marks[i], bx: ind.marker } : {}) });
+      y += lh;
+    });
+  });
+  return { lines, height: y };
+}
+/** Height of a text piece's lines in a width: plain wrapped lines, or the paragraph layout. */
+export const textHeight = (e: El, width: number) => isRich(e) ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
 
 /** Axis-aligned box that contains `b` after rotating it `deg` degrees around its center. */
 export function rotatedBox(b: Box, deg: number): Box {
@@ -185,7 +206,7 @@ export function fitPlaceholder(e: El) {
   if (!e.text || e.ph === 'picture') return;
   const full = textStyle(e).size;
   for (let size = full; size > 8; size = Math.max(8, Math.floor(size * 0.92))) {
-    if (wrapEl({ ...e, size }, e.w - 4).length * size * 1.3 + 8 <= e.h) { if (size < full) e.fit = size; return; }
+    if (textHeight({ ...e, size }, e.w - 4) + 8 <= e.h) { if (size < full) e.fit = size; return; }
   }
   e.fit = 8;
 }
@@ -194,7 +215,7 @@ export function fitText(e: El) {
   const lh = textStyle(e).size * 1.3;
   if (e.type === 'sticky') fitSticky(e);
   else if (e.type === 'text' && e.ph) fitPlaceholder(e);
-  else if (e.type === 'text') e.h = Math.ceil(wrapEl(e, e.w - 4).length * lh + 8);
+  else if (e.type === 'text') e.h = Math.ceil(textHeight(e, e.w - 4) + 8);
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
   else if (e.type === 'table' && e.cells) {
     const st = textStyle(e), fr = colFractions(e);

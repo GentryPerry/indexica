@@ -34,6 +34,11 @@ export interface El {
    *  keeps its box, shows a prompt while empty, and anchors its text vertically (`va`). */
   ph?: string;
   va?: 'top' | 'middle' | 'bottom';
+  /** Text paragraphs: bullets or numbers, line spacing (a multiple of single), and space above each
+   *  paragraph in px. Levels are leading tabs in the text (see `richtext.ts`). */
+  bullets?: 'disc' | 'num';
+  lsp?: number;
+  psp?: number;
   /** Theme links: which theme color slot (or 'major'/'minor' font) a field came from, so changing the
    *  theme repaints it. A link is dropped once the field no longer holds the theme's value. */
   tc?: Record<string, string>;
