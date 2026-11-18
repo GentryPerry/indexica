@@ -1188,7 +1188,9 @@ function chartSections(e) {
 
 /* ---------- Text editing ---------- */
 /** Text pieces edit in the paragraph editor; everything else in the plain one. */
-const richEd = e => !!e && e.type === 'text';
+/** Pieces that edit in the paragraph editor, so words can carry their own style. */
+const RICH_TYPES = ['text', 'sticky', 'rect', 'ellipse', 'diamond', 'table'];
+const richEd = e => !!e && RICH_TYPES.includes(e.type);
 function placeEditor() {
   const e = editing && E(editing); if (!e) return;
   const ed = richEd(e) ? $('#red') : $('#ed');
@@ -1223,7 +1225,7 @@ function startEdit(id, cell) {
   if (e.type === 'table') { e.cells = normCells(e.cells); editCell = cell || [0, 0]; } else editCell = null;
   editing = id;
   if (richEd(e)) {
-    const red = $('#red'); RE.fillRich(red, e.text, e.runs); placeEditor(); refresh(); red.focus();
+    const red = $('#red'), [src, runs] = edSource(e); RE.fillRich(red, src, runs); placeEditor(); refresh(); red.focus();
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* older browsers write tags instead */ }
     const r = document.createRange(); r.selectNodeContents(red); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r);
     return;
@@ -1235,11 +1237,26 @@ function richInput() {
   const e = editing && E(editing), red = $('#red'); if (!e) return;
   RE.normalizeRich(red); readEditor(e, red, false); fitText(e); placeEditor(); draw();
 }
-/** Takes the paragraph editor's text and runs into the piece. */
+/** The text and runs being edited: the piece's own, or the table cell's. */
+function edSource(e) {
+  if (e.type !== 'table') return [e.text, e.runs];
+  const [r, c] = editCell || [0, 0], text = (e.cells[r] && e.cells[r][c]) || '';
+  return [text, R.normRuns(e.cruns && e.cruns[r] && e.cruns[r][c] || [], text.length)];
+}
+/** Takes the paragraph editor's text and runs into the piece (or the table cell being edited). */
 function readEditor(e, red, trim) {
   const r = RE.readRichRuns(red); let text = r.text;
   if (trim) text = text.replace(/\s+$/, '');
-  e.text = text; const runs = R.normRuns(r.runs, text.length);
+  const runs = R.normRuns(r.runs, text.length);
+  if (e.type === 'table') {
+    const [row, col] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[row][col] = text;
+    const cr = (e.cruns || []).slice(0, e.cells.length);
+    while (cr.length < e.cells.length) cr.push([]);
+    cr[row] = Array.from({ length: e.cells[row].length }, (_, k) => k === col ? (runs.length ? runs : null) : (cr[row] && cr[row][k]) || null);
+    if (cr.some(row2 => row2 && row2.some(x => x && x.length))) e.cruns = cr; else delete e.cruns;
+    return;
+  }
+  e.text = text;
   if (runs.length) e.runs = runs; else delete e.runs;
 }
 /* ---------- Format bar: style for the selected words while typing ---------- */
@@ -1300,8 +1317,11 @@ document.addEventListener('selectionchange', () => { if (editing && $('#fmt') &&
 function richKey(ev) {
   ev.stopPropagation();
   const e = editing && E(editing), red = ev.currentTarget, mod = ev.ctrlKey || ev.metaKey;
-  if (ev.key === 'Tab') { ev.preventDefault(); if (RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
-  if (mod && ev.shiftKey && (ev.key === '*' || ev.key === '8' || ev.key === '&' || ev.key === '7') && e) {
+  if (ev.key === 'Tab' && e && e.type === 'sticky') { ev.preventDefault(); const id = e.id; red.blur(); nextSticky(id); return; }
+  if (e && e.type === 'table' && ev.key === 'Tab') { ev.preventDefault(); const id = e.id, at = editCell || [0, 0], next = stepCell(e, at[0], at[1], ev.shiftKey); red.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
+  if (e && e.type === 'table' && ev.key === 'Enter' && !ev.shiftKey && !mod) { ev.preventDefault(); red.blur(); return; }
+  if (ev.key === 'Tab') { ev.preventDefault(); if (e && e.type === 'text' && RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
+  if (mod && ev.shiftKey && (ev.key === '*' || ev.key === '8' || ev.key === '&' || ev.key === '7') && e && e.type === 'text') {
     ev.preventDefault(); const kind = ev.key === '8' || ev.key === '*' ? 'disc' : 'num';
     if (e.bullets === kind) delete e.bullets; else e.bullets = kind; richInput(); return;
   }
@@ -1309,7 +1329,7 @@ function richKey(ev) {
 }
 function endEdit() {
   if (!editing) return; const e = E(editing), ed = $('#ed'), red = $('#red'), rich = richEd(e); editing = null; ed.style.display = 'none'; red.style.display = 'none'; const fb = $('#fmt'); if (fb) fb.hidden = true;
-  if (e && rich) { RE.normalizeRich(red); readEditor(e, red, true); red.replaceChildren(); if (!e.text.trim() && !e.ph) delete board.els[e.id]; else { if (!e.text.trim()) { e.text = ''; delete e.runs; } fitText(e); } }
+  if (e && rich) { RE.normalizeRich(red); readEditor(e, red, true); red.replaceChildren(); if (e.type === 'table') { fitText(e); editCell = null; } else if (!e.text.trim() && !e.ph && e.type === 'text') delete board.els[e.id]; else { if (!e.text.trim()) { e.text = ''; delete e.runs; } fitText(e); } }
   else if (e && e.type === 'table') { const [r, c] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[r][c] = ed.value.replace(/\s+$/, ''); fitText(e); editCell = null; }
   else if (e) { e.text = ed.value.replace(/\s+$/, ''); if (e.type === 'text' && !e.text && !e.ph) delete board.els[e.id]; else { if (e.type === 'frame' && !e.text) e.text = 'Frame'; if (e.type === 'card' && !e.text) e.text = 'Untitled task'; fitText(e); } }
   edFor = null; commit();
@@ -1823,8 +1843,9 @@ async function openBoard(id) {
 /** A style picked for a whole text piece replaces the same style on its words. */
 const RUN_OF = { font: 'f', weight: 'w', size: 'z', italic: 'i', color: 'c' };
 function wholeStyle(e, key) {
-  if (!e.runs || !RUN_OF[key]) return;
-  e.runs = R.dropKeys(e.runs, (e.text || '').length, [RUN_OF[key]]); if (!e.runs.length) delete e.runs;
+  if (!RUN_OF[key]) return;
+  if (e.runs) { e.runs = R.dropKeys(e.runs, (e.text || '').length, [RUN_OF[key]]); if (!e.runs.length) delete e.runs; }
+  if (e.cruns) e.cruns = e.cruns.map((row, r) => row.map((x, k) => { if (!x) return null; const d = R.dropKeys(x, ((e.cells[r] || [])[k] || '').length, [RUN_OF[key]]); return d.length ? d : null; }));
 }
 /** Open the outline drawer ('ol') or the properties sheet ('pr') on small screens, or close both (null). */
 let olClose = 0;

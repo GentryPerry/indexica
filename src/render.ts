@@ -1,6 +1,6 @@
 import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
-import { layoutText, measure, textStyle, wrap, wrapEl, type TextStyle } from './geometry';
+import { layoutText, measure, textStyle, wrap, wrapEl, type TextStyle, type TLine } from './geometry';
 import { isRich } from './richtext';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
@@ -80,15 +80,8 @@ function richText(e: El, ink: string, c?: RenderCtx): SVGElement {
     const ls: TextStyle = { ...st, size: ln.size };
     if (ln.marker) g.append(textBlock([ln.marker], e.x + 2 + ln.bx!, top + ln.base, ls, ink));
     if (ln.segs) {
-      // Styled stretches are placed one after another from the line's start, each its own text node.
       const room = e.w - 4 - ln.x, x0 = e.x + 2 + ln.x + (a === 'center' ? (room - ln.w!) / 2 : a === 'right' ? room - ln.w! : 0);
-      for (const sg of ln.segs) {
-        if (!sg.text) continue;
-        const deco = [sg.u ? 'underline' : '', sg.strike ? 'line-through' : ''].filter(Boolean).join(' ');
-        const fill = sg.color ? (c ? inkOn(c.under?.(e), sg.color, c.theme) : sg.color) : ink;
-        g.append(s('text', { x: x0 + sg.dx, y: top + ln.base, 'font-size': sg.size, 'font-family': sg.family, 'font-weight': sg.weight, 'font-style': sg.italic ? 'italic' : null,
-          'text-decoration': deco || null, fill, style: 'white-space:pre', 'pointer-events': 'none' }, sg.text));
-      }
+      segNodes(g, ln, x0, top + ln.base, ink, c && c.under?.(e), c);
       continue;
     }
     const tx = a === 'center' ? e.x + 2 + ln.x + (e.w - 4 - ln.x) / 2 : a === 'right' ? e.x + e.w - 2 : e.x + 2 + ln.x;
@@ -97,6 +90,26 @@ function richText(e: El, ink: string, c?: RenderCtx): SVGElement {
   return g;
 }
 
+/** Styled stretches of one line, placed one after another from `x0`, each its own text node. */
+function segNodes(g: SVGElement, ln: TLine, x0: number, y: number, ink: string, under: string | undefined, c?: RenderCtx) {
+  for (const sg of ln.segs || []) {
+    if (!sg.text) continue;
+    const deco = [sg.u ? 'underline' : '', sg.strike ? 'line-through' : ''].filter(Boolean).join(' ');
+    const fill = sg.color ? (c ? inkOn(under, sg.color, c.theme) : sg.color) : ink;
+    g.append(s('text', { x: x0 + sg.dx, y, 'font-size': sg.size, 'font-family': sg.family, 'font-weight': sg.weight, 'font-style': sg.italic ? 'italic' : null,
+      'text-decoration': deco || null, fill, style: 'white-space:pre', 'pointer-events': 'none' }, sg.text));
+  }
+}
+/**
+ * Text with runs inside a box (a note or a shape): styled lines, from the top or centered, aligned by
+ * the piece's choice. `pad` is the inset on each side; `paint` is the surface under the text.
+ */
+function runBlock(e: El, bx: number, by: number, bw: number, bh: number, pad: number, valign: 'top' | 'middle', fallback: 'left' | 'center', ink: string, paint: string | undefined, c: RenderCtx): SVGElement {
+  const room = bw - pad * 2, { lines, height } = layoutText(e, room), g = s('g', { 'pointer-events': 'none' }), a = e.align || fallback;
+  const top = valign === 'middle' ? by + bh / 2 - height / 2 : by + pad;
+  for (const ln of lines) segNodes(g, ln, bx + pad + ln.x + (a === 'center' ? (room - ln.x - (ln.w || 0)) / 2 : a === 'right' ? room - ln.x - (ln.w || 0) : 0), top + ln.base, ink, paint, c);
+  return g;
+}
 /**
  * A picture: its cropped window of the image, clipped to rounded corners or an oval, with its
  * adjustments as an SVG filter and an optional border.
@@ -224,7 +237,8 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const fill = paintFill(e.fill, c.theme);
     g.append(s('rect', { x, y, width: w, height: h, rx: 3, fill, filter: shadow }));
     const ink = inkOn(fill, e.color, c.theme);
-    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 14, 'left'); g.append(textBlock(wrapEl(e, w - 28), tx, y + 14 + st.size, st, ink, anchor)); }
+    if (!hide && e.runs && e.runs.length) g.append(runBlock(e, x, y, w, h, 14, 'top', 'left', ink, fill, c));
+    else if (!hide) { const [tx, anchor] = lineStart(e, x, w, 14, 'left'); g.append(textBlock(wrapEl(e, w - 28), tx, y + 14 + st.size, st, ink, anchor)); }
     // The author's name sits small at the foot of the note, as in FigJam.
     const who = e.author && !e.noAuthor && c.nameOf ? c.nameOf(e.author) : '';
     if (who) {
@@ -246,8 +260,9 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     }
     g.append(pg);
     if (!hide && e.text) {
-      const tb = presetText(def, w, h, e.adj), bx = x + tb.x, by = y + tb.y, ls = wrapEl(e, tb.w - 16), [tx, anchor] = lineStart(e, bx, tb.w, 8, 'center');
-      g.append(textBlock(ls, tx, by + tb.h / 2 - ls.length * lh / 2 + st.size * 0.97, st, inkOn(fill === 'none' ? c.under?.(e) : fill, e.color, c.theme), anchor));
+      const tb = presetText(def, w, h, e.adj), bx = x + tb.x, by = y + tb.y, paint = fill === 'none' ? c.under?.(e) : fill, ink = inkOn(paint, e.color, c.theme);
+      if (e.runs && e.runs.length) g.append(runBlock(e, bx, by, tb.w, tb.h, 8, 'middle', 'center', ink, paint, c));
+      else { const ls = wrapEl(e, tb.w - 16), [tx, anchor] = lineStart(e, bx, tb.w, 8, 'center'); g.append(textBlock(ls, tx, by + tb.h / 2 - ls.length * lh / 2 + st.size * 0.97, st, ink, anchor)); }
     }
   } else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') {
     const fill = paintFill(e.fill, c.theme), line = outline(e, c);
@@ -256,7 +271,8 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       : e.type === 'ellipse' ? s('ellipse', { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2, ...a })
       : s('polygon', { points: `${x + w / 2},${y} ${x + w},${y + h / 2} ${x + w / 2},${y + h} ${x},${y + h / 2}`, ...a }));
     if (e.sketch) g.append(s('path', { d: roughPath(shapeOutline(e.type, x, y, w, h), hashId(e.id), wobble(w, h)), fill: 'none', stroke: line, 'stroke-width': 1.3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': dashOf(e, 1.5), 'pointer-events': 'none' }));
-    if (!hide) { const ls = wrapEl(e, w - 24); const [tx, anchor] = lineStart(e, x, w, 12, 'center'); g.append(textBlock(ls, tx, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, inkOn(fill, e.color, c.theme), anchor)); }
+    if (!hide && e.runs && e.runs.length) g.append(runBlock(e, x, y, w, h, 12, 'middle', 'center', inkOn(fill, e.color, c.theme), fill, c));
+    else if (!hide) { const ls = wrapEl(e, w - 24); const [tx, anchor] = lineStart(e, x, w, 12, 'center'); g.append(textBlock(ls, tx, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, inkOn(fill, e.color, c.theme), anchor)); }
   } else if (e.type === 'text') {
     g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
     const ink = inkOn(c.under?.(e), e.color, c.theme), empty = !e.text || !e.text.trim() || e.ph === 'picture';
@@ -374,6 +390,8 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       if (look.border) lines.push(s('rect', { x: b.x, y: b.y, width: b.w, height: b.h, fill: 'none', stroke: look.border[0], 'stroke-width': look.border[1], 'pointer-events': 'none' }));
       if (!text || (hide && c.editCell && c.editCell[0] === r && c.editCell[1] === k)) continue;
       const cs = look.bold ? { ...st, weight: Math.max(st.weight, 700) } : st, ink = look.text || (e.color ? e.color : inkOn(look.fill, undefined, look.fill ? 'light' : c.theme));
+      const cr = e.cruns?.[r]?.[k];
+      if (cr && cr.length) { lines.push(runBlock({ ...e, text, runs: cr, weight: cs.weight, align: undefined }, b.x, b.y, b.w, b.h, 8, 'middle', 'left', ink, look.fill, c)); continue; }
       const ls = wrapEl({ ...e, text, weight: cs.weight }, b.w - 16).slice(0, Math.max(1, Math.floor((b.h - 8) / lh)));
       lines.push(textBlock(ls, b.x + 8, b.y + b.h / 2 - ls.length * lh / 2 + cs.size * 0.97, cs, ink));
     }
@@ -389,6 +407,8 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     (e.cells || []).forEach((row, r) => row.forEach((text, k) => {
       if (!text || (hide && c.editCell && c.editCell[0] === r && c.editCell[1] === k)) return;
       const b = cellBox(e, r, k), cs = r === 0 && e.header ? { ...st, weight: Math.max(st.weight, 600) } : st;
+      const cr = e.cruns?.[r]?.[k];
+      if (cr && cr.length) { g.append(runBlock({ ...e, text, runs: cr, weight: cs.weight, align: undefined }, b.x, b.y, b.w, b.h, 8, 'top', 'left', inkOn(sf.card, e.color, c.theme), sf.card, c)); return; }
       const lines = wrapEl({ ...e, text, weight: cs.weight }, b.w - 16).slice(0, Math.max(1, Math.floor((b.h - 8) / lh)));
       g.append(textBlock(lines, b.x + 8, b.y + 8 + cs.size * 0.95, cs, inkOn(sf.card, e.color, c.theme)));
     }));

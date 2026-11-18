@@ -160,5 +160,13 @@ describe('pptx import', () => {
     els.rt.text = 'Huge then normal words here'; els.rt.runs = [{ s: 0, e: 4, z: 48 }];
     const big = (await readPptx(await writePptx(els, id => els[id], { image: () => ({ bytes: PNG, ext: 'png' }), today: 'Today' }))).slides[0].els.find(e => e.text === els.rt.text)!;
     expect(big.size).toBe(20); expect(big.runs).toEqual([{ s: 0, e: 4, z: 48 }]);
+    // Shapes and table cells write their styled words too, and shapes read them back.
+    els.sh = { id: 'sh', type: 'rect', preset: 'rect', z: 501, x: f.x + 700, y: f.y + 300, w: 200, h: 100, fill: '#ffffff', text: 'Go now', runs: [{ s: 3, e: 6, w: 700 }] };
+    els.tb = { id: 'tb', type: 'table', z: 502, x: f.x + 40, y: f.y + 420, w: 400, h: 80, cells: [['Owner name', 'B'], ['1', '2']], cruns: [[[{ s: 6, e: 10, c: '#2f6fed' }], null], [null, null]] };
+    const b3 = await writePptx(els, id => els[id], { image: () => ({ bytes: PNG, ext: 'png' }), today: 'Today' });
+    const x3 = text((await unzip(b3)).get('ppt/slides/slide1.xml')!);
+    expect(x3).toMatch(/2F6FED[^]*?<a:t>name<\/a:t>/i);
+    const shape = (await readPptx(b3)).slides[0].els.find(e => e.text === 'Go now')!;
+    expect(shape.runs).toEqual([{ s: 3, e: 6, w: 700 }]);
   });
 });

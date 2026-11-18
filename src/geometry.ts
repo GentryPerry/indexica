@@ -132,6 +132,8 @@ export function layoutText(e: El, width: number): { lines: TLine[]; height: numb
   });
   return { lines, height: y };
 }
+/** Height of the text inside a shape or note: plain wrapped lines, or styled lines when it has runs. */
+export const boxTextHeight = (e: El, width: number) => e.runs && e.runs.length ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
 /** Height of a text piece's lines in a width: plain wrapped lines, or the paragraph layout. */
 export const textHeight = (e: El, width: number) => isRich(e) ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
 
@@ -245,13 +247,11 @@ export function fitSticky(e: El) {
   const room = (h: number) => h - 28 - stickyFoot(e);
   if (!e.size) {
     for (const size of STICKY_SIZES) {
-      const lines = wrapEl({ ...e, size }, e.w - 28);
-      if (lines.length * size * 1.3 <= room(e.h)) { e.fit = size; return; }
+      if (boxTextHeight({ ...e, fit: size }, e.w - 28) <= room(e.h)) { e.fit = size; return; }
     }
     e.fit = STICKY_SIZES[STICKY_SIZES.length - 1];
   } else delete e.fit;
-  const lh = textStyle(e).size * 1.3;
-  e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 28).length * lh + 28 + stickyFoot(e)));
+  e.h = Math.max(e.h, Math.ceil(boxTextHeight(e, e.w - 28) + 28 + stickyFoot(e)));
 }
 
 /**
@@ -273,10 +273,14 @@ export function fitText(e: El) {
   if (e.type === 'sticky') fitSticky(e);
   else if (e.type === 'text' && e.ph) fitPlaceholder(e);
   else if (e.type === 'text') e.h = Math.ceil(textHeight(e, e.w - 4) + 8);
-  else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
+  else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(boxTextHeight(e, e.w - 24) + 20));
   else if (e.type === 'table' && e.cells) {
     const st = textStyle(e), fr = colFractions(e);
-    const lines = Math.max(1, ...e.cells.flatMap(row => row.map((t, i) => wrap(t, e.w * (fr[i] || 0) - 16, st.size, st.weight, st.family, st.italic).length)));
-    e.h = Math.max(e.h, Math.ceil(e.cells.length * (lines * lh + 16)));
+    // Each row is as tall as the tallest cell needs, styled words included.
+    const tall = Math.max(lh, ...e.cells.flatMap((row, r) => row.map((t, i) => {
+      const runs = e.cruns?.[r]?.[i];
+      return runs && runs.length ? layoutText({ ...e, text: t, runs, bullets: undefined }, e.w * (fr[i] || 0) - 16).height : wrap(t, e.w * (fr[i] || 0) - 16, st.size, st.weight, st.family, st.italic).length * lh;
+    })));
+    e.h = Math.max(e.h, Math.ceil(e.cells.length * (tall + 16)));
   }
 }

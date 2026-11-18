@@ -11,7 +11,7 @@ import { pageTheme, themeById, type DeckTheme } from './deck';
 import { textStyle } from './geometry';
 import { fromD, worldPaths, type SubPath } from './vector';
 import { levelRatio, markers, parasOf, indentOf } from './richtext';
-import { spansOf, type RunStyle } from './runs';
+import { spansOf, type Run, type RunStyle } from './runs';
 import { slideMembers, slidesOf } from './slides';
 import { cellBox, cellLook, colFractions, rowsOf } from './table';
 import { FONTS, type El, type Lookup } from './types';
@@ -78,10 +78,10 @@ const NUM = ['arabicPeriod', 'alphaLcPeriod', 'romanLcPeriod'];
  * A text body: one paragraph per line, with level, bullet or number, spacing, and run style. `inset`
  * is the padding in px; `anchor` is t, ctr, or b; `align` defaults per piece kind.
  */
-function txBody(e: El, text: string | undefined, o: { inset: [number, number]; anchor: string; align?: string; color?: string; size?: number; bold?: boolean; autofit?: boolean; tag?: string }): string {
+function txBody(e: El, text: string | undefined, o: { inset: [number, number]; anchor: string; align?: string; color?: string; size?: number; bold?: boolean; autofit?: boolean; tag?: string; runs?: Run[] | null }): string {
   const st = textStyle(e), base = o.size || st.size, ps = parasOf(text), marks = markers(ps, e.bullets), tag = o.tag || 'p:txBody';
   const algn = { left: 'l', center: 'ctr', right: 'r' }[(e.align as string) || o.align || 'left'] || 'l';
-  const count: number[] = [], runs = text === e.text && e.runs && e.runs.length ? e.runs : null;
+  const count: number[] = [], runs = o.runs !== undefined ? (o.runs && o.runs.length ? o.runs : null) : text === e.text && e.runs && e.runs.length ? e.runs : null;
   let off = 0;
   const paras = ps.map((p, i) => {
     const start = off + p.level; off += p.level + p.text.length + 1;
@@ -171,7 +171,7 @@ function slidePart(f: El, els: Record<string, El>, get: Lookup, th: DeckTheme, o
       const trs = Array.from({ length: rows }, (_, r) => x('a:tr', { h: emu(cellBox(e, r, 0).h) }, ...Array.from({ length: cols }, (_, c) => {
         const look = e.tstyle ? cellLook(e, r, c) : { fill: r === 0 && e.header ? '#f3f5f8' : '#ffffff', bold: r === 0 && !!e.header, border: ['#dde2ea', 1] as [string, number] };
         const ln = (t: string) => look.border ? x(t, { w: emu(look.border[1]) }, solid(look.border[0])) : x(t, {}, x('a:noFill'));
-        return x('a:tc', {}, txBody(e, (e.cells?.[r]?.[c]) || '', { inset: [8, 4], anchor: 'ctr', color: look.text || e.color, bold: look.bold, tag: 'a:txBody' }),
+        return x('a:tc', {}, txBody(e, (e.cells?.[r]?.[c]) || '', { inset: [8, 4], anchor: 'ctr', color: look.text || e.color, bold: look.bold, tag: 'a:txBody', runs: e.cruns?.[r]?.[c] || null }),
           x('a:tcPr', { anchor: 'ctr' }, ln('a:lnL'), ln('a:lnR'), ln('a:lnT'), ln('a:lnB'), solid(look.fill)));
       })));
       shapes.push(x('p:graphicFrame', {}, nv('GraphicFrame', e, x('p:cNvGraphicFramePr', {}, x('a:graphicFrameLocks', { noGrp: 1 }))),

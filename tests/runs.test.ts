@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { allHave, applyStyle, dropKeys, editRuns, normRuns, reindentRuns, spansOf, styleAt, type Run } from '../src/runs';
-import { layoutText, setMeasurer, textHeight } from '../src/geometry';
+import { boxTextHeight, fitText, layoutText, setMeasurer, textHeight } from '../src/geometry';
 import { isRich, indentParas } from '../src/richtext';
 import type { El } from '../src/types';
 
@@ -117,3 +117,23 @@ describe('layoutText with runs', () => {
     expect(lines[0].segs![1].size).toBe(20);
   });
 });
+
+describe('notes, shapes, and tables with runs', () => {
+  it('measure styled text in notes and shapes', () => {
+    const e: El = { id: 's', type: 'rect', z: 1, x: 0, y: 0, w: 200, h: 40, text: 'Go BIG', size: 15, runs: [{ s: 3, e: 6, z: 30 }] };
+    expect(boxTextHeight(e, 1000)).toBeCloseTo(39);
+    fitText(e); expect(e.h).toBeGreaterThanOrEqual(59);
+  });
+  it('shrink a sticky note with its styled words', () => {
+    const e: El = { id: 'n', type: 'sticky', z: 1, x: 0, y: 0, w: 180, h: 180, text: 'one two three four five six seven eight nine ten', runs: [{ s: 0, e: 3, z: 40 }] };
+    fitText(e);
+    expect(e.fit).toBeLessThan(24);
+    expect(e.h).toBe(180);
+  });
+  it('size table rows for styled cells', () => {
+    const e: El = { id: 't', type: 'table', z: 1, x: 0, y: 0, w: 400, h: 60, size: 13, cells: [['a', 'b'], ['c', 'd']], cruns: [[[{ s: 0, e: 1, z: 40 }], null], [null, null]] };
+    fitText(e);
+    expect(e.h).toBeGreaterThanOrEqual(2 * (40 * 1.3 + 16) - 1);
+  });
+});
+

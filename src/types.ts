@@ -41,6 +41,8 @@ export interface El {
   psp?: number;
   /** Formatting on part of the text: character ranges with style overrides (see `runs.ts`). */
   runs?: import('./runs').Run[];
+  /** Table cells' runs, by row and column like `cells`. */
+  cruns?: (import('./runs').Run[] | null)[][];
   /** Theme links: which theme color slot (or 'major'/'minor' font) a field came from, so changing the
    *  theme repaints it. A link is dropped once the field no longer holds the theme's value. */
   tc?: Record<string, string>;

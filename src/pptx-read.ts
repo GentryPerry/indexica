@@ -379,7 +379,7 @@ export async function readPptx(buf: ArrayBuffer | Uint8Array): Promise<ImportedD
           if (line === 'none' || !line) e.stroke = line === 'none' ? 'none' : e.type === 'path' ? undefined : 'none'; else e.stroke = line;
           if (lineW && line && line !== 'none') e.sw = lineW;
           if (e.type === 'path' && e.fill === 'none') delete e.fill;
-          if (t && t.text.trim()) { e.text = t.text; applyText(e, t, fonts); if (!e.color && styleFont) e.color = styleFont; }
+          if (t && t.text.trim()) { e.text = t.text; applyText(e, t, fonts); if (t.runs.length) e.runs = t.runs; if (!e.color && styleFont) e.color = styleFont; }
           els.push(e);
         } else if (tag === 'p:pic') {
           const blip = find(node, 'a:blip')[0], rid = blip?.at['r:embed'], media = rid ? rels.get(rid)?.path : undefined;
