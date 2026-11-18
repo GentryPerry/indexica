@@ -1,6 +1,7 @@
 import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
-import { measure, textStyle, wrapEl, type TextStyle } from './geometry';
+import { measure, textStyle, wrap, wrapEl, type TextStyle } from './geometry';
+import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
 import { cellBox, colFractions, rowsOf } from './table';
@@ -41,6 +42,8 @@ export interface RenderCtx {
   accent?: string;
   /** Screen zoom. Frame names keep a steady size on screen when zoomed out. */
   zoom?: number;
+  /** A slide's footer pieces (date, text, number), drawn with the slide like a master. */
+  foot?: (f: El) => El[];
 }
 
 /** Stored colors that mean "the ink color": they follow the theme instead of vanishing on a dark canvas. */
@@ -52,6 +55,13 @@ const outline = (e: El, c: RenderCtx) => e.stroke && !INKISH.has(e.stroke.toLowe
 function lineStart(e: El, x: number, w: number, pad: number, fallback: 'left' | 'center' | 'right'): [number, string] {
   const a = e.align || fallback;
   return a === 'center' ? [x + w / 2, 'middle'] : a === 'right' ? [x + w - pad, 'end'] : [x + pad, 'start'];
+}
+
+/** Baseline of a placeholder's first line, anchored top, middle, or bottom in its box. */
+function phTop(e: El, lines: number, size: number): number {
+  const lh = size * 1.3, block = lines * lh;
+  const top = e.va === 'bottom' ? e.y + e.h - block - 4 : e.va === 'middle' ? e.y + (e.h - block) / 2 : e.y + 4;
+  return top + size * 0.95;
 }
 
 function textBlock(lines: string[], x: number, y: number, st: TextStyle, fill: string, anchor = 'start'): SVGElement {
@@ -159,7 +169,18 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (!hide) { const ls = wrapEl(e, w - 24); const [tx, anchor] = lineStart(e, x, w, 12, 'center'); g.append(textBlock(ls, tx, y + h / 2 - ls.length * lh / 2 + st.size * 0.97, st, inkOn(fill, e.color, c.theme), anchor)); }
   } else if (e.type === 'text') {
     g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
-    if (!hide) { const [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(wrapEl(e, w - 4), tx, y + 4 + st.size * 0.95, st, inkOn(c.under?.(e), e.color, c.theme), anchor)); }
+    const ink = inkOn(c.under?.(e), e.color, c.theme), empty = !e.text || !e.text.trim() || e.ph === 'picture';
+    if (e.ph && empty) {
+      // An empty placeholder shows a dashed box and its prompt on the board, and nothing in exports.
+      if (!c.exp) {
+        g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: 'none', stroke: c.muted, 'stroke-width': 1, 'stroke-dasharray': '5 4', 'vector-effect': 'non-scaling-stroke', 'stroke-opacity': 0.55, 'pointer-events': 'none' }));
+        if (!hide) {
+          const pst = { ...st, weight: Math.min(st.weight, 500) }, ls = wrap(phPrompt(e.ph), w - 4, pst.size, pst.weight, pst.family, pst.italic);
+          const [tx, anchor] = e.ph === 'picture' ? [x + w / 2, 'middle'] : lineStart(e, x, w, 2, 'left');
+          const t = textBlock(ls, tx, phTop(e, ls.length, pst.size), pst, ink, anchor); t.setAttribute('fill-opacity', '0.45'); g.append(t);
+        }
+      }
+    } else if (!hide) { const ls = wrapEl(e, w - 4), [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(ls, tx, e.ph ? phTop(e, ls.length, st.size) : y + 4 + st.size * 0.95, st, ink, anchor)); }
   } else if (e.type === 'card') {
     const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';
     const sf = SURFACE[c.theme], ch = chip(col, c.theme), done = status === 'done';
@@ -173,7 +194,9 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const extra = [e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
     if (extra) g.append(textBlock([extra], x + 20 + pw, py + 14, { ...pill, weight: late ? 600 : 500 }, late ? (c.theme === 'dark' ? '#ff9a9a' : '#c23434') : c.muted));
   } else if (e.type === 'frame') {
-    g.append(s('rect', { x, y, width: w, height: h, rx: 12, fill: paintFill(e.fill, c.theme) || c.frame, stroke: c.frameLine, 'stroke-width': 1, 'pointer-events': 'none' }));
+    // A slide shows its real background in either theme; other frames follow the theme.
+    g.append(s('rect', { x, y, width: w, height: h, rx: 12, fill: (e.slide ? e.fill : paintFill(e.fill, c.theme)) || c.frame, stroke: c.frameLine, 'stroke-width': 1, 'pointer-events': 'none' }));
+    if (e.slide && c.foot) for (const p of c.foot(e)) { const n = renderEl(p, c); n.setAttribute('pointer-events', 'none'); g.append(n); }
     if (!c.exp) g.append(s('rect', { x, y, width: w, height: h, fill: 'none', stroke: 'transparent', 'stroke-width': 12, 'pointer-events': 'stroke' }));
     // A slide shows its number in a small accent chip before its name.
     const k = c.exp ? 1 : 1 / Math.min(1, Math.max(0.2, c.zoom || 1)), ls: TextStyle = { ...st, size: st.size * k };

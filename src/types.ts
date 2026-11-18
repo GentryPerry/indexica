@@ -26,6 +26,17 @@ export interface El {
   notes?: string;
   /** On a frame: its position in the page's slide deck, starting at 1. Unset means not a slide. */
   slide?: number;
+  /** On a slide: the deck theme id (see `deck.ts`), the layout it was built from, and its footer. */
+  theme?: string;
+  layout?: string;
+  foot?: { num?: boolean; date?: boolean; text?: string };
+  /** A slide placeholder ('title', 'subtitle', 'body', 'body2', 'head', 'head2', 'caption', 'picture'):
+   *  keeps its box, shows a prompt while empty, and anchors its text vertically (`va`). */
+  ph?: string;
+  va?: 'top' | 'middle' | 'bottom';
+  /** Theme links: which theme color slot (or 'major'/'minor' font) a field came from, so changing the
+   *  theme repaints it. A link is dropped once the field no longer holds the theme's value. */
+  tc?: Record<string, string>;
   /** On a vector path: its subpaths, in its own box of vw by vh, drawn stretched to w by h. */
   paths?: import('./vector').SubPath[];
   vw?: number;

@@ -26,7 +26,7 @@ const DEFAULTS: Partial<Record<El['type'], [size: number, weight: number]>> = {
 /** The text style an element is drawn with: its own font choices on top of its type's defaults. */
 export function textStyle(e: El): TextStyle {
   const [size, weight] = DEFAULTS[e.type] || [15, 400];
-  return { size: e.size || (e.type === 'sticky' && e.fit) || size, weight: e.weight || weight, family: (FONTS[e.font || ''] || FONTS.sans).stack, italic: !!e.italic };
+  return { size: (e.ph && e.fit) || e.size || (e.type === 'sticky' && e.fit) || size, weight: e.weight || weight, family: (FONTS[e.font || ''] || FONTS.sans).stack, italic: !!e.italic };
 }
 
 /** Word-wrap text to a pixel width. Long words are split; blank lines are kept. */
@@ -176,9 +176,24 @@ export function fitSticky(e: El) {
   e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 28).length * lh + 28 + stickyFoot(e)));
 }
 
+/**
+ * Text that overflows a slide placeholder shrinks to fit, the way PowerPoint's shrink-on-overflow
+ * works. The chosen size is kept as `fit`; the placeholder's box never changes.
+ */
+export function fitPlaceholder(e: El) {
+  delete e.fit;
+  if (!e.text || e.ph === 'picture') return;
+  const full = textStyle(e).size;
+  for (let size = full; size > 8; size = Math.max(8, Math.floor(size * 0.92))) {
+    if (wrapEl({ ...e, size }, e.w - 4).length * size * 1.3 + 8 <= e.h) { if (size < full) e.fit = size; return; }
+  }
+  e.fit = 8;
+}
+
 export function fitText(e: El) {
   const lh = textStyle(e).size * 1.3;
   if (e.type === 'sticky') fitSticky(e);
+  else if (e.type === 'text' && e.ph) fitPlaceholder(e);
   else if (e.type === 'text') e.h = Math.ceil(wrapEl(e, e.w - 4).length * lh + 8);
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(wrapEl(e, e.w - 24).length * lh + 20));
   else if (e.type === 'table' && e.cells) {

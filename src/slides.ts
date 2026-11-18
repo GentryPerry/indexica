@@ -3,7 +3,8 @@
  * inside it, so a brainstorm becomes a deck without rebuilding anything. Pure functions over a page's
  * elements; the caller commits the changes so they are undoable.
  */
-import { bbox, fitText } from './geometry';
+import { applyLayout, LAYOUTS, linkTheme, pageTheme } from './deck';
+import { bbox } from './geometry';
 import { lightness } from './palette';
 import type { El, Lookup } from './types';
 
@@ -72,43 +73,18 @@ export function nextSlideSpot(els: Record<string, El>, get: Lookup, gap = 160): 
 /** True when a background is dark enough that default text on it should be light. */
 export const darkBg = (hex?: string) => !!hex && lightness(hex) < 0.6;
 
-type Piece = Omit<El, 'id' | 'z'>;
-const text = (x: number, y: number, w: number, value: string, size: number, weight: number, extra: Partial<El> = {}): Piece =>
-  ({ type: 'text', x, y, w, h: size * 1.3 + 8, text: value, size, weight, ...extra });
-
-/** Slide layouts. Each returns the text pieces placed inside a frame of the given box. */
-export const LAYOUTS: Record<string, { label: string; build: (b: { x: number; y: number; w: number; h: number }) => Piece[] }> = {
-  title: { label: 'Title', build: b => [
-    text(b.x + b.w * 0.1, b.y + b.h * 0.36, b.w * 0.8, 'Presentation title', Math.round(b.h * 0.09), 700, { align: 'center' }),
-    text(b.x + b.w * 0.15, b.y + b.h * 0.36 + b.h * 0.15, b.w * 0.7, 'Subtitle or presenter name', Math.round(b.h * 0.038), 400, { align: 'center', color: '#5d697c' })] },
-  titleBody: { label: 'Title and body', build: b => [
-    text(b.x + b.w * 0.07, b.y + b.h * 0.1, b.w * 0.86, 'Slide title', Math.round(b.h * 0.066), 700),
-    text(b.x + b.w * 0.07, b.y + b.h * 0.28, b.w * 0.8, 'First point\nSecond point\nThird point', Math.round(b.h * 0.036), 400)] },
-  twoCol: { label: 'Two columns', build: b => [
-    text(b.x + b.w * 0.07, b.y + b.h * 0.1, b.w * 0.86, 'Slide title', Math.round(b.h * 0.066), 700),
-    text(b.x + b.w * 0.07, b.y + b.h * 0.28, b.w * 0.4, 'Left column', Math.round(b.h * 0.036), 400),
-    text(b.x + b.w * 0.53, b.y + b.h * 0.28, b.w * 0.4, 'Right column', Math.round(b.h * 0.036), 400)] },
-  section: { label: 'Section header', build: b => [
-    text(b.x + b.w * 0.08, b.y + b.h * 0.4, b.w * 0.84, 'Section title', Math.round(b.h * 0.085), 700),
-    text(b.x + b.w * 0.08, b.y + b.h * 0.4 + b.h * 0.14, b.w * 0.7, 'What this part covers', Math.round(b.h * 0.036), 400)] },
-  blank: { label: 'Blank', build: () => [] },
-};
-/** Layouts that look best on a dark background. */
-export const DARK_LAYOUTS = new Set(['section']);
-
 /**
- * A new slide: the frame plus its layout's text, ready to add to the page. `uid` makes ids and `z` is
- * the next free layer. The frame is numbered after the page's last slide.
+ * A new slide: the frame plus its layout's placeholders, ready to add to the page. `uid` makes ids and
+ * `z` is the next free layer. The frame is numbered after the page's last slide and takes the page's
+ * theme and the last slide's footer.
  */
 export function newSlide(els: Record<string, El>, get: Lookup, layout: string, size: SlideSize, uid: (p: string) => string, z: number): El[] {
-  const at = nextSlideSpot(els, get), { w, h } = SLIDE_SIZES[size], n = slidesOf(els).length + 1;
-  const dark = DARK_LAYOUTS.has(layout);
-  const frame: El = { id: uid('e'), type: 'frame', z, x: at.x, y: at.y, w, h, text: (LAYOUTS[layout] || LAYOUTS.blank).label, slide: n, fill: dark ? '#17202d' : '#ffffff' };
-  const pieces = (LAYOUTS[layout] || LAYOUTS.blank).build(frame).map((p, i) => {
-    const e = { ...p, id: uid('e'), z: z + 1 + i, x: Math.round(p.x), y: Math.round(p.y), w: Math.round(p.w) } as El;
-    if (dark && e.color) e.color = '#aab3c2';
-    fitText(e);
-    return e;
-  });
-  return [frame, ...pieces];
+  const at = nextSlideSpot(els, get), { w, h } = SLIDE_SIZES[size], list = slidesOf(els), th = pageTheme(els), prev = list[list.length - 1];
+  const key = LAYOUTS[layout] ? layout : 'blank';
+  const frame: El = { id: uid('e'), type: 'frame', z, x: at.x, y: at.y, w, h, text: LAYOUTS[key].label, slide: list.length + 1, theme: th.id, layout: key };
+  if (prev && prev.foot) frame.foot = { ...prev.foot };
+  linkTheme(frame, 'fill', 'lt1', th);
+  const tmp: Record<string, El> = { [frame.id]: frame };
+  const { added } = applyLayout(tmp, frame, key, id => tmp[id] || get(id), uid, z + 1);
+  return [frame, ...added.map(id => tmp[id])];
 }

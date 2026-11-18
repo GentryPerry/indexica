@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { setMeasurer } from '../src/geometry';
-import { slidesOf, renumber, moveSlide, setSlide, slideMembers, nextSlideSpot, newSlide, sizeOf, darkBg, LAYOUTS } from '../src/slides';
+import { slidesOf, renumber, moveSlide, setSlide, slideMembers, nextSlideSpot, newSlide, sizeOf, darkBg } from '../src/slides';
+import { LAYOUTS } from '../src/deck';
 import type { El } from '../src/types';
 
 const frame = (id: string, x: number, slide?: number, z = 1): El => ({ id, type: 'frame', z, x, y: 0, w: 1280, h: 720, slide });
@@ -45,8 +46,9 @@ describe('slides', () => {
     const made = newSlide(els, get(els), 'titleBody', 'standard', p => p + ++n, 10);
     expect(made[0]).toMatchObject({ type: 'frame', slide: 3, w: 1024, h: 768, fill: '#ffffff', z: 10 });
     expect(made.slice(1).every(e => e.type === 'text' && e.x >= made[0].x && e.y >= made[0].y && e.x + e.w <= made[0].x + made[0].w)).toBe(true);
-    expect(made.length).toBe(1 + LAYOUTS.titleBody.build(made[0]).length);
-    expect(newSlide(els, get(els), 'section', 'wide', p => p + ++n, 20)[0].fill).toBe('#17202d');
+    expect(made.length).toBe(1 + LAYOUTS.titleBody.phs.length);
+    expect(made.slice(1).map(e => e.ph)).toEqual(['title', 'body']);
+    expect(made[0]).toMatchObject({ theme: 'standard', layout: 'titleBody', tc: { fill: 'lt1' } });
   });
   it('knows sizes and dark backgrounds', () => {
     expect(sizeOf(frame('x', 0))).toBe('wide');

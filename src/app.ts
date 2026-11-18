@@ -23,6 +23,7 @@ import * as L from './library';
 import { paintFill, outlineFor, inkOn, SURFACE, adjust } from './palette';
 import { trayIcon } from './tray';
 import * as SL from './slides';
+import * as DK from './deck';
 import * as V from './vector';
 import * as B from './boolean';
 import { BRUSHES, PROFILES, brushOutline, outlineD, profileOutline, shaped, eraseStroke, touches } from './brush';
@@ -334,6 +335,11 @@ const sways = new Map(), mids = new Map(); let swayRaf = 0, swayT = 0;
 const calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 // Exports always use the light look, whatever the theme on screen.
 const LIGHT = { theme: 'light', ink: '#17202d', muted: '#5d697c', line: '#5b6679', canvas: '#eef0f3', frame: '#ffffff', frameLine: '#dce1e8' };
+/** The slide a piece sits on (its center inside the frame), if any. */
+function slideAt(e, slides = all().filter(f => f.type === 'frame' && f.slide)) {
+  const b = G.bbox(e, E), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  return slides.find(f => f.id !== e.id && cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h);
+}
 /** For text sitting on a frame with a background: that background as painted, so default text reads on it. */
 function underFn(els, theme) {
   const frames = Object.values(els || {}).filter(f => f.type === 'frame' && f.fill).sort((a, b) => a.w * a.h - b.w * b.h);
@@ -348,7 +354,8 @@ function nameOf(id) {
   Store.names([id]).then(r => { if (r[id]) { names.set(id, r[id]); if (board) draw(); } });
   return '';
 }
-const rctx = (exp, els = board ? board.els : {}) => ({ exp, nameOf, zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
+const footFn = f => DK.footerPieces(f, DK.themeById(f.theme), DK.footDate());
+const rctx = (exp, els = board ? board.els : {}) => ({ exp, nameOf, foot: footFn, zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
 async function loadImages(els = all()) {
@@ -362,7 +369,16 @@ function encodeImage(bmp, scale, alpha) {
   if (alpha) { x.drawImage(bmp, 0, 0, c.width, c.height); const u = c.toDataURL('image/webp', 0.85); if (u.startsWith('data:image/webp')) return u; }
   x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(bmp, 0, 0, c.width, c.height); return c.toDataURL('image/jpeg', 0.84);
 }
-async function addImage(file, at) {
+/** True for a slide placeholder still showing its prompt. */
+const emptyPh = e => !!e && e.type === 'text' && !!e.ph && !e.locked && (e.ph === 'picture' || !(e.text || '').trim());
+/** A click on an empty placeholder starts typing in it, or picks a picture for a picture placeholder. */
+let imgSlot = null;
+function phClick(e) {
+  if (e.ph !== 'picture') { startEdit(e.id); return; }
+  imgSlot = e.id; const inp = $('#img-file'); if (!inp) return;
+  inp.multiple = false; inp.addEventListener('cancel', () => { imgSlot = null; inp.multiple = true; }, { once: true }); inp.click();
+}
+async function addImage(file, at, slotId) {
   if (!board || !file || !file.type.startsWith('image/')) return;
   let bmp; try { bmp = await createImageBitmap(file); } catch (e) { return toast('That picture could not be read.'); }
   // Shrink until the picture fits in one storage document.
@@ -374,6 +390,14 @@ async function addImage(file, at) {
   const w = Math.min(bmp.width, 420), ht = Math.round(w * bmp.height / bmp.width), r = cvBox();
   const c = at || { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
   const e = { id: uid('e'), type: 'image', z: topZ() + 1, x: Math.round(c.x - w / 2), y: Math.round(c.y - ht / 2), w, h: ht, src: id };
+  const slot = slotId && E(slotId);
+  if (slot) {
+    // A picture placeholder takes the picture, fitted inside its box and centered, on the same layer.
+    const k = Math.min(slot.w / bmp.width, slot.h / bmp.height);
+    Object.assign(e, { z: slot.z, w: Math.round(bmp.width * k), h: Math.round(bmp.height * k) });
+    e.x = Math.round(slot.x + (slot.w - e.w) / 2); e.y = Math.round(slot.y + (slot.h - e.h) / 2);
+    delete board.els[slot.id];
+  }
   board.els[e.id] = e; sel = new Set([e.id]); tool = 'select'; commit();
 }
 function onPaste(ev) {
@@ -447,6 +471,11 @@ function drawEls(rc) {
   const r = cvBox(), pad = 120 / cam.z;
   const view = { x: -cam.x / cam.z - pad, y: -cam.y / cam.z - pad, w: r.width / cam.z + 2 * pad, h: r.height / cam.z + 2 * pad };
   const nodes = [], ids = [];
+  // In the dark theme, pieces on a slide still draw in the light look, so the slide shows its real
+  // colors (slides always render light); frames keep their dark labels.
+  const slides = C.theme === 'dark' ? all().filter(f => f.type === 'frame' && f.slide) : [];
+  const rcL = slides.length ? { ...rc, ...LIGHT, under: underFn(board.els, 'light') } : rc;
+  const onSlide = e => slides.length && e.type !== 'frame' && !!slideAt(e, slides);
   let changed = false;
   for (const e of sorted()) {
     if (e.id !== editing) {
@@ -456,17 +485,17 @@ function drawEls(rc) {
     }
     let dep = '';
     if (e.type === 'conn') dep = rc.sway && rc.sway(e.id) ? null : JSON.stringify([geo(E(e.a)), geo(E(e.b))]);
-    else if (e.type === 'frame') dep = String(cam.z);
+    else if (e.type === 'frame') dep = String(cam.z) + (e.foot && e.foot.date ? DK.footDate() : '');
     else if (e.type === 'text' && rc.under) dep = rc.under(e) || '';
     if (dep !== null) {
       if (e.mask) dep += JSON.stringify(geo(E(e.mask)));
       if (e.src) dep += images.has(e.src) ? '+' : '-';
       if (e.author) dep += names.get(e.author) || '';
     }
-    const sig = dep === null ? null : JSON.stringify(e) + '#' + dep, hit = drawn.get(e.id);
+    const light = onSlide(e), sig = dep === null ? null : JSON.stringify(e) + '#' + dep + (light ? 'L' : ''), hit = drawn.get(e.id);
     let node;
     if (sig && hit && hit.sig === sig) node = hit.node;
-    else { node = renderEl(e, rc); changed = true; if (sig) drawn.set(e.id, { sig, node }); else drawn.delete(e.id); }
+    else { node = renderEl(e, light ? rcL : rc); changed = true; if (sig) drawn.set(e.id, { sig, node }); else drawn.delete(e.id); }
     nodes.push(node); ids.push(e.id);
   }
   // Put the nodes in order, moving only the ones out of place.
@@ -859,15 +888,23 @@ function placeEditor() {
     : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z * fk + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
-    padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px',
+    padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px', paddingTop: phPad(e, st) * z + 'px',
     textAlign: e.align || (centered ? 'center' : 'left'), ...editorPaint(e, onCanvas),
     transform: e.rot && !lab ? `rotate(${e.rot}deg)` : '', transformOrigin: lab ? '' : `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
 }
+/** Top padding that keeps a placeholder's text where it is drawn (anchored middle or bottom) while editing. */
+function phPad(e, st) {
+  if (e.type === 'sticky') return 10;
+  if (!e.ph || e.type !== 'text' || !e.va || e.va === 'top') return ['frame', 'text', 'conn'].includes(e.type) ? 2 : 8;
+  const block = Math.max(1, G.wrapEl(e, e.w - 4).length) * st.size * 1.3;
+  return Math.max(2, e.va === 'bottom' ? e.h - block - 2 : (e.h - block) / 2 + 2);
+}
 /** Background and text color for the text editor, matching the piece as it is painted on screen. */
 function editorPaint(e, onCanvas) {
-  const under = e.type === 'text' ? (underFn(board.els, C.theme) || (() => undefined))(e) : undefined;
-  const bg = under || (onCanvas ? C.frame : ['card', 'table'].includes(e.type) ? SURFACE[C.theme].card : paintFill(e.fill, C.theme) || C.frame);
-  return { background: bg, color: inkOn(bg, e.color, C.theme) };
+  const th = C.theme === 'dark' && e.type !== 'frame' && slideAt(e) ? 'light' : C.theme;
+  const under = e.type === 'text' ? (underFn(board.els, th) || (() => undefined))(e) : undefined;
+  const bg = under || (onCanvas ? (th === 'light' ? LIGHT.frame : C.frame) : ['card', 'table'].includes(e.type) ? SURFACE[th].card : paintFill(e.fill, th) || C.frame);
+  return { background: bg, color: inkOn(bg, e.color, th) };
 }
 function startEdit(id, cell) {
   const e = E(id); if (!e || e.locked || !TEXTY.includes(e.type)) return;
@@ -877,7 +914,7 @@ function startEdit(id, cell) {
 function endEdit() {
   if (!editing) return; const e = E(editing), ed = $('#ed'); editing = null; ed.style.display = 'none';
   if (e && e.type === 'table') { const [r, c] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[r][c] = ed.value.replace(/\s+$/, ''); fitText(e); editCell = null; }
-  else if (e) { e.text = ed.value.replace(/\s+$/, ''); if (e.type === 'text' && !e.text) delete board.els[e.id]; else { if (e.type === 'frame' && !e.text) e.text = 'Frame'; if (e.type === 'card' && !e.text) e.text = 'Untitled task'; fitText(e); } }
+  else if (e) { e.text = ed.value.replace(/\s+$/, ''); if (e.type === 'text' && !e.text && !e.ph) delete board.els[e.id]; else { if (e.type === 'frame' && !e.text) e.text = 'Frame'; if (e.type === 'card' && !e.text) e.text = 'Untitled task'; fitText(e); } }
   edFor = null; commit();
 }
 
@@ -1075,7 +1112,7 @@ function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
   if (m.k === 'vhandle') { drawDraft(); return; }
   if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
-  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else drawOverlay(); }
+  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else if (sel.size === 1 && emptyPh(E(m.id))) phClick(E(m.id)); else drawOverlay(); }
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
@@ -1191,9 +1228,9 @@ async function openBoard(id) {
       h('div', { class: 'fly', id: 'fly', hidden: true }),
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
-      h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { for (const f of [...e.target.files]) await addImage(f); e.target.value = ''; } }),
+      h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { const slot = imgSlot; imgSlot = null; e.target.multiple = true; for (const f of [...e.target.files]) await addImage(f, null, slot); e.target.value = ''; } }),
       h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit,
-        oninput: ev => { const e = editing && E(editing); if (e && e.type === 'sticky') { e.text = ev.target.value; const h0 = e.h; fitText(e); placeEditor(); if (e.h !== h0) draw(); } },
+        oninput: ev => { const e = editing && E(editing); if (e && (e.type === 'sticky' || e.ph)) { e.text = ev.target.value; const h0 = e.h; fitText(e); placeEditor(); if (e.h !== h0) draw(); } },
         onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
           if (e.key === 'Enter' && !e.shiftKey && editing && E(editing).type === 'table') { e.preventDefault(); e.target.blur(); return; }
           if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
@@ -1370,6 +1407,12 @@ function renderProps() {
   const sec = (title, ...kids) => h('section', { class: 'psec' }, title ? h('h3', null, title) : null, ...kids);
   const setAll = (els, key, val, field) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; fitText(e); }); field ? holdCommit() : commit(); };
   const swatch = (c, on, fn, name, small) => h('button', { class: 'sw' + (small ? ' sm' : ''), style: 'background:' + (paintFill(c, C.theme) || c), title: name || c, 'aria-label': name || 'Color ' + c, 'aria-pressed': String(!!on), onclick: fn });
+  // With slides on the page, color sections lead with the deck theme's colors; picking one links it to the theme.
+  const deckTh = SL.slidesOf(board.els).length ? DK.pageTheme(board.els) : null;
+  const themeSw = (els, key, before) => deckTh ? [h('div', { class: 'f-label' }, 'Theme colors'), h('div', { class: 'swatches tsw', role: 'group', 'aria-label': 'Theme colors, ' + deckTh.name },
+    DK.SWATCH_SLOTS.map(slot => swatch(deckTh.colors[slot], els.every(e => e.tc && e.tc[key] === slot && DK.linked(e, key, deckTh)),
+      () => { if (before) before(); els.forEach(e => { DK.linkTheme(e, key, slot, deckTh); fitText(e); }); commit(); }, DK.SLOT_NAMES[slot], true))),
+    h('div', { class: 'f-label' }, 'Standard colors')] : null;
   const num = (id, short, label, get, put, disabled) => {
     const inp = h('input', { type: 'text', inputmode: 'decimal', id, value: get(), 'aria-label': label, disabled,
       onkeydown: e => { if (e.key === 'Enter') e.target.blur(); else if (e.key === 'Escape') { e.target.value = get(); e.target.blur(); } },
@@ -1397,7 +1440,7 @@ function renderProps() {
         num('prop-rot', 'Turn', 'Rotation in degrees', () => Math.round(e.rot || 0) + '°', v => { if (e.live) return liveEdit(e, 'turn', G.normAngle(Math.round(v))); const a = G.normAngle(Math.round(v)); if (a) e.rot = a; else delete e.rot; }, lock))));
     }
     const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']);
-    if (fillable.length) out.push(sec('Fill', h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => { if (fillable.every(e => e.type === 'sticky')) lastSticky = c; setAll(fillable, 'fill', c); }, FILL_NAMES[i])))));
+    if (fillable.length) out.push(sec('Fill', themeSw(fillable, 'fill'), h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => { if (fillable.every(e => e.type === 'sticky')) lastSticky = c; setAll(fillable, 'fill', c); }, FILL_NAMES[i])))));
     const notes = of(['sticky']);
     if (notes.length && notes.length === free.length) {
       const wide = notes.every(e => e.w > e.h * 1.5), square = notes.every(e => e.w <= e.h * 1.5), auto = notes.every(e => !e.size), authored = notes.some(e => e.author);
@@ -1411,7 +1454,7 @@ function renderProps() {
         h('p', { class: 'hint' }, 'Tab adds the next note beside this one.')));
     }
     const bordered = of(['rect', 'ellipse', 'diamond']);
-    if (bordered.length) out.push(sec('Border', h('div', { class: 'swatches' }, swatch('#2b3545', bordered.every(e => !e.stroke), () => setAll(bordered, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(bordered, 'stroke') === c, () => setAll(bordered, 'stroke', c)))),
+    if (bordered.length) out.push(sec('Border', themeSw(bordered, 'stroke'), h('div', { class: 'swatches' }, swatch('#2b3545', bordered.every(e => !e.stroke), () => setAll(bordered, 'stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(bordered, 'stroke') === c, () => setAll(bordered, 'stroke', c)))),
       h('div', { class: 'grid2' },
         pick('border-dash', 'Border pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(bordered, 'dash') || 'solid', v => setAll(bordered, 'dash', v === 'solid' ? '' : v, true)),
         h('button', { class: 'fbtn', 'aria-pressed': String(bordered.every(e => e.sketch)), title: 'Rough, hand-drawn outline', onclick: () => setAll(bordered, 'sketch', !bordered.every(e => e.sketch)) }, 'Hand-drawn'))));
@@ -1432,10 +1475,10 @@ function renderProps() {
       // Picking a swatch sets one plain color and drops any stacked layers.
       const plain = (key, val, field) => { vecs.forEach(e => { delete e[key === 'sw' ? 'strokes' : key + 's']; }); setAll(vecs, key, val, field); };
       const solo = one && one.type === 'path' ? one : null;
-      out.push(sec('Fill', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No fill', 'aria-label': 'No fill', 'aria-pressed': String(noFill && vecs.every(e => !e.fills)), onclick: () => plain('fill', '') }),
+      out.push(sec('Fill', themeSw(vecs, 'fill', () => vecs.forEach(e => { delete e.fills; })), h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No fill', 'aria-label': 'No fill', 'aria-pressed': String(noFill && vecs.every(e => !e.fills)), onclick: () => plain('fill', '') }),
           FILLS.map((c, i) => swatch(c, same(vecs, 'fill') === c && vecs.every(e => !e.fills), () => plain('fill', c), FILL_NAMES[i])), VIVID.map(c => swatch(c, same(vecs, 'fill') === c && vecs.every(e => !e.fills), () => plain('fill', c), null, true))),
         solo ? layerEditor(solo, 'fill', num) : null));
-      out.push(sec('Stroke', h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No stroke', 'aria-label': 'No stroke', 'aria-pressed': String(noStroke && vecs.every(e => !e.strokes)), onclick: () => plain('stroke', 'none') }),
+      out.push(sec('Stroke', themeSw(vecs, 'stroke', () => vecs.forEach(e => { delete e.strokes; })), h('div', { class: 'swatches' }, h('button', { class: 'sw none', title: 'No stroke', 'aria-label': 'No stroke', 'aria-pressed': String(noStroke && vecs.every(e => !e.strokes)), onclick: () => plain('stroke', 'none') }),
           swatch(C.ink, vecs.every(e => !e.stroke && !e.strokes), () => plain('stroke', ''), 'Default'), VIVID.map(c => swatch(c, same(vecs, 'stroke') === c && vecs.every(e => !e.strokes), () => plain('stroke', c)))),
         h('div', { class: 'grid2' },
           pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => plain('sw', Number(v), true)),
@@ -1480,7 +1523,7 @@ function renderProps() {
         h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.flow)), title: 'Show dots moving from start to end', onclick: () => setAll(conns, 'flow', !conns.every(e => e.flow)) }, 'Animate flow'),
         conns.some(e => e.style !== 'cable') ? h('button', { class: 'fbtn', 'aria-pressed': String(conns.every(e => e.sketch)), title: 'Rough, hand-drawn line', onclick: () => setAll(conns, 'sketch', !conns.every(e => e.sketch)) }, 'Hand-drawn') : null,
         conns.some(e => e.as || e.bs) ? h('button', { class: 'fbtn', title: 'Let both ends pick the best side again', onclick: () => { conns.forEach(e => { delete e.as; delete e.bs; }); commit(); } }, 'Unpin ends') : null)));
-    if (one && one.type === 'frame') out.push(slideSection(one, sec, swatch));
+    if (one && one.type === 'frame') out.push(slideSection(one, sec, swatch, themeSw));
     const texty = free.filter(e => TEXTY.includes(e.type));
     if (texty.length) {
       const st0 = G.textStyle(texty[0]), al = same(texty, 'align'), col = same(texty, 'color'), ital = texty.every(e => e.italic);
@@ -1493,6 +1536,7 @@ function renderProps() {
           h('div', { class: 'seg', role: 'group', 'aria-label': 'Text alignment' }, [['left', 'Align left', 'M3 5h14M3 10h9M3 15h11'], ['center', 'Align center', 'M3 5h14M5.5 10h9M4.5 15h11'], ['right', 'Align right', 'M3 5h14M8 10h9M6 15h11']]
             .map(([k, label, d]) => h('button', { title: label, 'aria-label': label, 'aria-pressed': String(al === k), onclick: () => setAll(texty, 'align', al === k ? '' : k) }, icon(d, 14)))),
           h('button', { class: 'fbtn', style: 'font-style:italic', 'aria-pressed': String(ital), onclick: () => setAll(texty, 'italic', !ital) }, 'Italic')),
+        themeSw(texty, 'color'),
         h('div', { class: 'swatches', role: 'group', 'aria-label': 'Text color' }, TEXT_COLORS.map(([c, name]) => swatch(c, col === c || (c === '#1d2530' && texty.every(e => !e.color)), () => setAll(texty, 'color', c === '#1d2530' ? '' : c), name, true)))));
     }
     if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit)));
@@ -1644,6 +1688,7 @@ function toggleHelp() {
       h('div', { class: 'help-t' }, h('h2', null, 'Keyboard shortcuts'), h('button', { class: 'btn', onclick: toggleHelp }, 'Close')),
       h('div', { class: 'help-g' }, KEYS.map(([title, rows]) => h('section', null, h('h3', null, title), rows.map(([key, what]) => h('div', { class: 'help-r' }, h('kbd', null, key), h('span', null, what)))))),
       h('p', { class: 'note' }, 'On a Mac, use Cmd in place of Ctrl.'),
+      h('p', { class: 'note credit' }, 'Deck themes and slide layouts come from DeckCraft (MIT or Apache-2.0), by the ArtCraft Team and the DeckCraft contributors.'),
       h('p', { class: 'note credit' }, 'Vector booleans, outline stroke, offset, simplify, and smooth use the path engine from VectorCraft (MIT or Apache-2.0), by the ArtCraft Team and the VectorCraft contributors.'))));
 }
 
@@ -2065,7 +2110,8 @@ function toVector(list) {
 }
 
 /* ---------- Slides and presenting ---------- */
-const LAYOUT_ICONS = { title: 'M3 5h14v10H3zM6 9h8M7.5 11.5h5', titleBody: 'M3 5h14v10H3zM5.5 8h7M5.5 10.5h9M5.5 12.5h6', twoCol: 'M3 5h14v10H3zM5.5 8h9M5.5 10.5h3.5M11 10.5h3.5M5.5 12.5h3.5M11 12.5h3.5', section: 'M3 5h14v10H3zM5.5 9.5h8M5.5 12h5', blank: 'M3 5h14v10H3z' };
+/** The page's theme, for new slides and theme swatches. */
+const deckTheme = () => DK.pageTheme(board.els);
 /** The slides to present: this page's, or every page's in page order. */
 function deckOf(scope) {
   if (!board) return [];
@@ -2077,6 +2123,7 @@ function slideSvg(els, f, attrs = {}) {
   const get = id => els[id], rc = { ...rctx(true, els), get };
   return s('svg', { viewBox: `${f.x} ${f.y} ${f.w} ${f.h}`, preserveAspectRatio: 'xMidYMid meet', 'aria-hidden': 'true', ...attrs },
     s('rect', { x: f.x, y: f.y, width: f.w, height: f.h, fill: f.fill || '#ffffff' }),
+    footFn(f).map(p => renderEl(p, rc)),
     SL.slideMembers(els, f, get).sort(byLayer).map(e => renderEl(e, rc)));
 }
 function addSlide(layout) {
@@ -2087,7 +2134,31 @@ function addSlide(layout) {
   sel = new Set([made[0].id]); commit(); fit([made[0]]);
 }
 function layoutMenu(anchor) {
-  popup(anchor, [{ head: 'New slide' }, ...Object.entries(SL.LAYOUTS).map(([k, v]) => [v.label, () => addSlide(k), '', LAYOUT_ICONS[k]])]);
+  popup(anchor, [{ head: 'New slide' }, ...Object.entries(DK.LAYOUTS).map(([k, v]) => [v.label, () => addSlide(k), '', v.icon])]);
+}
+/** Lays a slide out again from a layout: content moves into the new placeholders. */
+function relayout(f, key) {
+  if (editing) endEdit();
+  DK.applyLayout(board.els, f, key, E, uid, topZ() + 1);
+  // A slide still named after its layout takes the new layout's name.
+  if (Object.values(DK.LAYOUTS).some(l => l.label === f.text)) f.text = DK.LAYOUTS[key].label;
+  commit();
+}
+function changeLayoutMenu(anchor, f) {
+  popup(anchor, [{ head: 'Layout' }, ...Object.entries(DK.LAYOUTS).map(([k, v]) => [v.label, () => relayout(f, k), f.layout === k ? 'cur' : '', v.icon])]);
+}
+/** Switches every slide on the page to a theme; theme-linked colors and fonts follow. */
+function setDeckTheme(id) { if (editing) endEdit(); DK.applyTheme(board.els, id); commit(); }
+let themesOpen = false;
+/** The theme picker: a small slide in each theme's background, heading color, font, and accents. */
+function themeGrid() {
+  const cur = deckTheme().id;
+  return h('div', { class: 'dthemes', role: 'group', 'aria-label': 'Deck themes' }, DK.THEMES.map(t => h('button', {
+    class: 'dtheme', 'aria-pressed': String(t.id === cur), title: `${t.name}: ${t.major} and ${t.minor}`, onclick: () => setDeckTheme(t.id) },
+    h('span', { class: 'dt-art', style: `background:${t.colors.lt1};color:${t.colors.dk2};font-family:${(FONTS[t.majorKey] || FONTS.sans).stack}` },
+      h('span', { class: 'dt-aa' }, 'Aa'),
+      h('span', { class: 'dt-acc' }, ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map(k => h('i', { style: 'background:' + t.colors[k] })))),
+    h('span', { class: 'dt-name' }, t.name))));
 }
 function presentMenu(anchor) {
   const here = deckOf('page').length, every = deckOf('all').length;
@@ -2099,9 +2170,14 @@ function renderSlides() {
   const el = $('#pslides'); if (!el || rightTab !== 'slides') return;
   const list = SL.slidesOf(board.els), frames = all().filter(e => e.type === 'frame' && !e.slide);
   const head = h('div', { class: 'shead' },
-    h('div', { class: 'shead-t' }, h('strong', null, list.length === 1 ? '1 slide' : list.length + ' slides')),
+    h('div', { class: 'shead-t' }),
     h('button', { class: 'fbtn', 'aria-haspopup': 'menu', onclick: e => layoutMenu(e.currentTarget) }, icon('M10 4.5v11M4.5 10h11', 14), 'New slide'),
     h('button', { class: 'btn primary sm', disabled: !deckOf('all').length, onclick: e => presentMenu(e.currentTarget) }, icon('M7 4.5l8.5 5.5L7 15.5z', 12, { fill: 'currentColor', stroke: 'none' }), 'Present'));
+  const th = deckTheme(), themeBar = list.length ? h('div', { class: 'stheme' },
+    h('button', { class: 'fbtn stheme-btn', 'aria-expanded': String(themesOpen), onclick: () => { themesOpen = !themesOpen; renderSlides(); } },
+      h('span', { class: 'stheme-dots', 'aria-hidden': 'true' }, ['lt1', 'dk2', 'accent1', 'accent2'].map(k => h('i', { style: 'background:' + th.colors[k] }))),
+      h('span', null, 'Theme'), h('strong', null, th.name), icon(themesOpen ? 'M5 12.5l5-5 5 5' : 'M5 7.5l5 5 5-5', 12)),
+    themesOpen ? themeGrid() : null) : null;
   if (!list.length) {
     el.replaceChildren(head, h('div', { class: 'sempty' },
       h('div', { class: 'sempty-art', 'aria-hidden': 'true' }, h('span'), h('span'), h('span')),
@@ -2110,7 +2186,7 @@ function renderSlides() {
     return;
   }
   const dropAt = (ev, i) => { const r = ev.currentTarget.getBoundingClientRect(); return ev.clientY > r.top + r.height / 2 ? i + 1 : i; };
-  el.replaceChildren(head, h('div', { class: 'slist' }, list.map((f, i) => h('div', {
+  el.replaceChildren(head, themeBar, h('div', { class: 'slist' }, list.map((f, i) => h('div', {
       class: 'sitem' + (sel.has(f.id) ? ' on' : ''), draggable: 'true', tabindex: '0', 'aria-label': `Slide ${i + 1}, ${f.text || 'Untitled'}`,
       ondragstart: ev => { slideDrag = f.id; ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', f.id); ev.currentTarget.classList.add('drag'); },
       ondragend: ev => { slideDrag = null; ev.currentTarget.classList.remove('drag'); },
@@ -2128,18 +2204,31 @@ function renderSlides() {
     h('p', { class: 'hint shint' }, 'Drag to reorder, or Alt+Up and Alt+Down. Double-click to present from a slide.'));
 }
 /** The Slide section in a frame's properties. */
-function slideSection(f, sec, swatch) {
-  const on = !!f.slide, sz = SL.sizeOf(f), n = SL.slidesOf(board.els).length;
+function slideSection(f, sec, swatch, themeSw) {
+  const on = !!f.slide, sz = SL.sizeOf(f), n = SL.slidesOf(board.els).length, lay = DK.LAYOUTS[f.layout];
+  const ft = f.foot || {};
+  // Footer choices apply to every slide on the page, like Apply to All in PowerPoint.
+  const setFoot = (key, val) => { for (const s2 of SL.slidesOf(board.els)) { const next = { ...(s2.foot || {}), [key]: val }; if (!val) delete next[key]; if (Object.keys(next).length) s2.foot = next; else delete s2.foot; } };
   return sec('Slide',
     h('div', { class: 'row' },
-      h('button', { class: 'fbtn', 'aria-pressed': String(on), onclick: () => { SL.setSlide(board.els, f, !on); commit(); } }, on ? 'In slides' : 'Use as slide'),
+      h('button', { class: 'fbtn', 'aria-pressed': String(on), onclick: () => { SL.setSlide(board.els, f, !on); if (!on) { f.theme = deckTheme().id; } commit(); } }, on ? 'In slides' : 'Use as slide'),
       on ? h('span', { class: 'hint' }, `Slide ${f.slide} of ${n}`) : null),
+    on ? [h('div', { class: 'f-label' }, 'Layout'),
+      h('div', { class: 'row' },
+        h('button', { class: 'fbtn grow', 'aria-haspopup': 'menu', onclick: e => changeLayoutMenu(e.currentTarget, f) }, icon(lay ? lay.icon : DK.LAYOUTS.blank.icon, 14), lay ? lay.label : 'Choose a layout'),
+        h('button', { class: 'fbtn', title: 'Put placeholders back where the layout has them', disabled: !lay, onclick: () => relayout(f, f.layout) }, 'Reset'))] : null,
     h('div', { class: 'seg', role: 'group', 'aria-label': 'Slide size' }, Object.entries(SL.SLIDE_SIZES).map(([k, v]) =>
-      h('button', { 'aria-pressed': String(sz === k), title: v.label + ` (${v.w} by ${v.h})`, onclick: () => { f.w = v.w; f.h = v.h; commit(); } }, v.label.split(' ')[1]))),
+      h('button', { 'aria-pressed': String(sz === k), title: v.label + ` (${v.w} by ${v.h})`, onclick: () => { const keep = f.layout ? DK.placeholders(board.els, f, E) : null; f.w = v.w; f.h = v.h; if (keep) DK.applyLayout(board.els, f, f.layout, E, uid, topZ() + 1, keep); commit(); } }, v.label.split(' ')[1]))),
     h('div', { class: 'f-label' }, 'Background'),
-    h('div', { class: 'swatches' }, SL.SLIDE_BGS.map(([c, name]) => swatch(c, (f.fill || '') === c, () => { f.fill = c; commit(); }, name)),
+    themeSw([f], 'fill'),
+    h('div', { class: 'swatches' }, SL.SLIDE_BGS.map(([c, name]) => swatch(c, (f.fill || '') === c && !DK.linked(f, 'fill', deckTheme()), () => { f.fill = c; commit(); }, name)),
       h('button', { class: 'sw none', title: 'No background', 'aria-label': 'No background', 'aria-pressed': String(!f.fill), onclick: () => { delete f.fill; commit(); } })),
-    on ? [h('label', { class: 'f-label', for: 'slide-notes' }, 'Presenter notes'),
+    on ? [h('div', { class: 'f-label' }, 'Footer on every slide'),
+      h('div', { class: 'row' },
+        h('button', { class: 'fbtn', 'aria-pressed': String(!!ft.num), onclick: () => { setFoot('num', !ft.num); commit(); } }, 'Slide number'),
+        h('button', { class: 'fbtn', 'aria-pressed': String(!!ft.date), onclick: () => { setFoot('date', !ft.date); commit(); } }, 'Date')),
+      h('input', { class: 'inp', type: 'text', placeholder: 'Footer text', 'aria-label': 'Footer text', value: ft.text || '', oninput: e => { setFoot('text', e.target.value); draw(); }, onchange: () => holdCommit() }),
+      h('label', { class: 'f-label', for: 'slide-notes' }, 'Presenter notes'),
       h('textarea', { class: 'inp', id: 'slide-notes', placeholder: 'What to say on this slide', value: f.notes || '', oninput: e => { f.notes = e.target.value; }, onchange: () => holdCommit() }),
       h('button', { class: 'fbtn', onclick: () => present(SL.slidesOf(board.els).indexOf(f)) }, 'Present from this slide')] : null);
 }

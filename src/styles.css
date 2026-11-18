@@ -597,6 +597,29 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color
 .sitem.on .sthumb{box-shadow:0 0 0 2px var(--accent-fill)}
 .sitem.on .snum{color:var(--accent-soft)}
 
+/* Deck themes: a bar under the slides header that opens a grid of small theme slides */
+.stheme{padding:8px 12px 10px 16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.stheme-btn{display:flex;align-items:center;gap:8px;width:100%;height:32px;border-radius:var(--r1)}
+.stheme-btn strong{flex:1;text-align:left;font-weight:600;color:var(--ink)}
+.stheme-btn span:not(.stheme-dots){color:var(--muted)}
+.stheme-btn svg{margin:0;color:var(--icon)}
+.stheme-dots{display:flex}
+.stheme-dots i{width:12px;height:12px;border-radius:50%;box-shadow:0 0 0 1.5px var(--field),inset 0 0 0 1px var(--sw-line);margin-left:-3px}
+.stheme-dots i:first-child{margin-left:0}
+.dthemes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.dtheme{display:flex;flex-direction:column;gap:4px;padding:4px;border-radius:var(--r2);text-align:left}
+.dtheme:hover{background:var(--hover)}
+.dtheme[aria-pressed="true"]{background:var(--picked)}
+.dtheme[aria-pressed="true"] .dt-name{color:var(--accent-soft);font-weight:600}
+.dt-art{position:relative;display:block;aspect-ratio:16/9;border-radius:var(--r1);box-shadow:inset 0 0 0 1px var(--sw-line);overflow:hidden}
+.dt-aa{position:absolute;left:10%;top:16%;font-size:20px;font-weight:600;line-height:1}
+.dt-acc{position:absolute;left:10%;right:10%;bottom:14%;display:flex;gap:3px}
+.dt-acc i{flex:1;height:5px;border-radius:2px}
+.dt-name{font-size:12px;color:var(--ink-2);padding:0 2px}
+.swatches.tsw{display:grid;grid-template-columns:repeat(10,20px);gap:3px;justify-content:space-between}
+.fbtn.grow{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis}
+.fbtn.grow svg{margin:0;flex:none}
+
 /* Zoomed far out: no paper shadows, and below that no text (too small to read), to keep panning smooth */
 #cv .far [filter]{filter:none}
 #cv .very-far text{display:none}
