@@ -640,6 +640,25 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color
 .hint.grow{flex:1}
 .slider-v{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
 
+/* Charts: type picker and the data table */
+.ckinds{display:grid;grid-template-columns:repeat(6,1fr);gap:2px}
+.ck{aspect-ratio:1;display:grid;place-items:center;border-radius:var(--r1);color:var(--icon)}
+.ck:hover{background:var(--hover)}
+.ck[aria-pressed="true"]{background:var(--picked);color:var(--accent-soft)}
+.cdata{overflow-x:auto;border:1px solid var(--border);border-radius:var(--r1);background:var(--surface)}
+.cdata table{border-collapse:collapse;font-size:12px}
+.cdata th,.cdata td{padding:0;border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
+.cdata thead th{background:var(--field)}
+.cd-head{display:flex;align-items:center}
+.cd-in{width:56px;height:26px;border:0;background:transparent;padding:0 6px;font:inherit;color:var(--ink);outline:none}
+.cd-in:focus{box-shadow:inset 0 0 0 2px var(--accent)}
+.cd-num{text-align:right;font-variant-numeric:tabular-nums}
+.cd-name{font-weight:600}
+.cd-cat{width:64px}
+.cd-x{width:18px;height:18px;display:grid;place-items:center;border-radius:4px;color:var(--muted);flex:none}
+.cd-x:hover:not(:disabled){background:var(--hover);color:var(--ink)}
+.cd-x:disabled{opacity:.3}
+
 /* Zoomed far out: no paper shadows, and below that no text (too small to read), to keep panning smooth */
 #cv .far [filter]{filter:none}
 #cv .very-far text{display:none}

@@ -33,6 +33,7 @@ import { BRUSHES, PROFILES, brushOutline, outlineD, profileOutline, shaped, eras
 import * as PT from './paint';
 import * as PO from './pathops';
 import * as PG from './presetgeom';
+import * as CH from './chart';
 import * as X from './exact';
 import * as LB from './livebool';
 import * as VE from './vecerase';
@@ -359,7 +360,9 @@ function nameOf(id) {
   return '';
 }
 const footFn = f => DK.footerPieces(f, DK.themeById(f.theme), DK.footDate());
-const rctx = (exp, els = board ? board.els : {}) => ({ exp, nameOf, foot: footFn, zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
+/** A page's chart colors: its deck theme's six accents. */
+const accentsOf = els => { const t = DK.pageTheme(els).colors; return [t.accent1, t.accent2, t.accent3, t.accent4, t.accent5, t.accent6]; };
+const rctx = (exp, els = board ? board.els : {}) => ({ exp, nameOf, foot: footFn, accents: () => accentsOf(els), zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
 async function loadImages(els = all()) {
@@ -377,6 +380,7 @@ function encodeImage(bmp, scale, alpha) {
 function phInsert(id, what) {
   const ph = E(id); if (!ph) return;
   if (what === 'picture') { imgSlot = id; const inp = $('#img-file'); if (inp) { inp.multiple = false; inp.addEventListener('cancel', () => { imgSlot = null; inp.multiple = true; }, { once: true }); inp.click(); } return; }
+  if (what === 'chart') { makeChart(0, 0, 0, 0, false, ph); return; }
   const rows = 4, cols = 3, rowH = 52, t = { id: uid('e'), type: 'table', z: ph.z, x: ph.x, y: ph.y, w: ph.w, h: Math.min(ph.h, rows * rowH), cells: emptyCells(rows, cols), header: true, tstyle: 'medium2', band: true, size: 20 };
   DK.linkTheme(t, 'tacc', 'accent1', deckTheme());
   delete board.els[id]; board.els[t.id] = t; sel = new Set([t.id]); commit(); startEdit(t.id, [0, 0]);
@@ -513,6 +517,7 @@ function drawEls(rc) {
     let dep = '';
     if (e.type === 'conn') dep = rc.sway && rc.sway(e.id) ? null : JSON.stringify([geo(E(e.a)), geo(E(e.b))]);
     else if (e.type === 'frame') dep = String(cam.z) + (e.foot && e.foot.date ? DK.footDate() : '');
+    else if (e.type === 'chart') dep = accentsOf(board.els).join();
     else if (e.type === 'text' && rc.under) dep = rc.under(e) || '';
     if (dep !== null) {
       if (e.mask) dep += JSON.stringify(geo(E(e.mask)));
@@ -803,6 +808,13 @@ function fit(list) {
 }
 /** The color of the last sticky note colored by hand, used for the next new one (as FigJam does). */
 let lastSticky = null;
+function makeChart(x, y, w, ht, keep, into) {
+  const drawn = w > 40 && ht > 40, dw = 480, dh = 300;
+  const e = into ? { id: uid('e'), type: 'chart', z: into.z, x: into.x, y: into.y, w: into.w, h: into.h, chart: CH.sampleChart() }
+    : { id: uid('e'), type: 'chart', z: topZ() + 1, x: Math.round(drawn ? x : x - dw / 2), y: Math.round(drawn ? y : y - dh / 2), w: Math.round(drawn ? w : dw), h: Math.round(drawn ? ht : dh), chart: CH.sampleChart() };
+  if (into) delete board.els[into.id];
+  board.els[e.id] = e; sel = new Set([e.id]); if (!keep) tool = 'select'; commit();
+}
 function makeShape(x, y, w, ht, keep) {
   const drawn = w > 8 && ht > 8, sq = SQUARE_SHAPES.test(shapePick), dw = sq ? 120 : 180, dh = sq ? 120 : 100;
   const e = { id: uid('e'), type: 'rect', preset: shapePick, z: topZ() + 1, x: Math.round(drawn ? x : x - dw / 2), y: Math.round(drawn ? y : y - dh / 2), w: Math.round(drawn ? Math.max(w, 20) : dw), h: Math.round(drawn ? Math.max(ht, 20) : dh), text: '', fill: '#ffffff' };
@@ -815,6 +827,7 @@ let shapePick = 'rightArrow';
 const SQUARE_SHAPES = /^(star|irregularSeal|ellipse|flowChartConnector|flowChartOr|flowChartSummingJunction|smileyFace|sun|moon|heart|noSmoking|donut|blockArc|pie|chord|teardrop|octagon|hexagon|heptagon|decagon|dodecagon|pentagon|plus|math|cloud|gear|cube|can|frame|lightningBolt|circularArrow|quadArrow|triangle|rtTriangle|diamond|flowChartDecision|flowChartSort|flowChartCollate)/;
 function makeBox(type, x, y, w, ht, keep = false) {
   if (type === 'shape') { makeShape(x, y, w, ht, keep); return; }
+  if (type === 'chart') { makeChart(x, y, w, ht, keep); return; }
   const d = { sticky: [G.STICKY_SIDE, G.STICKY_SIDE], text: [240, 30], rect: [160, 100], ellipse: [160, 100], diamond: [170, 110], card: [240, 100], frame: [480, 320], sticker: [84, 84], tape: [220, 32], table: [360, 120] }[type];
   const drawn = w > 8 && ht > 8, e = { id: uid('e'), type, z: topZ() + 1, x: Math.round(drawn ? x : x - d[0] / 2), y: Math.round(drawn ? y : y - d[1] / 2), w: Math.round(drawn && type !== 'card' ? Math.max(w, 30) : d[0]), h: Math.round(drawn && type !== 'card' && type !== 'text' ? Math.max(ht, 30) : d[1]), text: '' };
   if (type === 'sticky') { e.fill = lastSticky || FILLS[0]; if (Store.uid) e.author = Store.uid; }
@@ -979,6 +992,46 @@ function pictureSection(e, num, pick, swatch) {
     h('div', { class: 'row' },
       h('button', { class: 'fbtn', 'aria-pressed': String(!!e.gray), onclick: () => { if (e.gray) delete e.gray; else e.gray = true; commit(); } }, 'Black and white'),
       h('button', { class: 'fbtn', disabled: !PIC.adjustments(e), onclick: () => { ['bright', 'contrast', 'sat', 'gray'].forEach(k => delete e[k]); commit(); } }, 'Reset')));
+}
+
+/** The Chart and Chart data sections: type, title, legend, labels, gridlines, and the data table. */
+function chartSections(e) {
+  const c = e.chart, live = () => draw(), done = () => holdCommit();
+  const replace = next => { e.chart = next; commit(); };
+  // Pasting rows copied from a spreadsheet into any data cell replaces the table.
+  const onPaste = ev => {
+    const t = ev.clipboardData ? ev.clipboardData.getData('text/plain') : '';
+    if (!/[\t\n]/.test(t.trim())) return;
+    const next = CH.fromTable(t, c.kind); if (!next) return;
+    ev.preventDefault(); replace({ ...next, title: c.title, legend: c.legend, labels: c.labels, grid: c.grid });
+  };
+  const cell = (value, label, onIn, cls = '') => h('input', { class: 'cd-in ' + cls, value, 'aria-label': label, oninput: ev => { onIn(ev.target.value); live(); }, onchange: done, onpaste: onPaste });
+  const pie = c.kind === 'pie' || c.kind === 'doughnut';
+  const typeSec = h('section', { class: 'psec' }, h('h3', null, 'Chart'),
+    h('div', { class: 'ckinds', role: 'group', 'aria-label': 'Chart type' }, CH.CHART_KINDS.map(([k, label, d]) =>
+      h('button', { class: 'ck', title: label, 'aria-label': label, 'aria-pressed': String(c.kind === k), onclick: () => { c.kind = k; commit(); } }, icon(d, 18)))),
+    h('input', { class: 'inp', placeholder: 'Chart title', 'aria-label': 'Chart title', value: c.title || '', oninput: ev => { if (ev.target.value) c.title = ev.target.value; else delete c.title; live(); }, onchange: done }),
+    h('div', { class: 'row' },
+      h('div', { class: 'seg grow', role: 'group', 'aria-label': 'Legend' }, [['bottom', 'Legend below'], ['right', 'Legend right'], ['none', 'No legend']].map(([k, label]) =>
+        h('button', { 'aria-pressed': String((c.legend || 'bottom') === k), title: label, onclick: () => { c.legend = k; commit(); } }, k === 'none' ? 'None' : k === 'right' ? 'Right' : 'Below')))),
+    h('div', { class: 'row' },
+      h('button', { class: 'fbtn', 'aria-pressed': String(pie ? c.labels !== false : !!c.labels), onclick: () => { c.labels = pie ? c.labels === false : !c.labels; commit(); } }, 'Data labels'),
+      pie ? null : h('button', { class: 'fbtn', 'aria-pressed': String(c.grid !== false), onclick: () => { c.grid = c.grid === false; commit(); } }, 'Gridlines')));
+  const x = (label, fn, dis) => h('button', { class: 'cd-x', title: label, 'aria-label': label, disabled: !!dis, onclick: fn }, icon('M6 6l8 8M14 6l-8 8', 10));
+  const dataSec = h('section', { class: 'psec' }, h('h3', null, 'Chart data'),
+    h('div', { class: 'cdata' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null),
+        c.series.map((sr, si) => h('th', null, h('div', { class: 'cd-head' },
+          cell(sr.name, `Series ${si + 1} name`, v => { sr.name = v; }, 'cd-name'),
+          x('Remove this series', () => replace(CH.dropSeries(c, si)), c.series.length < 2 || pie && si > 0)))))),
+      h('tbody', null, c.cats.map((cat, i) => h('tr', null,
+        h('th', null, h('div', { class: 'cd-head' }, x('Remove this row', () => replace(CH.dropCategory(c, i)), c.cats.length < 2), cell(cat, `Category ${i + 1}`, v => { c.cats[i] = v; }, 'cd-cat'))),
+        c.series.map((sr, si) => h('td', null, cell(String(sr.vals[i] ?? 0), `${sr.name}, ${cat}`, v => { sr.vals[i] = CH.num(v); }, 'cd-num')))))))),
+    h('div', { class: 'row' },
+      h('button', { class: 'fbtn', onclick: () => replace(CH.addCategory(c)) }, 'Add row'),
+      pie ? null : h('button', { class: 'fbtn', onclick: () => replace(CH.addSeries(c)) }, 'Add series')),
+    h('p', { class: 'hint' }, pie ? 'A pie shows the first series. Paste rows from a spreadsheet into any cell to replace the data.' : 'Paste rows from a spreadsheet into any cell to replace the data: series across the top, categories down the side.'));
+  return [typeSec, dataSec];
 }
 
 /* ---------- Text editing ---------- */
@@ -1344,7 +1397,7 @@ function onKey(ev) {
   else if (k === 'enter' && liveOne()) { sel = new Set(LB.operandsOf(board.els, liveOne().id).flatMap(o => withKids(o.id))); refresh(); }
   else if (k === 'enter' && panelEls().length === 1 && panelEls()[0].type === 'path' && !panelEls()[0].live) enterVedit(panelEls()[0].id);
   else if (k === 'enter' && sel.size === 1) startEdit([...sel][0]);
-  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', u: 'shape', g: 'table', h: 'pen', e: 'pen', b: 'vpen' }[k];
+  else { const t = { v: 'select', s: 'sticky', t: 'text', r: 'rect', o: 'ellipse', d: 'diamond', c: 'card', f: 'frame', l: 'conn', p: 'pen', k: 'stamp', u: 'shape', g: 'table', j: 'chart', h: 'pen', e: 'pen', b: 'vpen' }[k];
     if (t) endDraft();
     if (k === 'p') penMode = 'pen'; if (k === 'h') penMode = 'hl'; if (k === 'e') penMode = 'erase'; if (k === 'h' || k === 'e' || k === 'p') penWidth = 0;
     if (k === 'i') $('#img-file').click(); else if (t) { tool = t; refresh(); } else done = false; }
@@ -1353,9 +1406,9 @@ function onKey(ev) {
 
 /* ---------- Board chrome ---------- */
 const ICON = { path: 'M10 2.5l5 5.5-2.7 7H7.7L5 8zM10 2.5v6.5M10 10.5a1.2 1.2 0 1 0 .01 0', vpen: 'M10 2.5l5 5.5-2.7 7H7.7L5 8zM10 2.5v6.5M10 10.5a1.2 1.2 0 1 0 .01 0', select: 'M5 3l10 6-4.5 1.2L13 15l-2 1-2.4-4.7L5 14z', sticky: 'M4 4h12v8l-4 4H4zM16 12h-4v4', text: 'M5 5h10M10 5v11', rect: 'M4 6h12v8H4z', ellipse: 'M3 10a7 5 0 1 0 14 0a7 5 0 1 0-14 0',
-  diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z', table: 'M3 4h14v12H3zM3 8h14M3 12h14M8 4v12M13 4v12', image: 'M3 4h14v12H3zM3 13.5l4-4 3 3 2.5-2 4.5 4M13.2 7.6a.6.6 0 1 0 .01 0' };
-const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['shape', 'Shapes (U)'], ['card', 'Task card (C)'], ['table', 'Table (G)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['vpen', 'Pen: curves and shapes (B)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
-const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'shape', 'conn', 'pen', 'vpen', '|', 'card', 'table', 'frame', 'stamp', 'image'];
+  diamond: 'M10 3l7 7-7 7-7-7z', card: 'M3 5h14v10H3zM6 8.5h7M6 11.5h3', frame: 'M6 3v14M14 3v14M3 6h14M3 14h14', conn: 'M4 15L15 5M10 5h5v5', pen: 'M4 16l1-4 8-8 3 3-8 8z', stamp: 'M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z', table: 'M3 4h14v12H3zM3 8h14M3 12h14M8 4v12M13 4v12', chart: 'M4.5 15.5V10M8.5 15.5V6M12.5 15.5V8.5M16.5 15.5V4.5M3 15.5h14', image: 'M3 4h14v12H3zM3 13.5l4-4 3 3 2.5-2 4.5 4M13.2 7.6a.6.6 0 1 0 .01 0' };
+const TOOLS = [['select', 'Select (V)'], ['sticky', 'Sticky note (S)'], ['text', 'Text (T)'], ['rect', 'Rectangle (R)'], ['ellipse', 'Ellipse (O)'], ['diamond', 'Diamond (D)'], ['shape', 'Shapes (U)'], ['card', 'Task card (C)'], ['table', 'Table (G)'], ['chart', 'Chart (J)'], ['frame', 'Frame (F)'], ['conn', 'Connector (L)'], ['pen', 'Draw (P)'], ['vpen', 'Pen: curves and shapes (B)'], ['stamp', 'Stickers and tape (K)'], ['image', 'Picture (I)']];
+const BAR = ['select', '|', 'sticky', 'text', 'rect', 'ellipse', 'diamond', 'shape', 'conn', 'pen', 'vpen', '|', 'card', 'table', 'chart', 'frame', 'stamp', 'image'];
 async function openBoard(id) {
   const m = meta(id); if (!m) return;
   closeMenu(); $('#app').replaceChildren(h('div', { class: 'loading' }, 'Opening ' + m.name));
@@ -1665,6 +1718,7 @@ function renderProps() {
         h('p', { class: 'hint' }, 'Double-click a cell to type. Tab moves to the next cell.')));
     }
     if (one && one.type === 'image') out.push(pictureSection(one, num, pick, swatch));
+    if (one && one.type === 'chart' && one.chart) out.push(...chartSections(one));
     if (one && one.type === 'rect' && one.preset) {
       const sh = one, def = PG.presetDef(sh.preset);
       out.push(sec('Shape',

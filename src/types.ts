@@ -1,4 +1,4 @@
-export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image' | 'table' | 'path';
+export type ElType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'diamond' | 'card' | 'frame' | 'pen' | 'conn' | 'sticker' | 'tape' | 'image' | 'table' | 'path' | 'chart';
 /** Arrowhead shapes for connector ends. */
 export type Head = 'none' | 'arrow' | 'triangle' | 'circle' | 'bar';
 export type ConnStyle = 'straight' | 'curve' | 'elbow' | 'cable';
@@ -113,6 +113,8 @@ export interface El {
    *  values (guide name to value, as in DrawingML) where they differ from the defaults. */
   preset?: string;
   adj?: Record<string, number>;
+  /** A chart's data and options (see `chart.ts`). */
+  chart?: import('./chart').ChartData;
   tstyle?: string;
   tacc?: string;
   band?: boolean;
@@ -165,7 +167,7 @@ export const STATUS: Record<Status, [label: string, color: string]> = {
 };
 export const FILLS = ['#ffe27a', '#ffc2a8', '#b9e6c9', '#b5d8ff', '#e3c8ff', '#ffffff', '#dfe5ee'];
 export const TEXTY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'conn', 'table'];
-export const BOXY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'sticker', 'tape', 'image', 'table'];
+export const BOXY: ElType[] = ['sticky', 'text', 'rect', 'ellipse', 'diamond', 'card', 'frame', 'sticker', 'tape', 'image', 'table', 'chart'];
 
 /** Stronger colors for stickers, tape, and connector lines. */
 export const VIVID = ['#e5484d', '#f76b15', '#f5c518', '#2a9460', '#2f6fed', '#8e4ec6', '#e0409a', '#2b2f3a'];

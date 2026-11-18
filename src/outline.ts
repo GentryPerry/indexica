@@ -8,7 +8,7 @@ export interface OutlineRow { id: string; depth: number; label: string; kind: El
 
 export const TYPE_NAMES: Record<El['type'], string> = {
   sticky: 'Sticky note', text: 'Text', rect: 'Rectangle', ellipse: 'Ellipse', diamond: 'Diamond', card: 'Task card',
-  frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture', table: 'Table', path: 'Vector',
+  frame: 'Frame', pen: 'Drawing', conn: 'Connector', sticker: 'Sticker', tape: 'Washi tape', image: 'Picture', table: 'Table', path: 'Vector', chart: 'Chart',
 };
 
 export const LIVE_NAMES = { union: 'Union', subtract: 'Subtract', intersect: 'Intersect', exclude: 'Exclude' } as const;

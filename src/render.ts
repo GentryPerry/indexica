@@ -7,6 +7,7 @@ import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
 import { cellBox, cellLook, colFractions, rowsOf } from './table';
 import { adjustments } from './picture';
+import { chartLayout } from './chart';
 import { presetDef, presetPaths, presetText } from './presetgeom';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
@@ -45,6 +46,8 @@ export interface RenderCtx {
   accent?: string;
   /** Screen zoom. Frame names keep a steady size on screen when zoomed out. */
   zoom?: number;
+  /** Accent colors for charts: the page's deck theme. */
+  accents?: () => string[];
   /** A slide's footer pieces (date, text, number), drawn with the slide like a master. */
   foot?: (f: El) => El[];
 }
@@ -109,10 +112,11 @@ function insertTiles(e: El, c: RenderCtx): SVGElement {
   const u = Math.max(28, Math.min(56, Math.min(e.w, e.h) * 0.14)), gap = u * 0.4, cx = e.x + e.w / 2, cy = e.y + e.h * 0.6, g = s('g');
   const tiles: [string, string, string][] = [
     ['table', 'Insert a table', 'M4 5.5h12v9H4zM4 8.5h12M4 11.5h12M8 5.5v9M12 5.5v9'],
+    ['chart', 'Insert a chart', 'M4.5 15.5V10M8.5 15.5V6M12.5 15.5V8.5M16.5 15.5V4.5M3 15.5h14'],
     ['picture', 'Insert a picture', 'M4 5h12v10H4zM4 13l3.5-3.5 2.5 2.5 2-2 4 3.5M12.5 8.2h.01'],
   ];
   tiles.forEach(([act, label, d], i) => {
-    const x = cx + (i - 1) * (u + gap) + gap / 2, y = cy - u / 2;
+    const x = cx + (i - tiles.length / 2) * (u + gap) + gap / 2, y = cy - u / 2;
     g.append(s('g', { 'data-ph-act': act, style: 'cursor:pointer' }, s('title', null, label),
       s('rect', { x, y, width: u, height: u, rx: u * 0.18, fill: c.frame, stroke: c.muted, 'stroke-opacity': 0.35, 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' }),
       s('path', { d, transform: `translate(${x + u * 0.15} ${y + u * 0.15}) scale(${u * 0.7 / 20})`, fill: 'none', stroke: c.muted, 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' })));
@@ -335,6 +339,19 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (href) g.append(...pictureNodes(e, href, c));
     else g.append(s('rect', { x, y, width: w, height: h, rx: 6, fill: SURFACE[c.theme].head, stroke: c.frameLine, 'stroke-dasharray': '6 4' }),
       textBlock(['Loading picture'], x + w / 2, y + h / 2 + 4, { size: 13, weight: 500, family: st.family, italic: false }, c.muted, 'middle'));
+  } else if (e.type === 'chart' && e.chart) {
+    g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
+    const acc = c.accents ? c.accents() : ['#2e6fd8', '#f26b1d', '#2ea36f', '#8a5cd8', '#d83f6b', '#e3b21c'], fam = FONTS.sans.stack;
+    const ink = { ink: c.ink, muted: c.muted, grid: SURFACE[c.theme].grid, surface: c.theme === 'dark' ? SURFACE.dark.card : '#ffffff' };
+    const cg = s('g', { transform: `translate(${x} ${y})`, 'pointer-events': 'none' });
+    for (const m of chartLayout(e.chart, w, h, acc, ink, (t, size) => measure(t, size, 400, fam))) {
+      if (m.k === 'rect') cg.append(s('rect', { x: m.x, y: m.y, width: m.w, height: m.h, fill: m.fill }));
+      else if (m.k === 'line') cg.append(s('line', { x1: m.x1, y1: m.y1, x2: m.x2, y2: m.y2, stroke: m.stroke, 'stroke-width': m.width, 'vector-effect': 'non-scaling-stroke' }));
+      else if (m.k === 'path') cg.append(s('path', { d: m.d, fill: m.fill || 'none', stroke: m.stroke || 'none', 'stroke-width': m.width || 0, 'fill-opacity': m.opacity ?? null, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+      else if (m.k === 'dot') cg.append(s('circle', { cx: m.x, cy: m.y, r: m.r, fill: m.fill, stroke: m.stroke, 'stroke-width': 1.5 }));
+      else if (!hide) { const t = s('text', { x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10, 'font-size': Math.round(m.size * 10) / 10, 'font-family': fam, 'font-weight': m.weight || 400, fill: m.fill, 'text-anchor': m.anchor }); t.textContent = m.text; cg.append(t); }
+    }
+    g.append(cg);
   } else if (e.type === 'table' && e.tstyle) {
     // A styled table (slides): flat cells painted from one accent, as PowerPoint's table styles.
     const rows = rowsOf(e), cols = Math.max(1, ...(e.cells || [['']]).map(r => r.length)), lines: SVGElement[] = [];
