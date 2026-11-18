@@ -596,3 +596,7 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px color
 .sthumb{border-radius:var(--r1)}
 .sitem.on .sthumb{box-shadow:0 0 0 2px var(--accent-fill)}
 .sitem.on .snum{color:var(--accent-soft)}
+
+/* Zoomed far out: no paper shadows, and below that no text (too small to read), to keep panning smooth */
+#cv .far [filter]{filter:none}
+#cv .very-far text{display:none}

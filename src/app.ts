@@ -371,7 +371,7 @@ async function addImage(file, at) {
   if (url.length >= 220000) return toast('That picture is too detailed to store. Try a smaller one.');
   const id = uid('i'); images.set(id, url); Store.put('img_' + id, { url });
   if (Store.mode !== 'cloud' && !Store.local('img_' + id)) toast('This browser is out of storage space, so this picture will not be kept after you close the page.');
-  const w = Math.min(bmp.width, 420), ht = Math.round(w * bmp.height / bmp.width), r = cv.getBoundingClientRect();
+  const w = Math.min(bmp.width, 420), ht = Math.round(w * bmp.height / bmp.width), r = cvBox();
   const c = at || { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
   const e = { id: uid('e'), type: 'image', z: topZ() + 1, x: Math.round(c.x - w / 2), y: Math.round(c.y - ht / 2), w, h: ht, src: id };
   board.els[e.id] = e; sel = new Set([e.id]); tool = 'select'; commit();
@@ -379,7 +379,7 @@ async function addImage(file, at) {
 function onPaste(ev) {
   const tgt = ev.target; if (!board || kanban || (tgt && ['INPUT', 'TEXTAREA', 'SELECT'].includes(tgt.tagName))) return;
   const data = ev.clipboardData, file = data && [...data.files].find(f => f.type.startsWith('image/')), text = data ? data.getData('text/plain').trim() : '';
-  const r = cv.getBoundingClientRect(), at = { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
+  const r = cvBox(), at = { x: (r.width / 2 - cam.x) / cam.z, y: (r.height / 2 - cam.y) / cam.z };
   if (file) addImage(file);
   else if (clip.length) { pasteEls(clip, 24); copySel(); }
   else if (text) { makeBox('sticky', at.x, at.y, 0, 0); $('#ed').value = text.slice(0, 2000); endEdit(); }
@@ -422,12 +422,61 @@ function draw() {
   trackCables();
   const t = `translate(${cam.x},${cam.y}) scale(${cam.z})`;
   vp.setAttribute('transform', t); ov.setAttribute('transform', t);
+  // Far out, paper shadows and tiny text cost more to paint than they show: drop them below set zooms.
+  vp.classList.toggle('far', cam.z < 0.35); vp.classList.toggle('very-far', cam.z < 0.16);
   dotGrid();
   LB.syncLive(board.els, liveSeen);
-  const rc = rctx(false); vp.replaceChildren(...sorted().map(e => renderEl(e, rc)));
+  const changed = drawEls(rctx(false));
   drawOverlay();
   const zv = $('#zoomt'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
-  drawMini();
+  drawMini(changed);
+}
+/**
+ * Drawing only what changed, on screen. Each piece's SVG is kept with a signature of everything it
+ * is drawn from (its own data, plus what it depends on: a connector's ends, a mask, the frame under a
+ * text, a loaded picture, an author name, and the zoom for frame labels). A piece whose signature is
+ * unchanged reuses its node; pieces outside the view (with a margin) are left out. Returns whether
+ * any piece was redrawn or the set changed, so the minimap can skip rebuilding.
+ */
+const drawn = new Map();
+let drawnKey = '', drawnIds = '';
+const geo = x => x ? [x.type, x.x, x.y, x.w, x.h, x.rot, x.paths, x.pts, x.shape, x.style] : null;
+function drawEls(rc) {
+  const key = [C.theme, C.ink, C.muted, C.line, C.accentFill, C.frame, editing, editCell && editCell.join()].join('|');
+  if (key !== drawnKey) { drawn.clear(); drawnKey = key; }
+  const r = cvBox(), pad = 120 / cam.z;
+  const view = { x: -cam.x / cam.z - pad, y: -cam.y / cam.z - pad, w: r.width / cam.z + 2 * pad, h: r.height / cam.z + 2 * pad };
+  const nodes = [], ids = [];
+  let changed = false;
+  for (const e of sorted()) {
+    if (e.id !== editing) {
+      // Curved lines can bow past their ends, and frame labels sit above the frame.
+      const b = bbox(e), m = e.type === 'conn' ? 120 : 0, top = e.type === 'frame' ? 48 / cam.z : 0;
+      if (b.x - m > view.x + view.w || b.x + b.w + m < view.x || b.y - m > view.y + view.h || b.y + b.h + m < view.y - top) continue;
+    }
+    let dep = '';
+    if (e.type === 'conn') dep = rc.sway && rc.sway(e.id) ? null : JSON.stringify([geo(E(e.a)), geo(E(e.b))]);
+    else if (e.type === 'frame') dep = String(cam.z);
+    else if (e.type === 'text' && rc.under) dep = rc.under(e) || '';
+    if (dep !== null) {
+      if (e.mask) dep += JSON.stringify(geo(E(e.mask)));
+      if (e.src) dep += images.has(e.src) ? '+' : '-';
+      if (e.author) dep += names.get(e.author) || '';
+    }
+    const sig = dep === null ? null : JSON.stringify(e) + '#' + dep, hit = drawn.get(e.id);
+    let node;
+    if (sig && hit && hit.sig === sig) node = hit.node;
+    else { node = renderEl(e, rc); changed = true; if (sig) drawn.set(e.id, { sig, node }); else drawn.delete(e.id); }
+    nodes.push(node); ids.push(e.id);
+  }
+  // Put the nodes in order, moving only the ones out of place.
+  const kids = vp.childNodes;
+  nodes.forEach((n, i) => { if (kids[i] !== n) vp.insertBefore(n, kids[i] || null); });
+  while (kids.length > nodes.length) vp.lastChild.remove();
+  for (const id of drawn.keys()) if (!board.els[id]) drawn.delete(id);
+  const idKey = ids.join();
+  if (idKey !== drawnIds) { drawnIds = idKey; changed = true; }
+  return changed;
 }
 /**
  * The canvas dot grid. Two levels are drawn: the finer one fades out as you zoom out, and the next
@@ -443,20 +492,28 @@ function dotGrid() {
   cv.style.backgroundPosition = `${cam.x - 1}px ${cam.y - 1}px`;
 }
 const hexRgb = hex => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return '150,160,175'; const n = parseInt(m[1], 16); return `${n >> 16},${(n >> 8) & 255},${n & 255}`; };
-function centerOn(e) { const r = cv.getBoundingClientRect(), b = bbox(e); cam.x = r.width / 2 - (b.x + b.w / 2) * cam.z; cam.y = r.height / 2 - (b.y + b.h / 2) * cam.z; }
-function drawMini() {
+function centerOn(e) { const r = cvBox(), b = bbox(e); cam.x = r.width / 2 - (b.x + b.w / 2) * cam.z; cam.y = r.height / 2 - (b.y + b.h / 2) * cam.z; }
+let miniPieces = null, miniSig = '', miniDirty = true, miniAt = 0;
+function drawMini(changed = true) {
+  if (changed) miniDirty = true;
   const el = $('#mini'); if (!el || !mini) return; el.hidden = !miniOn || kanban; if (el.hidden) return;
-  const r = cv.getBoundingClientRect(), view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z }, content = bounds(all());
+  const r = cvBox(), view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z }, content = bounds(all());
   // While the map is being dragged the scale is frozen, so the board does not slide under the pointer.
   if (!miniDrag || !miniState) miniState = miniFit(content ? union(content, view) : view, 144, 96);
   const m = miniState, box = b => ({ x: b.x * m.k + m.ox, y: b.y * m.k + m.oy, width: Math.max(b.w * m.k, 1.5), height: Math.max(b.h * m.k, 1.5) });
-  mini.replaceChildren(
-    ...sorted().filter(e => e.type !== 'conn' && e.type !== 'pen').map(e => s('rect', { ...box(bbox(e)), rx: 1,
-      fill: e.type === 'frame' ? 'none' : e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? C.frame : paintFill(e.fill, C.theme) || C.muted, 'fill-opacity': e.type === 'text' ? 0.5 : 1, stroke: e.type === 'frame' ? C.frameLine : 'rgba(0,0,0,.15)', 'stroke-width': 0.75 })),
-    s('rect', { ...box(view), rx: 2, fill: C.accent, 'fill-opacity': 0.1, stroke: C.accent, 'stroke-width': 1.5 }));
+  // The pieces layer is rebuilt only when the board or the map's scale changed; panning just moves the view box.
+  const ms = [m.k, m.ox, m.oy, C.theme].join();
+  // While dragging, the map's pieces catch up a few times a second rather than on every move.
+  const due = !mode || performance.now() - miniAt > 200;
+  if ((miniDirty && due) || !miniPieces || ms !== miniSig) {
+    miniSig = ms; miniDirty = false; miniAt = performance.now();
+    miniPieces = s('g', null, ...sorted().filter(e => e.type !== 'conn' && e.type !== 'pen' && !e.boolIn).map(e => s('rect', { ...box(bbox(e)), rx: 1,
+      fill: e.type === 'frame' ? 'none' : e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? C.frame : paintFill(e.fill, C.theme) || C.muted, 'fill-opacity': e.type === 'text' ? 0.5 : 1, stroke: e.type === 'frame' ? C.frameLine : 'rgba(0,0,0,.15)', 'stroke-width': 0.75 })));
+  }
+  mini.replaceChildren(miniPieces, s('rect', { ...box(view), rx: 2, fill: C.accent, 'fill-opacity': 0.1, stroke: C.accent, 'stroke-width': 1.5 }));
 }
 function miniGo(ev) {
-  const r = mini.getBoundingClientRect(), w = miniToWorld(miniState, ev.clientX - r.left, ev.clientY - r.top), st = cv.getBoundingClientRect();
+  const r = mini.getBoundingClientRect(), w = miniToWorld(miniState, ev.clientX - r.left, ev.clientY - r.top), st = cvBox();
   cam.x = st.width / 2 - w.x * cam.z; cam.y = st.height / 2 - w.y * cam.z; draw(); placeEditor();
 }
 function rotateHandle(mx, top, col, k) {
@@ -630,7 +687,7 @@ function nextSticky(id) {
   board.els[e.id] = e; sel = new Set([e.id]); commit(); startEdit(e.id);
 }
 function addTask(status) {
-  const cards = all().filter(e => e.type === 'card'), r = cv.getBoundingClientRect();
+  const cards = all().filter(e => e.type === 'card'), r = cvBox();
   const x = cards.length ? Math.min(...cards.map(c => c.x)) : Math.round((r.width / 2 - cam.x) / cam.z - 120), y = cards.length ? Math.max(...cards.map(c => c.y + c.h)) + 20 : Math.round((r.height / 2 - cam.y) / cam.z - 50);
   const e = { id: uid('e'), type: 'card', z: topZ() + 1, x, y, w: 240, h: 100, text: 'New task', status, due: '', notes: '' };
   board.els[e.id] = e; sel = new Set([e.id]); rightTab = 'design'; edFor = null; commit();
@@ -671,12 +728,12 @@ function arrange(kind) {
   commit();
 }
 function zoomAt(f, sx, sy) {
-  const r = cv.getBoundingClientRect(); if (sx == null) { sx = r.width / 2; sy = r.height / 2; }
+  const r = cvBox(); if (sx == null) { sx = r.width / 2; sy = r.height / 2; }
   const z = Math.min(4, Math.max(0.1, cam.z * f)), k = z / cam.z;
   cam.x = sx - (sx - cam.x) * k; cam.y = sy - (sy - cam.y) * k; cam.z = z; draw(); placeEditor();
 }
 function fit(list) {
-  const r = cv.getBoundingClientRect(), b = bounds(list || all());
+  const r = cvBox(), b = bounds(list || all());
   if (!b || !r.width) { cam = { x: r.width / 2 || 300, y: r.height / 2 || 200, z: 1 }; return draw(); }
   const z = Math.min(1.25, Math.max(0.1, Math.min((r.width - 100) / Math.max(b.w, 1), (r.height - 120) / Math.max(b.h, 1))));
   cam = { z, x: r.width / 2 - (b.x + b.w / 2) * z, y: r.height / 2 - (b.y + b.h / 2) * z + 14 }; draw();
@@ -825,7 +882,21 @@ function endEdit() {
 }
 
 /* ---------- Pointer input ---------- */
-function pt(ev) { const r = cv.getBoundingClientRect(), sx = ev.clientX - r.left, sy = ev.clientY - r.top; return { sx, sy, x: (sx - cam.x) / cam.z, y: (sy - cam.y) / cam.z }; }
+/**
+ * The canvas's place on screen, measured once and kept until the canvas resizes. Measuring on every
+ * pointer move made the browser lay out the whole board each time.
+ */
+let cvRect = null, cvObs = null;
+function cvBox() {
+  if (!cvRect || cvRect.el !== cv) {
+    const r = cv.getBoundingClientRect(); cvRect = { el: cv, left: r.left, top: r.top, width: r.width, height: r.height };
+    if (!cvObs && typeof ResizeObserver !== 'undefined') cvObs = new ResizeObserver(() => { cvRect = null; });
+    if (cvObs) { cvObs.disconnect(); cvObs.observe(cv); }
+  }
+  return cvRect;
+}
+addEventListener('resize', () => { cvRect = null; });
+function pt(ev) { const r = cvBox(), sx = ev.clientX - r.left, sy = ev.clientY - r.top; return { sx, sy, x: (sx - cam.x) / cam.z, y: (sy - cam.y) / cam.z }; }
 function idAt(target) { const g = target && target.closest && target.closest('[data-id]'); return g ? g.getAttribute('data-id') : null; }
 function onDown(ev) {
   closeMenu(); if (ev.button === 2) return;
@@ -891,7 +962,7 @@ function edgeScroll(ev) {
   const step = () => {
     edgeRaf = 0;
     if (!mode || !edgeEv || !['drag', 'marquee', 'conn', 'connEnd', 'create', 'resize', 'gscale'].includes(mode.k)) return;
-    const r = cv.getBoundingClientRect(), m = 32, x = edgeEv.clientX - r.left, y = edgeEv.clientY - r.top;
+    const r = cvBox(), m = 32, x = edgeEv.clientX - r.left, y = edgeEv.clientY - r.top;
     const push = (v, size) => v < m ? Math.min(m - v, 48) : v > size - m ? -Math.min(v - (size - m), 48) : 0;
     const vx = push(x, r.width), vy = push(y, r.height); if (!vx && !vy) return;
     cam.x += vx * 0.4; cam.y += vy * 0.4;
