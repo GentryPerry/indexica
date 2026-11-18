@@ -1,6 +1,8 @@
-# Deploys the built app (dist/index.html) as a static Cloudflare Worker at jam.gentryperry.com.
+# Deploys Indexica to jam.gentryperry.com: the single-page app as static assets, plus a small API
+# (worker/) that saves each signed-in person's boards to D1. Sign-in is Cloudflare Access with Google.
 # From a clone: npm run build && npx wrangler deploy
 name = "indexica-jam"
+main = "worker/index.ts"
 compatibility_date = "2026-11-01"
 # Only reachable at the custom domain, where Cloudflare Access handles sign-in.
 workers_dev = false
@@ -8,6 +10,16 @@ preview_urls = false
 
 [assets]
 directory = "./dist"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "indexica-jam"
+database_id = "a1252efa-4e00-41e0-b957-f699786d1446"
+
+[vars]
+TEAM_DOMAIN = "https://gentry-perry.cloudflareaccess.com"
 
 [[routes]]
 pattern = "jam.gentryperry.com"

@@ -34,7 +34,7 @@ import * as LB from './livebool';
 function statParts() {
   if (Store.err) return ['err', Store.err];
   if (Store.busy) return ['warn', 'Saving'];
-  return Store.mode === 'cloud' ? ['', 'Saved to your Claude account'] : ['warn', 'Saved in this browser only'];
+  return Store.mode === 'cloud' ? ['', Store.where === 'site' ? 'Saved to your account' : 'Saved to your Claude account'] : ['warn', 'Saved in this browser only'];
 }
 function stat() { const el = $('#stat'); if (!el) return; const [c, t] = statParts(); el.replaceChildren(h('span', { class: 'dot ' + c }), t); }
 Store.onChange = stat;
@@ -2177,7 +2177,13 @@ new MutationObserver(() => { if (board) draw(); }).observe(document.documentElem
 (async () => {
   await Store.init();
   let idx = await Store.get('index');
-  if (!idx && Store.mode === 'cloud' && Store.local('index')) { idx = Store.local('index'); for (const b of idx.boards) { const d = Store.local('b_' + b.id); if (d) Store.put('b_' + b.id, d); } Store.put('index', idx); }
+  // First sign-in with an empty account: boards, templates, and pictures kept in this browser move up to it.
+  if (!idx && Store.mode === 'cloud' && Store.local('index')) {
+    idx = Store.local('index');
+    for (const b of idx.boards) { const d = Store.local('b_' + b.id); if (d) Store.put('b_' + b.id, d); }
+    for (const k of Store.localKeys()) if (/^(tpl|img)_/.test(k)) { const d = Store.local(k); if (d) Store.put(k, d); }
+    Store.put('index', idx);
+  }
   if (!idx) { idx = seed(); Store.put('index', idx); }
   index = idx; renderHome();
 })();
