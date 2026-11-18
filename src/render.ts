@@ -6,9 +6,9 @@ import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
 import { cellBox, colFractions, rowsOf } from './table';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
-import { pathD, scaleOf } from './vector';
-import { BRUSHES, brushOutline, outlineD, shaped } from './brush';
-import { fillLayers, isGrad, linearEnds, strokeLayers, type Paint } from './paint';
+import { flatten, pathD, scaleOf } from './vector';
+import { BRUSHES, brushOutline, outlineD, profileOutline, shaped } from './brush';
+import { fillLayers, gradientGeom, isGrad, strokeLayers, type Paint } from './paint';
 import { outlineOf } from './boolean';
 
 /** What the renderer needs to know about where it is drawing. */
@@ -119,6 +119,11 @@ function renderConn(g: SVGElement, e: El, c: RenderCtx) {
 const autoInkOr = (color: string | undefined, fallback: string) => !color || INKISH.has(color.toLowerCase()) ? fallback : color;
 
 /** Draw one element as an SVG group tagged with its id. */
+/** Outline path data for a vector's stroke with a width profile, one outline per subpath. */
+function profileD(e: El, width: number, x: number, y: number, sx: number, sy: number): string {
+  return (e.paths || []).map(sp => outlineD(profileOutline(flatten(sp, 0.75).map(([px, py]) => [px * sx, py * sy]), width, e.profile!), x, y)).join(' ');
+}
+
 export function renderEl(e: El, c: RenderCtx): SVGElement {
   // Operands of a live boolean are not drawn: the result shows what they make together. Text on them
   // stays, drawn over the result, so a note or labeled shape keeps its words inside a boolean.
@@ -197,12 +202,15 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       const paint = (p: Paint, ink: string) => {
         if (!isGrad(p)) return !p ? ink : c.theme === 'dark' && INKISH.has(p.toLowerCase()) ? c.ink : paintFill(p, c.theme) || p;
         const id = `pg-${e.id}-${gi++}${c.exp ? '-x' : ''}`, stops = [...p.stops].sort((a, b) => a[0] - b[0]).map(([o, col]) => s('stop', { offset: o, 'stop-color': col }));
-        defs.append(p.kind === 'radial' ? s('radialGradient', { id, cx: 0.5, cy: 0.5, r: 0.5 }, stops) : s('linearGradient', { id, ...linearEnds(p.angle) }, stops));
+        defs.append(s(p.kind === 'radial' ? 'radialGradient' : 'linearGradient', { id, ...gradientGeom(p) }, stops));
         return `url(#${id})`;
       };
       const layers = [
         ...fillLayers(e).map(p => s('path', { d, fill: paint(p, c.ink), 'fill-rule': e.rule || null, stroke: 'none' })),
-        ...strokes.map(l => s('path', { d, fill: 'none', stroke: paint(l.paint, c.ink), 'stroke-width': l.width, 'stroke-linecap': e.cap || 'round', 'stroke-linejoin': e.join || 'round', 'stroke-miterlimit': e.join === 'miter' ? 4 : null, 'stroke-dasharray': dashOf(e, l.width) })),
+        // A width profile draws each stroke as a filled outline that narrows like a pen stroke.
+        ...strokes.map(l => e.profile
+          ? s('path', { d: profileD(e, l.width, x, y, sx, sy), fill: paint(l.paint, c.ink), stroke: 'none' })
+          : s('path', { d, fill: 'none', stroke: paint(l.paint, c.ink), 'stroke-width': l.width, 'stroke-linecap': e.cap || 'round', 'stroke-linejoin': e.join || 'round', 'stroke-miterlimit': e.join === 'miter' ? 4 : null, 'stroke-dasharray': dashOf(e, l.width) })),
       ];
       if (gi) g.append(defs);
       g.append(...layers);

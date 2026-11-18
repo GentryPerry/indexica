@@ -48,6 +48,8 @@ export interface El {
   live?: 'union' | 'subtract' | 'intersect' | 'exclude';
   /** An operand of the live boolean result with this id: not drawn on its own. */
   boolIn?: string;
+  /** Vector stroke width profile: tapered at both ends or one (even when unset). */
+  profile?: 'taper' | 'start' | 'end';
   /** Vector stroke ends and corners (round when unset). */
   cap?: 'butt' | 'round' | 'square';
   join?: 'miter' | 'round' | 'bevel';

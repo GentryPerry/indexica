@@ -25,11 +25,12 @@ import { trayIcon } from './tray';
 import * as SL from './slides';
 import * as V from './vector';
 import * as B from './boolean';
-import { BRUSHES, brushOutline, outlineD, shaped, eraseStroke, touches } from './brush';
+import { BRUSHES, PROFILES, brushOutline, outlineD, profileOutline, shaped, eraseStroke, touches } from './brush';
 import * as PT from './paint';
 import * as PO from './pathops';
 import * as X from './exact';
 import * as LB from './livebool';
+import * as VE from './vecerase';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -472,6 +473,35 @@ function sizeBadge(b, w, ht, k, below = false) {
     s('rect', { x: b.x + b.w / 2 - tw / 2, y, width: tw, height: 18 * k, rx: 5 * k, fill: C.accentFill }),
     s('text', { x: b.x + b.w / 2, y: y + 12.6 * k, 'font-size': 11 * k, 'font-weight': 500, 'font-family': 'Inter,system-ui,sans-serif', fill: '#ffffff', 'text-anchor': 'middle' }, label));
 }
+/**
+ * Gradient handles, as in Figma: a selected vector with a gradient shows its line (or, for radial
+ * ones, its center and edge) and the ends can be dragged on the canvas. The layer chosen in the panel
+ * wins; otherwise the first gradient fill.
+ */
+function gradTarget(e) {
+  const pick = (k, i) => { const list = k === 'fill' ? PT.fillLayers(e) : PT.strokeLayers(e).map(l => l.paint); return PT.isGrad(list[i]) ? { k, i, g: list[i] } : null; };
+  if (paintSel && paintSel.id === e.id) { const t = pick(paintSel.k, paintSel.i); if (t) return t; }
+  const fi = PT.fillLayers(e).findIndex(PT.isGrad);
+  return fi >= 0 ? pick('fill', fi) : null;
+}
+function gradMarks(e, g, k) {
+  const at = (fx, fy) => [e.x + fx * e.w, e.y + fy * e.h], geo = PT.gradientGeom(g), out = [];
+  const dot = (n, x, y, title) => s('circle', { 'data-h': 'gr-' + n, cx: x, cy: y, r: 5 * k, fill: '#ffffff', stroke: C.accent, 'stroke-width': 1.5 * k, style: 'cursor:move' }, s('title', null, title));
+  if ('cx' in geo) {
+    const [cx, cy] = at(geo.cx, geo.cy), [ex, ey] = at(geo.cx + geo.r, geo.cy);
+    out.push(s('line', { x1: cx, y1: cy, x2: ex, y2: ey, stroke: C.accent, 'stroke-width': 1.25 * k, 'pointer-events': 'none' }), dot('center', cx, cy, 'Drag to move the gradient center'), dot('edge', ex, ey, 'Drag to change the gradient size'));
+  } else {
+    const [x1, y1] = at(geo.x1, geo.y1), [x2, y2] = at(geo.x2, geo.y2);
+    out.push(s('line', { x1, y1, x2, y2, stroke: C.accent, 'stroke-width': 1.25 * k, 'pointer-events': 'none' }), dot('from', x1, y1, 'Drag to move where the gradient starts'), dot('to', x2, y2, 'Drag to move where the gradient ends'));
+  }
+  return out;
+}
+/** A board point in a piece's own box, as fractions of its width and height (rotation undone). */
+function boxFrac(e, p) {
+  let x = p.x, y = p.y;
+  if (e.rot) { const cx = e.x + e.w / 2, cy = e.y + e.h / 2, a = -e.rot * Math.PI / 180; x = cx + (p.x - cx) * Math.cos(a) - (p.y - cy) * Math.sin(a); y = cy + (p.x - cx) * Math.sin(a) + (p.y - cy) * Math.cos(a); }
+  return [(x - e.x) / (e.w || 1), (y - e.y) / (e.h || 1)];
+}
 function drawOverlay(extra) {
   if (vedit && E(vedit.id)) { ov.replaceChildren(nodeMarks(E(vedit.id)), ...(extra ? [extra] : [])); return; }
   const k = 1 / cam.z, list = selEls(), out = [], solo = panelEls().length === 1 && list.length === 1 && !editing;
@@ -497,6 +527,8 @@ function drawOverlay(extra) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
       g.append(s('circle', { 'data-h': 'rot', cx: x1 + 12 * k, cy: e.y - 12 * k, r: 4 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.25 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
       if (e.type === 'table') { const fr = colFractions(e); let acc = 0; fr.slice(0, -1).forEach((f, i) => { acc += f; g.append(s('rect', { 'data-h': 'col-' + i, class: 'colh', x: e.x + acc * e.w - 4 * k, y: e.y, width: 8 * k, height: e.h, fill: C.accent, 'fill-opacity': 0, style: 'cursor:col-resize' }, s('title', null, 'Drag to resize columns'))); }); }
+      const gt = e.type === 'path' && !vedit ? gradTarget(e) : null;
+      if (gt) g.append(...gradMarks(e, gt.g, k));
       if (BOXY.includes(e.type)) {
         const gw = 8 * k;
         g.append(edgeGrip('n', e.x, e.y - gw / 2, e.w, gw, 'ns'), edgeGrip('s', e.x, y1 - gw / 2, e.w, gw, 'ns'), edgeGrip('w', e.x - gw / 2, e.y, gw, e.h, 'ew'), edgeGrip('e', x1 - gw / 2, e.y, gw, e.h, 'ew'));
@@ -694,7 +726,33 @@ function eraseAt(ev) {
     });
   }
   if (hit) draw();
-  drawOverlay(s('circle', { cx: p.x, cy: p.y, r, fill: C.accent, 'fill-opacity': 0.08, stroke: C.accent, 'stroke-width': 1 / cam.z, 'pointer-events': 'none' }));
+  // Vectors are cut when the stroke ends; until then the swept band shows where the eraser went.
+  const trail = mode && mode.k === 'erase' ? (mode.trail ||= []) : null;
+  if (trail) trail.push([p.x, p.y]);
+  drawOverlay(s('g', { 'pointer-events': 'none' },
+    trail && trail.length > 1 ? s('polyline', { points: trail.map(q => q.join(',')).join(' '), fill: 'none', stroke: C.accent, 'stroke-opacity': 0.18, 'stroke-width': r * 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
+    s('circle', { cx: p.x, cy: p.y, r, fill: C.accent, 'fill-opacity': 0.08, stroke: C.accent, 'stroke-width': 1 / cam.z })));
+}
+/**
+ * The eraser on vectors (see vecerase.ts): filled shapes lose the swept band, open strokes are cut
+ * where it passed. With Alt, every vector it touched is removed whole, as with drawings. Booleans
+ * and the shapes inside them are left alone.
+ */
+function eraseVectors(trail, whole) {
+  if (!trail.length) return;
+  const r = 9 / cam.z, xs = trail.map(q => q[0]), ys = trail.map(q => q[1]);
+  const tb = { x: Math.min(...xs) - r, y: Math.min(...ys) - r, w: Math.max(...xs) - Math.min(...xs) + 2 * r, h: Math.max(...ys) - Math.min(...ys) + 2 * r };
+  for (const e of all()) {
+    if (e.type !== 'path' || e.locked || e.live || e.boolIn || e.masking) continue;
+    const b = bbox(e), pad = (e.sw || 0) / 2;
+    if (b.x - pad > tb.x + tb.w || b.x + b.w + pad < tb.x || b.y - pad > tb.y + tb.h || b.y + b.h + pad < tb.y) continue;
+    const local = trail.map(q => { const [fx, fy] = boxFrac(e, { x: q[0], y: q[1] }); return [e.x + fx * e.w, e.y + fy * e.h]; });
+    const out = VE.eraseSubs(V.worldPaths(e), local, r, PT.strokeLayers(e).reduce((m, l) => Math.max(m, l.width), 0));
+    if (!out) continue;
+    if (whole || !out.length) { for (const c of all()) if (c.type === 'conn' && (c.a === e.id || c.b === e.id)) delete board.els[c.id]; delete board.els[e.id]; sel.delete(e.id); }
+    else V.placeWorldPaths(e, out);
+  }
+  draw();
 }
 
 /* ---------- Connecting ---------- */
@@ -787,6 +845,7 @@ function onDown(ev) {
         mode = { k: 'gscale', start: [...moveSet()].map(i => clone(E(i))), ax, ay, vx: (c.includes('w') ? b.x : b.x + b.w) - ax, vy: (c.includes('n') ? b.y : b.y + b.h) - ay }; return;
       }
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
+      if (hd.startsWith('gr-')) { const gt = gradTarget(e); if (gt) { mode = { k: 'grad', e, which: hd.slice(3), lk: gt.k, li: gt.i }; return; } }
       if (hd.startsWith('col-')) { mode = { k: 'colsz', e, i: Number(hd.slice(4)), fr: colFractions(e), p }; return; }
       if (hd.startsWith('qc-')) { const side = hd.slice(3); mode = { k: 'conn', quick: true, a: e.id, as: side, p: sidePoint(e, side), sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
       if (hd === 'rot') {
@@ -927,6 +986,11 @@ function onMove(ev) {
   } else if (mode.k === 'colsz') {
     const e = mode.e, r = (e.rot || 0) * Math.PI / 180, along = (p.x - mode.p.x) * Math.cos(r) + (p.y - mode.p.y) * Math.sin(r);
     e.colw = resizeCols(mode.fr, mode.i, along / e.w).map(v => Math.round(v * 1000) / 1000); fitText(e); draw();
+  } else if (mode.k === 'grad') {
+    const e = mode.e, [fx, fy] = boxFrac(e, p);
+    if (mode.lk === 'fill') { const list = [...PT.fillLayers(e)]; list[mode.li] = PT.moveHandle(list[mode.li], mode.which, fx, fy); e.fills = list; }
+    else { const list = PT.strokeLayers(e).map(l => ({ ...l })); list[mode.li].paint = PT.moveHandle(list[mode.li].paint, mode.which, fx, fy); e.strokes = list; }
+    draw(); drawOverlay();
   } else if (mode.k === 'erase') {
     eraseAt(ev);
   } else if (mode.k === 'conn') {
@@ -944,7 +1008,9 @@ function onUp(ev) {
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
-  else if (m.k === 'erase' || m.k === 'colsz') commit();
+  else if (m.k === 'grad') commit();
+  else if (m.k === 'erase') { eraseVectors(m.trail || [], ev.altKey); commit(); }
+  else if (m.k === 'colsz') commit();
   else if (m.k === 'pen') {
     if (m.pts.length > 1) {
       const x = Math.min(...m.pts.map(q => q[0])), y = Math.min(...m.pts.map(q => q[1]));
@@ -1304,7 +1370,8 @@ function renderProps() {
           pick('vec-width', 'Stroke width', widths, same(vecs, 'sw') || 2, v => plain('sw', Number(v), true)),
           pick('vec-dash', 'Stroke pattern', [['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], same(vecs, 'dash') || 'solid', v => setAll(vecs, 'dash', v === 'solid' ? '' : v, true)),
           pick('vec-cap', 'Stroke ends (cap)', [['round', 'Round cap'], ['butt', 'Flat cap'], ['square', 'Square cap']], same(vecs, 'cap') || 'round', v => setAll(vecs, 'cap', v === 'round' ? '' : v, true)),
-          pick('vec-join', 'Stroke corners (join)', CORNERS, same(vecs, 'join') || 'round', v => setAll(vecs, 'join', v === 'round' ? '' : v, true))),
+          pick('vec-join', 'Stroke corners (join)', CORNERS, same(vecs, 'join') || 'round', v => setAll(vecs, 'join', v === 'round' ? '' : v, true)),
+          pick('vec-profile', 'Stroke width profile', PROFILES, same(vecs, 'profile') || '', v => setAll(vecs, 'profile', v, true))),
         solo ? layerEditor(solo, 'stroke', num) : null));
     }
     const combinable = free.filter(e => B.BOOLEABLE.has(e.type) || (e.type === 'pen' && !e.hl)), lv = liveOne();
@@ -1381,7 +1448,7 @@ function renderFly() {
     el.replaceChildren(...[
       h('div', { class: 'fly-h' }, 'Drawing'),
       h('div', { class: 'seg wide three', role: 'group', 'aria-label': 'Drawing tool' }, modes.map(([k, label, d]) => h('button', { 'aria-pressed': String(penMode === k), title: label, 'aria-label': label, onclick: () => { penMode = k; penWidth = 0; if (k === 'hl' && !HL_COLORS.includes(penColor)) penColor = ''; if (k === 'pen' && HL_COLORS.includes(penColor)) penColor = ''; refresh(); } }, icon(d, 18), h('span', null, label)))),
-      penMode === 'erase' ? h('p', { class: 'fly-n' }, 'Drag across drawings to erase. It cuts through strokes and keeps the rest; hold Alt to remove whole strokes. Notes and shapes are not affected.') : [
+      penMode === 'erase' ? h('p', { class: 'fly-n' }, 'Drag across drawings and vectors to erase. It cuts through strokes and bites into filled vectors, keeping the rest; hold Alt to remove whole pieces. Notes and plain shapes are not affected.') : [
         h('div', { class: 'fly-h' }, 'Color'),
         h('div', { class: 'fly-c' }, colors.map(([v, c, label]) => h('button', { class: 'sw', style: 'background:' + c + (penMode === 'hl' ? ';opacity:.7' : ''), title: label, 'aria-label': label, 'aria-pressed': String(penColor === v || (penMode === 'hl' && !penColor && v === HL_COLORS[0])), onclick: () => { penColor = v; renderFly(); } }))),
         h('div', { class: 'fly-h' }, 'Width'),
@@ -1492,7 +1559,7 @@ function openMenu(ev) {
     ['Select all', () => { sel = new Set(Object.keys(board.els)); refresh(); }], ['Fit everything', () => fit()], ['Keyboard shortcuts', toggleHelp]]);
 }
 const KEYS = [
-  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['H', 'Highlighter'], ['E', 'Eraser (drawings only)'], ['G', 'Table'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
+  ['Tools', [['V', 'Select'], ['S', 'Sticky note'], ['T', 'Text'], ['R / O / D', 'Rectangle, ellipse, diamond'], ['C', 'Task card'], ['F', 'Frame'], ['L', 'Connector'], ['P', 'Draw'], ['H', 'Highlighter'], ['E', 'Eraser (drawings and vectors; Alt removes whole pieces)'], ['G', 'Table'], ['K', 'Stickers and tape'], ['I', 'Picture']]],
   ['Connecting', [['L', 'Connector tool: drag from piece to piece'], ['Drop on a dot', 'Pin the end to that side'], ['+ handle, drag', 'Connect the selected piece'], ['+ handle, click', 'Add a connected piece on that side']]],
   ['Editing', [['Double-click', 'Edit text, or add a note on empty space'], ['Enter', 'Edit the selected piece'], ['Tab', 'Next sticky note beside this one, or next table cell'], ['Ctrl+D', 'Duplicate'], ['Alt+drag', 'Drag a copy'], ['Ctrl+C / Ctrl+V', 'Copy and paste (also pastes pictures and text)'], ['Ctrl+Z / Ctrl+Shift+Z', 'Undo and redo'], ['Ctrl+G / Ctrl+Shift+G', 'Group and ungroup'], ['Ctrl+Shift+L', 'Lock or unlock'], ['[ and ]', 'Send to back, bring to front'], ['Delete', 'Delete the selection']]],
   ['Moving and sizing', [['Arrow keys', 'Nudge by 1 (Shift for 10)'], ['Shift while dragging', 'Keep to a straight line'], ['Shift while drawing', 'Keep it square'], ['Alt while placing', 'Keep the tool to place several'], ['Shift while resizing', 'Keep its shape'], ['Ctrl while dragging', 'Turn off snapping'], ['Shift while rotating', 'Turn in 15 degree steps']]],
@@ -1699,7 +1766,9 @@ function outlineStroke() {
     try {
       if (e.type === 'pen' && shaped(e.brush)) { const sp = B.refitRing(brushOutline(e.pts, e.sw || BRUSHES[e.brush].width, e.brush).map(q => [e.x + q[0], e.y + q[1]])); subs = sp ? [sp] : []; }
       else {
-        exact = X.outlineStroke(B.outlineOf(e), width, e.type === 'path' ? e.cap || 'round' : 'round', e.type === 'path' ? e.join || 'round' : 'round');
+        // A width profile outlines as its tapered shape; otherwise the engine outlines the even stroke.
+        if (e.type === 'path' && e.profile) subs = V.worldPaths(e).map(sp => B.refitRing(profileOutline(V.flatten(sp, 0.75), width, e.profile))).filter(Boolean);
+        else exact = X.outlineStroke(B.outlineOf(e), width, e.type === 'path' ? e.cap || 'round' : 'round', e.type === 'path' ? e.join || 'round' : 'round');
         subs = exact || B.subsOfRegion(B.strokeRegion(B.outlineOf(e), width, 0.75));
       }
     } catch (err) { continue; }
@@ -1883,7 +1952,7 @@ function layerEditor(e, kind, num) {
     editor = h('div', { class: 'peditor' },
       h('div', { class: 'seg', role: 'group', 'aria-label': 'Paint type' }, [['solid', 'Solid'], ['linear', 'Linear'], ['radial', 'Radial']].map(([k, l]) => h('button', { 'aria-pressed': String(g ? g.kind === k : k === 'solid'), onclick: () => setKind(k) }, l))),
       !g ? h('div', { class: 'row' }, colorIn(p, v => put(chosen, v), 'Color'), h('span', { class: 'hint' }, 'Any color')) : [
-        g.kind === 'linear' ? num('grad-angle', 'Angle', 'Gradient angle in degrees', () => Math.round(g.angle) + '°', v => put(chosen, { ...g, angle: ((Math.round(v) % 360) + 360) % 360 })) : null,
+        g.kind === 'linear' ? num('grad-angle', 'Angle', 'Gradient angle in degrees', () => Math.round(g.angle) + '°', v => put(chosen, PT.byAngle(g, ((Math.round(v) % 360) + 360) % 360))) : null,
         ...g.stops.map(([o, col], si) => h('div', { class: 'stop' },
           colorIn(col, v => { const st = g.stops.map(x => [...x]); st[si][1] = v; put(chosen, { ...g, stops: st }); }, `Stop ${si + 1} color`),
           num('grad-stop-' + si, 'At', `Stop ${si + 1} position in percent`, () => Math.round(o * 100) + '%', v => { const st = g.stops.map(x => [...x]); st[si][0] = Math.max(0, Math.min(1, v / 100)); put(chosen, { ...g, stops: st }); }),
@@ -1911,7 +1980,9 @@ function toVector(list) {
     const subs = e.type === 'rect' ? V.rectPath(e.w, e.h, Math.min(10, e.w / 4, e.h / 4)) : e.type === 'ellipse' ? V.ellipsePath(e.w, e.h) : e.type === 'diamond' ? V.diamondPath(e.w, e.h) : [V.smoothThrough(V.simplify(e.pts, 1.2))];
     const nv = { id: e.id, type: 'path', z: e.z, x: e.x, y: e.y, w: e.w, h: e.h };
     for (const key of ['rot', 'g', 'dash']) if (e[key] != null) nv[key] = e[key];
-    if (e.type === 'pen') { if (e.stroke) nv.stroke = e.stroke; nv.sw = e.sw || 2.5; }
+    // Brush and pencil strokes are shaped by pressure, so they become filled outlines and keep that shape.
+    if (e.type === 'pen' && shaped(e.brush)) { const ring = B.refitRing(brushOutline(e.pts, e.sw || BRUSHES[e.brush].width, e.brush)); if (ring) subs.splice(0, subs.length, ring); nv.fill = e.stroke || '#17202d'; nv.stroke = 'none'; }
+    else if (e.type === 'pen') { if (e.stroke) nv.stroke = e.stroke; nv.sw = e.sw || 2.5; }
     else { nv.fill = e.fill || '#ffffff'; nv.stroke = e.stroke || outlineFor(e.fill, 'light'); nv.sw = 1.5; }
     const rot = nv.rot; delete nv.rot;
     V.setWorldPaths(nv, V.mapPaths(subs, (x, y) => [e.x + x, e.y + y]));

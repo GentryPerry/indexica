@@ -33,6 +33,25 @@ export function brushOutline(pts: number[][], size: number, kind: Brush, last = 
   });
 }
 
+/** Width profiles for vector strokes: even, tapered at both ends, or at one end. */
+export type Profile = 'taper' | 'start' | 'end';
+export const PROFILES: [string, string][] = [['', 'Even width'], ['taper', 'Tapered'], ['start', 'Taper start'], ['end', 'Taper end']];
+
+/**
+ * The outline of a stroke of `size` along a polyline with a width profile, like a pressure stroke
+ * drawn with a pen: tapered ends narrow to a point over about a third of the length.
+ */
+export function profileOutline(pts: number[][], size: number, profile: Profile): number[][] {
+  if (pts.length < 2) return [];
+  let len = 0; for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  const taper = Math.max(size * 3, len * 0.35);
+  return getStroke(pts.map(p => [p[0], p[1], 0.5]), {
+    size, last: true, thinning: 0, smoothing: 0.5, streamline: 0, simulatePressure: false,
+    start: { taper: profile === 'taper' || profile === 'start' ? taper : 0, cap: true },
+    end: { taper: profile === 'taper' || profile === 'end' ? taper : 0, cap: true },
+  });
+}
+
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
 /** SVG path data for an outline polygon, smoothed through midpoints and offset by (ox, oy). */

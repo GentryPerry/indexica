@@ -5,7 +5,15 @@
 import { adjust } from './palette';
 import type { El } from './types';
 
-export interface Gradient { kind: 'linear' | 'radial'; angle: number; stops: [number, string][] }
+/**
+ * A gradient across the shape's box. Linear gradients run along `angle`, or between `from` and `to`
+ * once their handles are dragged on the canvas; radial gradients spread from `center` out to
+ * `radius`. Points and the radius are fractions of the box (0 to 1).
+ */
+export interface Gradient {
+  kind: 'linear' | 'radial'; angle: number; stops: [number, string][];
+  from?: [number, number]; to?: [number, number]; center?: [number, number]; radius?: number;
+}
 /** A color ('' means the default ink), or a gradient. */
 export type Paint = string | Gradient;
 export interface StrokeLayer { paint: Paint; width: number }
@@ -28,6 +36,31 @@ export function strokeLayers(e: El): StrokeLayer[] {
 export function linearEnds(angle: number): { x1: number; y1: number; x2: number; y2: number } {
   const a = (angle * Math.PI) / 180, c = Math.cos(a) / 2, s = Math.sin(a) / 2, r = (v: number) => Math.round(v * 1000) / 1000;
   return { x1: r(0.5 - c), y1: r(0.5 - s), x2: r(0.5 + c), y2: r(0.5 + s) };
+}
+
+const r3 = (v: number) => Math.round(v * 1000) / 1000;
+/** Where a gradient sits in its box: the line of a linear one, or the circle of a radial one. */
+export function gradientGeom(g: Gradient): { x1: number; y1: number; x2: number; y2: number } | { cx: number; cy: number; r: number } {
+  if (g.kind === 'radial') { const [cx, cy] = g.center || [0.5, 0.5]; return { cx: r3(cx), cy: r3(cy), r: r3(g.radius ?? 0.5) }; }
+  if (g.from && g.to) return { x1: r3(g.from[0]), y1: r3(g.from[1]), x2: r3(g.to[0]), y2: r3(g.to[1]) };
+  return linearEnds(g.angle);
+}
+/** A gradient with one handle moved to a box point: `from`/`to` for linear, `center`/`edge` for radial. */
+export function moveHandle(g: Gradient, which: 'from' | 'to' | 'center' | 'edge', x: number, y: number): Gradient {
+  const geo = gradientGeom(g), p: [number, number] = [r3(x), r3(y)];
+  if (g.kind === 'radial') {
+    const c = 'cx' in geo ? [geo.cx, geo.cy] : [0.5, 0.5];
+    return which === 'center' ? { ...g, center: p } : { ...g, radius: r3(Math.max(0.02, Math.hypot(x - c[0], y - c[1]))) };
+  }
+  const l = 'x1' in geo ? geo : linearEnds(g.angle);
+  const from: [number, number] = which === 'from' ? p : [l.x1, l.y1], to: [number, number] = which === 'to' ? p : [l.x2, l.y2];
+  const angle = Math.round((Math.atan2(to[1] - from[1], to[0] - from[0]) * 180) / Math.PI);
+  return { ...g, from, to, angle };
+}
+/** The same gradient laid out by its angle again (what the angle control sets). */
+export function byAngle(g: Gradient, angle: number): Gradient {
+  const { from: _f, to: _t, ...rest } = g; void _f; void _t;
+  return { ...rest, angle };
 }
 
 /** A gradient from a color to a lighter version of it. */
