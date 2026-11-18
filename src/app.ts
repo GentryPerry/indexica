@@ -34,6 +34,7 @@ import * as PT from './paint';
 import * as PO from './pathops';
 import * as PG from './presetgeom';
 import * as CH from './chart';
+import * as LOD from './lod';
 import * as X from './exact';
 import * as LB from './livebool';
 import * as VE from './vecerase';
@@ -312,15 +313,27 @@ const HL_COLORS = ['#f5c518', '#7ee0a1', '#8fc7ff', '#ff9ec7', '#ffb27a'];
 let kanban = false, miniOn = true, miniState = null, miniDrag = false, mini = null;
 let cv, vp, ov, C = {};
 const E = id => board.els[id];
-const all = () => Object.values(board.els);
-const sorted = () => all().sort((a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - b.z || (a.boolIn ? 1 : 0) - (b.boolIn ? 1 : 0) : a.type === 'frame' ? -1 : 1);
+// While a draw runs the set of pieces cannot change, so the piece list and drawing order are worked
+// out once per draw (Object.values over a big board costs milliseconds each time).
+let frameAll = null, frameSorted = null;
+const all = () => frameAll ? frameAll.slice() : Object.values(board.els);
+const sortedFresh = () => all().sort((a, b) => (a.type === 'frame') === (b.type === 'frame') ? a.z - b.z || (a.boolIn ? 1 : 0) - (b.boolIn ? 1 : 0) : a.type === 'frame' ? -1 : 1);
+const sorted = () => frameSorted ? frameSorted.slice() : sortedFresh();
 const topZ = () => all().reduce((m, e) => Math.max(m, e.z), 0);
 const selEls = () => [...sel].map(E).filter(Boolean);
 const group = id => { const e = E(id); return e && e.g ? all().filter(x => x.g === e.g).map(x => x.id) : [id]; };
 
-function commit() { if (hist.commit(board.els)) queueSave(); refresh(); }
+/** Bumped on every committed edit and undo step, so views that only depend on content can skip camera moves. */
+let editVer = 0;
+function commit() { editVer++; if (hist.commit(board.els)) queueSave(); refresh(); }
+/** Commits a change known to touch only these pieces, plus connectors on them and live booleans. */
+function commitIds(ids) {
+  const set = new Set(ids);
+  for (const e of all()) if ((e.type === 'conn' && (set.has(e.a) || set.has(e.b))) || e.live || (e.boolIn && set.has(e.boolIn))) set.add(e.id);
+  editVer++; if (hist.commit(board.els, set)) queueSave(); refresh();
+}
 function travel(dir) {
-  const gone = hist.step(board.els, dir); if (!gone) return;
+  const gone = hist.step(board.els, dir); if (!gone) return; editVer++;
   LB.trust(board.els, liveSeen);
   gone.forEach(id => sel.delete(id)); edFor = null; queueSave(); refresh();
 }
@@ -332,7 +345,16 @@ function saveNow() {
 }
 
 /* ---------- Text and geometry helpers ---------- */
-const ends = c => G.ends(c, E), bbox = e => G.bbox(e, E), bounds = list => G.bounds(list, E);
+// Connector bounds need the routed line; during a draw they are worked out once per connector.
+let frameBox = null;
+/** A box sure to hold a piece, cheap for connectors (their ends plus room for curves and bends), for culling. */
+function cullBox(e) {
+  if (e.type !== 'conn') return e.rot ? G.bbox(e, E) : e;
+  const [p, q] = ends(e), m = 160;
+  return { x: Math.min(p.x, q.x) - m, y: Math.min(p.y, q.y) - m, w: Math.abs(p.x - q.x) + 2 * m, h: Math.abs(p.y - q.y) + 2 * m };
+}
+const ends = c => G.ends(c, E), bounds = list => G.bounds(list, E);
+const bbox = e => { if (!frameBox || e.type !== 'conn') return G.bbox(e, E); let b = frameBox.get(e.id); if (!b) { b = G.bbox(e, E); frameBox.set(e.id, b); } return b; };
 
 /* ---------- Rendering ---------- */
 // Cables swing when their ends move. `mids` remembers where each cable was; `sways` holds the ones still moving.
@@ -347,7 +369,7 @@ function slideAt(e, slides = all().filter(f => f.type === 'frame' && f.slide)) {
 }
 /** For text sitting on a frame with a background: that background as painted, so default text reads on it. */
 function underFn(els, theme) {
-  const frames = Object.values(els || {}).filter(f => f.type === 'frame' && f.fill).sort((a, b) => a.w * a.h - b.w * b.h);
+  const frames = (board && els === board.els ? all() : Object.values(els || {})).filter(f => f.type === 'frame' && f.fill).sort((a, b) => a.w * a.h - b.w * b.h);
   if (!frames.length) return undefined;
   return e => { if (e.type !== 'text') return undefined; const cx = e.x + e.w / 2, cy = e.y + e.h / 2, f = frames.find(f => cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h); return f ? paintFill(f.fill, theme) : undefined; };
 }
@@ -361,7 +383,7 @@ function nameOf(id) {
 }
 const footFn = f => DK.footerPieces(f, DK.themeById(f.theme), DK.footDate());
 /** A page's chart colors: its deck theme's six accents. */
-const accentsOf = els => { const t = DK.pageTheme(els).colors; return [t.accent1, t.accent2, t.accent3, t.accent4, t.accent5, t.accent6]; };
+const accentsOf = els => { const t = DK.pageTheme(board && els === board.els ? all() : els).colors; return [t.accent1, t.accent2, t.accent3, t.accent4, t.accent5, t.accent6]; };
 const rctx = (exp, els = board ? board.els : {}) => ({ exp, nameOf, foot: footFn, accents: () => accentsOf(els), zoom: exp ? 1 : cam.z, under: underFn(els, exp ? 'light' : C.theme), accent: exp ? '#2447d6' : C.accentFill, ...(exp ? LIGHT : { theme: C.theme, ink: C.ink, muted: C.muted, line: C.line, canvas: C.canvas, frame: C.frame, frameLine: C.frameLine }), hideId: exp ? null : editing, editCell: exp ? null : editCell, get: E, sway: exp ? undefined : id => sways.get(id), image: id => images.get(id) });
 // Pictures are stored one per storage document and cached here by id as data URLs.
 const images = new Map();
@@ -444,7 +466,7 @@ function onPaste(ev) {
 
 function trackCables() {
   const seen = new Set();
-  for (const e of all()) if (e.type === 'conn' && e.style === 'cable') {
+  for (const e of (cc && cc.ver === editVer ? cc.cables : all())) if (e.type === 'conn' && e.style === 'cable') {
     const [p, q] = G.ends(e, E, 0), mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }, last = mids.get(e.id); seen.add(e.id); mids.set(e.id, mid);
     if (last && !calm && (last.x !== mid.x || last.y !== mid.y)) sways.set(e.id, kick(sways.get(e.id) || still(), mid.x - last.x, mid.y - last.y));
   }
@@ -471,7 +493,52 @@ function selectedOperandAt(p) {
   const roots = panelEls(); if (roots.length !== 1 || !roots[0].boolIn || roots[0].locked) return null;
   return LB.contains(roots[0], p.x, p.y) ? roots[0] : null;
 }
+/**
+ * What a draw needs from the board's content, kept until the next edit: the piece list, the drawing
+ * order, and a grid index of where pieces are. Edits bump editVer; the piece count catches anything
+ * added or removed before its commit. Pieces moving right now (the selection, what a drag carries,
+ * connectors on them, live booleans) are drawn from their current place whatever the index says.
+ */
+let cc = null;
+const STEADY = new Set(['drag', 'resize', 'rotate', 'grotate', 'gscale', 'pan', 'cpan', 'adjh', 'marquee', 'colsz', 'grad']);
+function contentCache() {
+  // Gestures that only move pieces cannot add or remove any, so the count check (itself a full scan) is skipped while they run.
+  if (cc && cc.ver === editVer && cc.els === board.els && mode && STEADY.has(mode.k)) return cc;
+  const n = Object.keys(board.els).length;
+  if (cc && cc.ver === editVer && cc.els === board.els && cc.n === n) return cc;
+  frameAll = null; frameSorted = null;
+  const list = Object.values(board.els);
+  frameAll = list;
+  const order = sortedFresh(), idx = new LOD.GridIndex();
+  frameBox = frameBox || new Map();
+  for (const e of order) idx.add(e.id, cullBox(e));
+  cc = { ver: editVer, els: board.els, n, list, order, idx, cables: list.filter(e => e.type === 'conn' && e.style === 'cable'), live: list.filter(e => e.live) };
+  return cc;
+}
+/** Ids whose place may differ from the index right now. */
+function movingIds() {
+  const ids = new Set(sel);
+  if (mode && mode.start) for (const e of mode.start) ids.add(e.id);
+  if (mode && mode.e) ids.add(mode.e.id);
+  if (editing) ids.add(editing);
+  if (!ids.size && !cc.live.length) return ids;
+  for (const e of cc.live) { ids.add(e.id); }
+  for (const e of cc.order) if (e.type === 'conn' && (ids.has(e.a) || ids.has(e.b))) ids.add(e.id);
+  return ids;
+}
+/** Pieces meeting a box, in drawing order, including anything moving. */
+function piecesIn(box) {
+  const c = contentCache(), hit = c.idx.query(box), moving = movingIds(), out = [];
+  for (const e of c.order) if (hit.has(e.id) || moving.has(e.id)) out.push(e);
+  for (const id of moving) { const e = E(id); if (e && !c.idx.box(id)) out.push(e); }
+  return out;
+}
 function draw() {
+  frameBox = new Map();
+  const c = contentCache(); frameAll = c.list; frameSorted = c.order;
+  try { drawFrame(); } finally { frameAll = frameSorted = frameBox = null; }
+}
+function drawFrame() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
   C = { theme: v('color-scheme') === 'dark' ? 'dark' : 'light', ink: v('--ink'), muted: v('--muted'), line: v('--conn'), accent: v('--accent'), accentFill: v('--accent-fill'), canvas: v('--canvas'), frame: v('--frame'), frameLine: v('--frame-line'), dot: v('--dot') };
   trackCables();
@@ -480,11 +547,13 @@ function draw() {
   // Far out, paper shadows and tiny text cost more to paint than they show: drop them below set zooms.
   vp.classList.toggle('far', cam.z < 0.35); vp.classList.toggle('very-far', cam.z < 0.16);
   dotGrid();
-  LB.syncLive(board.els, liveSeen);
+  LB.syncLive(board.els, liveSeen, cc.live);
+  frameBox.clear();
   const changed = drawEls(rctx(false));
   drawOverlay();
   const zv = $('#zoomt'); if (zv) zv.textContent = Math.round(cam.z * 100) + '%';
-  drawMini(changed);
+  // The minimap's pieces follow edits and drags, not the camera.
+  drawMini(changed && (miniVer !== editVer || !!mode)); miniVer = editVer;
 }
 /**
  * Drawing only what changed, on screen. Each piece's SVG is kept with a signature of everything it
@@ -496,9 +565,62 @@ function draw() {
 const drawn = new Map();
 let drawnKey = '', drawnIds = '';
 const geo = x => x ? [x.type, x.x, x.y, x.w, x.h, x.rot, x.paths, x.pts, x.shape, x.style] : null;
+let lodCv = null, lodOn = false, lodIdx = null, lodOrder = [], farVer = -1;
+const lodImgs = new Map();
+/** A decoded picture for the far view (an Image made once per picture). */
+function lodImage(src) {
+  const href = images.get(src); if (!href) return undefined;
+  let im = lodImgs.get(src);
+  if (!im || im.src !== href) { im = new Image(); im.onload = () => { if (lodOn) draw(); }; im.src = href; lodImgs.set(src, im); }
+  return im.complete && im.naturalWidth ? im : undefined;
+}
+/**
+ * The far view: below LOD_ZOOM every piece is drawn simplified into one canvas, culled through a grid
+ * index that also answers clicks. Returns true while it is on.
+ */
+let farCache = null, farTimer = 0;
+function drawFar() {
+  if (!lodCv) return false;
+  const r = cvBox(), dpr = window.devicePixelRatio || 1, W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (lodCv.width !== W || lodCv.height !== H) { lodCv.width = W; lodCv.height = H; farCache = null; }
+  const g = lodCv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
+  lodOn = cam.z < LOD.LOD_ZOOM && !kanban;
+  if (!lodOn) { lodIdx = null; farCache = null; return false; }
+  const view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z };
+  // Camera moves reuse the last picture (with a margin around the view) until the pointer rests, then
+  // the view is drawn afresh: panning and zooming cost a single image copy per frame.
+  const key = [editVer, C.theme, editing, mode && mode.k !== 'pan' ? Math.random() : '', PG.presetsReady(), lodImgs.size].join('|'), fc = farCache;
+  const ratio = fc ? cam.z / fc.z : 0;
+  const inside = fc && view.x >= fc.wx && view.y >= fc.wy && view.x + view.w <= fc.wx + fc.ww && view.y + view.h <= fc.wy + fc.wh;
+  if (!fc || fc.key !== key || fc.fresh === false && !inside || ratio < 0.5 || ratio > 2 || !inside) farRender(view, dpr, key);
+  else { clearTimeout(farTimer); farTimer = setTimeout(() => { if (farCache) farCache.key = ''; drawSoon(); }, 140); }
+  const c = farCache, k = dpr * cam.z;
+  g.drawImage(c.cv, dpr * cam.x + c.wx * k, dpr * cam.y + c.wy * k, c.ww * k, c.wh * k);
+  LOD.drawFrameNames(g, c.frames, cam, dpr, C.muted);
+  return true;
+}
+/** Draws the far view into an offscreen picture covering the view plus a margin, and indexes the board. */
+function farRender(view, dpr, key) {
+  const m = 0.25, wx = view.x - view.w * m, wy = view.y - view.h * m, ww = view.w * (1 + 2 * m), wh = view.h * (1 + 2 * m), k = dpr * cam.z;
+  const cvs = farCache && farCache.cv || document.createElement('canvas'), W = Math.ceil(ww * k), H = Math.ceil(wh * k);
+  if (cvs.width !== W || cvs.height !== H) { cvs.width = W; cvs.height = H; }
+  const g = cvs.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
+  const list = piecesIn({ x: wx, y: wy, w: ww, h: wh }).filter(e => e.id !== editing);
+  lodIdx = cc.idx; lodOrder = cc.order;
+  g.setTransform(k, 0, 0, k, -wx * k, -wy * k);
+  LOD.drawFar(g, list, { theme: C.theme, ink: C.ink, muted: C.muted, frame: C.frame, frameLine: C.frameLine, line: C.line, card: SURFACE[C.theme].card }, { get: E, bbox, image: lodImage }, 1 / cam.z);
+  farCache = { cv: cvs, wx, wy, ww, wh, z: cam.z, key, frames: list.filter(e => e.type === 'frame') };
+}
 function drawEls(rc) {
   const key = [C.theme, C.ink, C.muted, C.line, C.accentFill, C.frame, editing, editCell && editCell.join(), PG.presetsReady()].join('|');
   if (key !== drawnKey) { drawn.clear(); drawnKey = key; }
+  if (drawFar()) {
+    // Far view: the SVG layer keeps only the piece being typed in.
+    const keep = editing && E(editing) ? [renderEl(E(editing), rc)] : [];
+    // Camera moves alone leave the minimap's pieces as they were; edits and drags still refresh them.
+    const changed = drawnIds !== 'far' || farVer !== editVer || !!mode; farVer = editVer;
+    vp.replaceChildren(...keep); drawnIds = 'far'; return changed;
+  }
   const r = cvBox(), pad = 120 / cam.z;
   const view = { x: -cam.x / cam.z - pad, y: -cam.y / cam.z - pad, w: r.width / cam.z + 2 * pad, h: r.height / cam.z + 2 * pad };
   const nodes = [], ids = [];
@@ -508,11 +630,11 @@ function drawEls(rc) {
   const rcL = slides.length ? { ...rc, ...LIGHT, under: underFn(board.els, 'light') } : rc;
   const onSlide = e => slides.length && e.type !== 'frame' && !!slideAt(e, slides);
   let changed = false;
-  for (const e of sorted()) {
-    if (e.id !== editing) {
-      // Curved lines can bow past their ends, and frame labels sit above the frame.
-      const b = bbox(e), m = e.type === 'conn' ? 120 : 0, top = e.type === 'frame' ? 48 / cam.z : 0;
-      if (b.x - m > view.x + view.w || b.x + b.w + m < view.x || b.y - m > view.y + view.h || b.y + b.h + m < view.y - top) continue;
+  // Frame labels sit above their frames, so the query reaches a little higher.
+  for (const e of piecesIn({ x: view.x, y: view.y - 48 / cam.z, w: view.w, h: view.h + 48 / cam.z })) {
+    if (e.id !== editing && e.type !== 'conn') {
+      const b = e.rot ? G.bbox(e, E) : e, top = e.type === 'frame' ? 48 / cam.z : 0;
+      if (b.x > view.x + view.w || b.x + b.w < view.x || b.y > view.y + view.h || b.y + b.h < view.y - top) continue;
     }
     let dep = '';
     if (e.type === 'conn') dep = rc.sway && rc.sway(e.id) ? null : JSON.stringify([geo(E(e.a)), geo(E(e.b))]);
@@ -548,17 +670,20 @@ function dotGrid() {
   let fine = 24; while (fine * cam.z < 10) fine *= 4;
   const f = fine * cam.z, c = f * 4, a = Math.max(0, Math.min(1, (f - 10) / 14)), rgb = hexRgb(C.dot);
   const dot = (alpha, r) => `radial-gradient(circle at 1px 1px, rgba(${rgb},${alpha}) ${r}px, rgba(${rgb},0) ${r + 0.6}px)`;
-  cv.style.backgroundImage = `${dot(a, 0.8)}, ${dot(1, 0.9)}`;
-  cv.style.backgroundSize = `${f}px ${f}px, ${c}px ${c}px`;
-  cv.style.backgroundPosition = `${cam.x - 1}px ${cam.y - 1}px`;
+  const bg = lodCv || cv;
+  bg.style.backgroundImage = `${dot(a, 0.8)}, ${dot(1, 0.9)}`;
+  bg.style.backgroundSize = `${f}px ${f}px, ${c}px ${c}px`;
+  bg.style.backgroundPosition = `${cam.x - 1}px ${cam.y - 1}px`;
 }
 const hexRgb = hex => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return '150,160,175'; const n = parseInt(m[1], 16); return `${n >> 16},${(n >> 8) & 255},${n & 255}`; };
 function centerOn(e) { const r = cvBox(), b = bbox(e); cam.x = r.width / 2 - (b.x + b.w / 2) * cam.z; cam.y = r.height / 2 - (b.y + b.h / 2) * cam.z; }
-let miniPieces = null, miniSig = '', miniDirty = true, miniAt = 0;
+let miniVer = -1, miniPieces = null, miniSig = '', miniDirty = true, miniAt = 0, miniBounds = null, miniBoundsVer = -1;
 function drawMini(changed = true) {
   if (changed) miniDirty = true;
   const el = $('#mini'); if (!el || !mini) return; el.hidden = !miniOn || kanban; if (el.hidden) return;
-  const r = cvBox(), view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z }, content = bounds(all());
+  const r = cvBox(), view = { x: -cam.x / cam.z, y: -cam.y / cam.z, w: r.width / cam.z, h: r.height / cam.z };
+  if (miniBoundsVer !== editVer || !miniBounds || (mode && performance.now() - miniAt > 200)) { miniBounds = { b: bounds(all()) }; miniBoundsVer = editVer; }
+  const content = miniBounds.b;
   // While the map is being dragged the scale is frozen, so the board does not slide under the pointer.
   if (!miniDrag || !miniState) miniState = miniFit(content ? union(content, view) : view, 144, 96);
   const m = miniState, box = b => ({ x: b.x * m.k + m.ox, y: b.y * m.k + m.oy, width: Math.max(b.w * m.k, 1.5), height: Math.max(b.h * m.k, 1.5) });
@@ -568,8 +693,18 @@ function drawMini(changed = true) {
   const due = !mode || performance.now() - miniAt > 200;
   if ((miniDirty && due) || !miniPieces || ms !== miniSig) {
     miniSig = ms; miniDirty = false; miniAt = performance.now();
-    miniPieces = s('g', null, ...sorted().filter(e => e.type !== 'conn' && e.type !== 'pen' && !e.boolIn).map(e => s('rect', { ...box(bbox(e)), rx: 1,
-      fill: e.type === 'frame' ? 'none' : e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? C.frame : paintFill(e.fill, C.theme) || C.muted, 'fill-opacity': e.type === 'text' ? 0.5 : 1, stroke: e.type === 'frame' ? C.frameLine : 'rgba(0,0,0,.15)', 'stroke-width': 0.75 })));
+    // The pieces are painted into one small bitmap: thousands of SVG rects here cost more than the board.
+    const mc = document.createElement('canvas'); mc.width = 288; mc.height = 192;
+    const g = mc.getContext('2d'); g.scale(2, 2);
+    for (const e of sorted()) {
+      if (e.type === 'conn' || e.type === 'pen' || e.boolIn) continue;
+      const b = box(bbox(e));
+      if (e.type === 'frame') { g.strokeStyle = C.frameLine; g.lineWidth = 0.75; g.strokeRect(b.x, b.y, b.width, b.height); continue; }
+      g.globalAlpha = e.type === 'text' ? 0.5 : 1;
+      g.fillStyle = e.type === 'card' ? STATUS[e.status][1] : e.type === 'table' ? C.frame : paintFill(e.fill, C.theme) || C.muted;
+      g.fillRect(b.x, b.y, b.width, b.height);
+    }
+    miniPieces = s('image', { x: 0, y: 0, width: 144, height: 96, href: mc.toDataURL() });
   }
   mini.replaceChildren(miniPieces, s('rect', { ...box(view), rx: 2, fill: C.accent, 'fill-opacity': 0.1, stroke: C.accent, 'stroke-width': 1.5 }));
 }
@@ -694,7 +829,11 @@ function moveSet() {
   for (const f of selEls()) if (f.type === 'frame' && !f.locked) for (const e of all()) if (e.type !== 'conn' && e.type !== 'frame' && !e.locked && e.x >= f.x && e.y >= f.y && e.x + e.w <= f.x + f.w && e.y + e.h <= f.y + f.h) move.add(e.id);
   return move;
 }
-const otherBoxes = skip => all().filter(e => e.type !== 'conn' && !skip.has(e.id)).map(bbox);
+/** Snap candidates: pieces within a screen of the view (snapping to what you cannot see helps no one, and a big board would make every move scan everything). */
+const otherBoxes = skip => {
+  const r = cvBox(), vw = r.width / cam.z, vh = r.height / cam.z, v = { x: -cam.x / cam.z - vw, y: -cam.y / cam.z - vh, w: vw * 3, h: vh * 3 };
+  return all().filter(e => e.type !== 'conn' && !skip.has(e.id) && e.x <= v.x + v.w && e.x + e.w >= v.x && e.y <= v.y + v.h && e.y + e.h >= v.y).map(bbox);
+};
 /** Pink measuring lines with end ticks for equal gaps. */
 function gapMarks(gaps) {
   if (!gaps || !gaps.length) return null; const k = 1 / cam.z, t = 4 * k;
@@ -723,7 +862,7 @@ function removeSel() {
   sel.clear(); commit();
 }
 function pasteEls(src, dx, dy = dx, quiet = false) {
-  const map = {}, gmap = {}; let z = topZ(); sel.clear();
+  const map = {}, gmap = {}; let z = topZ(); sel.clear(); editVer++;
   for (const o of src) map[o.id] = uid('e');
   for (const o of src) {
     const e = clone(o); e.id = map[o.id]; e.z = ++z; delete e.locked;
@@ -795,10 +934,13 @@ function arrange(kind) {
   if (kind === 'unlock') list.forEach(e => { delete e.locked; });
   commit();
 }
-function zoomAt(f, sx, sy) {
+/** One redraw per frame for streams of pan and zoom events. */
+let drawQueued = false;
+function drawSoon() { if (drawQueued) return; drawQueued = true; requestAnimationFrame(() => { drawQueued = false; if (board) { draw(); placeEditor(); } }); }
+function zoomAt(f, sx, sy, soon = false) {
   const r = cvBox(); if (sx == null) { sx = r.width / 2; sy = r.height / 2; }
   const z = Math.min(4, Math.max(0.1, cam.z * f)), k = z / cam.z;
-  cam.x = sx - (sx - cam.x) * k; cam.y = sy - (sy - cam.y) * k; cam.z = z; draw(); placeEditor();
+  cam.x = sx - (sx - cam.x) * k; cam.y = sy - (sy - cam.y) * k; cam.z = z; if (soon) drawSoon(); else { draw(); placeEditor(); }
 }
 function fit(list) {
   const r = cvBox(), b = bounds(list || all());
@@ -1115,12 +1257,20 @@ function cvBox() {
 }
 addEventListener('resize', () => { cvRect = null; });
 function pt(ev) { const r = cvBox(), sx = ev.clientX - r.left, sy = ev.clientY - r.top; return { sx, sy, x: (sx - cam.x) / cam.z, y: (sy - cam.y) / cam.z }; }
-function idAt(target) { const g = target && target.closest && target.closest('[data-id]'); return g ? g.getAttribute('data-id') : null; }
+function idAt(target, ev) {
+  const g = target && target.closest && target.closest('[data-id]');
+  if (g) return g.getAttribute('data-id');
+  // In the far view there are no SVG nodes to hit: pick the topmost piece under the pointer from the index.
+  if (lodOn && ev && lodIdx && !(target && target.closest && target.closest('[data-h],[data-ph-act]'))) {
+    const p = pt(ev), e = LOD.pickAt(lodOrder, lodIdx, p.x, p.y, 3 / cam.z); return e ? e.id : null;
+  }
+  return null;
+}
 function onDown(ev) {
   closeMenu(); if (ev.button === 2) return;
   const act = document.activeElement; if (act && act !== document.body && act.blur) act.blur();
   if (editing) endEdit();
-  const p = pt(ev), now = Date.now(); let id = idAt(ev.target); hoverId = null;
+  const p = pt(ev), now = Date.now(); let id = idAt(ev.target, ev); hoverId = null;
   const dbl = now - lastDown.t < 350 && Math.hypot(ev.clientX - lastDown.x, ev.clientY - lastDown.y) < 6; lastDown = { t: dbl ? 0 : now, x: ev.clientX, y: ev.clientY };
   cv.setPointerCapture(ev.pointerId);
   if (ev.button === 1 || spaceDown) { mode = { k: 'pan', sx: ev.clientX, sy: ev.clientY, cx: cam.x, cy: cam.y }; return; }
@@ -1210,7 +1360,7 @@ function hoverAt(ev) {
     const p = pt(ev), roots = panelEls(), one = roots.length === 1 ? roots[0] : null;
     const level = one && one.live ? one : one && one.boolIn && sel.size ? E(one.boolIn) : null;
     if (level) { const o = LB.operandAt(board.els, level.id, p.x, p.y); if (o && !sel.has(o.id) || (o && o.live)) id = o.id; }
-    if (!id) { const d = idAt(ev.target); if (d && !sel.has(d)) id = d; }
+    if (!id) { const d = idAt(ev.target, ev); if (d && !sel.has(d)) id = d; }
   }
   if (id !== hoverId) { hoverId = id; drawOverlay(); }
 }
@@ -1227,7 +1377,7 @@ function onMove(ev) {
   if (!mode) { if (tool === 'conn' && board) { const p = pt(ev), t = targetAt(p); drawOverlay(t ? s('g', null, targetMarks(t, sideAt(t, p))) : null); } else hoverAt(ev); return; }
   edgeScroll(ev);
   const p = pt(ev), k = 1 / cam.z;
-  if (mode.k === 'pan') { cam.x = mode.cx + ev.clientX - mode.sx; cam.y = mode.cy + ev.clientY - mode.sy; draw(); }
+  if (mode.k === 'pan') { cam.x = mode.cx + ev.clientX - mode.sx; cam.y = mode.cy + ev.clientY - mode.sy; drawSoon(); }
   else if (mode.k === 'vhandle') {
     // Dragging while placing a node pulls out its handles; Alt pulls only the outgoing one.
     const n = mode.n; if (Math.hypot(ev.clientX - mode.sx, ev.clientY - mode.sy) < 3 && n.ox == null) return;
@@ -1318,7 +1468,7 @@ function onUp(ev) {
   if (!mode) return; const m = mode, p = pt(ev); mode = null;
   if (m.k === 'vhandle') { drawDraft(); return; }
   if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
-  if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else if (sel.size === 1 && emptyPh(E(m.id))) phClick(E(m.id)); else drawOverlay(); }
+  if (m.k === 'drag') { if (m.dup) commit(); else if (m.moved) commitIds(m.start.map(e => e.id)); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else if (sel.size === 1 && emptyPh(E(m.id))) phClick(E(m.id)); else drawOverlay(); }
   else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale' || m.k === 'cpan' || m.k === 'adjh') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
@@ -1467,6 +1617,8 @@ async function openBoard(id) {
       s('feDropShadow', { dx: 0, dy: 0.5, stdDeviation: 0.6, style: 'flood-color:var(--sh-c);flood-opacity:var(--sh-a1)' }),
       s('feDropShadow', { dx: 0, dy: 3, stdDeviation: 4, style: 'flood-color:var(--sh-c);flood-opacity:var(--sh-a2)' }))));
   vp = s('g'); ov = s('g'); cv.append(vp, ov); $('.stage').prepend(cv);
+  // The far view draws under the SVG, and carries the dot grid.
+  lodCv = document.createElement('canvas'); lodCv.id = 'lod'; lodCv.setAttribute('aria-hidden', 'true'); $('.stage').prepend(lodCv);
   mini = s('svg', { width: 144, height: 96, 'aria-hidden': 'true' }); $('#mini').append(mini);
   mini.addEventListener('pointerdown', ev => { miniDrag = true; mini.setPointerCapture(ev.pointerId); miniGo(ev); });
   mini.addEventListener('pointermove', ev => { if (miniDrag) miniGo(ev); });
@@ -1475,7 +1627,7 @@ async function openBoard(id) {
   cv.addEventListener('dragover', ev => ev.preventDefault());
   cv.addEventListener('drop', async ev => { ev.preventDefault(); const p = pt(ev); let i = 0; for (const f of [...ev.dataTransfer.files]) await addImage(f, { x: p.x + i * 24, y: p.y + i++ * 24 }); });
   cv.addEventListener('pointerdown', onDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerleave', () => { if (hoverId) { hoverId = null; drawOverlay(); } }); cv.addEventListener('pointerup', onUp); cv.addEventListener('pointercancel', onUp);
-  cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; draw(); placeEditor(); } }, { passive: false });
+  cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy, true); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; drawSoon(); } }, { passive: false });
   fit(); refresh(); loadImages();
 }
 /* ---------- Tasks across pages ---------- */
@@ -1560,23 +1712,44 @@ function outlineIcon(e) {
       s('path', { d: V.pathD(e.paths || []), fill: e.fill && e.fill !== 'none' ? paintFill(e.fill, C.theme) : 'none', 'fill-rule': e.rule || null, stroke: e.stroke === 'none' ? 'none' : 'currentColor', 'stroke-width': 1.3, 'vector-effect': 'non-scaling-stroke' }))); }
   return h('span', { class: 'oi', 'aria-hidden': 'true' }, icon(ICON[{ conn: 'conn', pen: 'pen', image: 'image', frame: 'frame', table: 'table' }[e.type] || 'text'], 12, { 'stroke-width': 2 }));
 }
+let olRows = [], olVer = -1, olFor = null, olTheme = '', olWin = '';
+/** One outline row button. */
+function outlineRow(r) {
+  const e = E(r.id);
+  return h('button', { class: 'orow' + (r.depth ? ' sub' : '') + (r.kind === 'frame' ? ' fr' : '') + (r.kind === 'conn' ? ' dim' : '') + (e.boolIn ? ' op' : ''), 'data-id': r.id, title: r.label, style: r.depth > 1 ? `padding-left:${8 + r.depth * 20}px` : null,
+    onclick: ev => { if (editing) endEdit(); if (ev.shiftKey) { const had = sel.has(r.id); group(r.id).forEach(i => had ? sel.delete(i) : sel.add(i)); } else sel = new Set(E(r.id).boolIn ? withKids(r.id) : group(r.id)); refresh(); },
+    ondblclick: () => { const x = E(r.id); if (x) { if (x.type === 'frame') fit([x]); else centerOn(x); draw(); } } },
+    outlineIcon(e), h('span', { class: 'ol' }, r.label), e.locked ? h('span', { class: 'olock', title: 'Locked' }, icon(LOCK, 12)) : null);
+}
+/** Past this many rows the outline only builds the rows in view (a 20,000-piece board would otherwise rebuild 20,000 buttons per edit). */
+const OL_VIRTUAL = 400, OL_ROW = 30;
 function renderOutline() {
   const el = $('#olist'); if (!el) return;
-  const rows = outlineRows(all(), E), sig = rows.map(r => { const e = E(r.id); return [r.id, r.depth, r.label, e.locked ? 1 : 0, e.fill || '', e.status || ''].join('~'); }).join('|') + C.theme;
-  // Rebuild only when rows change, so a double-click on a row lands on the same element twice.
-  if (sig !== outlineSig) {
-    outlineSig = sig;
-    el.replaceChildren(...(rows.length ? rows.map(r => {
-      const e = E(r.id);
-      return h('button', { class: 'orow' + (r.depth ? ' sub' : '') + (r.kind === 'frame' ? ' fr' : '') + (r.kind === 'conn' ? ' dim' : '') + (e.boolIn ? ' op' : ''), 'data-id': r.id, title: r.label, style: r.depth > 1 ? `padding-left:${8 + r.depth * 20}px` : null,
-        onclick: ev => { if (editing) endEdit(); if (ev.shiftKey) { const had = sel.has(r.id); group(r.id).forEach(i => had ? sel.delete(i) : sel.add(i)); } else sel = new Set(E(r.id).boolIn ? withKids(r.id) : group(r.id)); refresh(); },
-        ondblclick: () => { const x = E(r.id); if (x) { if (x.type === 'frame') fit([x]); else centerOn(x); draw(); } } },
-        outlineIcon(e), h('span', { class: 'ol' }, r.label), e.locked ? h('span', { class: 'olock', title: 'Locked' }, icon(LOCK, 12)) : null);
-    }) : [h('p', { class: 'o-empty' }, 'Nothing on this board yet.')]));
+  if (olVer !== editVer || olFor !== board.els || olTheme !== C.theme) { olRows = outlineRows(all(), E); olVer = editVer; olFor = board.els; olTheme = C.theme; outlineSig = ''; }
+  const rows = olRows, big = rows.length > OL_VIRTUAL;
+  el.classList.toggle('virt', big);
+  if (!big) {
+    const sig = rows.map(r => { const e = E(r.id); return [r.id, r.depth, r.label, e.locked ? 1 : 0, e.fill || '', e.status || ''].join('~'); }).join('|') + C.theme;
+    // Rebuild only when rows change, so a double-click on a row lands on the same element twice.
+    if (sig !== outlineSig) { outlineSig = sig; olWin = ''; el.replaceChildren(...(rows.length ? rows.map(outlineRow) : [h('p', { class: 'o-empty' }, 'Nothing on this board yet.')])); }
+  } else {
+    if (!el.onscroll) el.onscroll = () => { if (el.classList.contains('virt')) renderOutline(); };
+    const key = [...sel].join();
+    if (key !== outlineKey) {
+      // Bring the first selected row into view.
+      const i = rows.findIndex(r => sel.has(r.id));
+      if (i >= 0 && (i * OL_ROW < el.scrollTop || (i + 1) * OL_ROW > el.scrollTop + el.clientHeight)) el.scrollTop = Math.max(0, i * OL_ROW - el.clientHeight / 2);
+    }
+    const from = Math.max(0, Math.floor(el.scrollTop / OL_ROW) - 12), to = Math.min(rows.length, Math.ceil((el.scrollTop + el.clientHeight) / OL_ROW) + 12);
+    const win = `${from}:${to}:${outlineSig === '' ? olVer : 'k'}`;
+    if (win !== olWin || outlineSig === '') {
+      olWin = win; outlineSig = 'virt';
+      el.replaceChildren(h('div', { class: 'ol-pad', style: `height:${from * OL_ROW}px` }), ...rows.slice(from, to).map(outlineRow), h('div', { class: 'ol-pad', style: `height:${(rows.length - to) * OL_ROW}px` }));
+    }
   }
   el.querySelectorAll('.orow').forEach(b => { const x = E(b.dataset.id), on = sel.has(b.dataset.id) && !(x && x.boolIn && sel.has(x.boolIn)); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
   const key = [...sel].join();
-  if (key !== outlineKey) { outlineKey = key; const on = el.querySelector('.orow.on'); if (on) on.scrollIntoView({ block: 'nearest' }); }
+  if (key !== outlineKey) { outlineKey = key; if (!big) { const on = el.querySelector('.orow.on'); if (on) on.scrollIntoView({ block: 'nearest' }); } }
 }
 function renderRight() {
   const d = $('#pdesign'); if (!d) return;
@@ -1896,7 +2069,7 @@ function renderKanban() {
 }
 function openMenu(ev) {
   ev.preventDefault(); if (editing) endEdit();
-  const p = pt(ev), inner = selectedOperandAt(p), id = inner ? inner.id : idAt(ev.target);
+  const p = pt(ev), inner = selectedOperandAt(p), id = inner ? inner.id : idAt(ev.target, ev);
   if (id && !sel.has(id)) { sel = new Set(group(id)); refresh(); } else if (!id && sel.size) { sel.clear(); refresh(); }
   const list = panelEls(), lv = liveOne();
   popupAt(ev.clientX, ev.clientY, id ? [

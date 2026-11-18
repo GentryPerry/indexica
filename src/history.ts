@@ -20,10 +20,14 @@ export class History {
     this.redo = [];
   }
 
-  /** Record changes since the last commit. Returns true if anything changed. */
-  commit(els: Els): boolean {
+  /**
+   * Record changes since the last commit. Returns true if anything changed. `only` limits the diff to
+   * the given ids when the caller knows nothing else changed (a drag on a big board), which skips
+   * comparing every other piece.
+   */
+  commit(els: Els, only?: Iterable<string>): boolean {
     const patches: Patch[] = [];
-    for (const id of new Set([...Object.keys(this.shadow), ...Object.keys(els)])) {
+    for (const id of only ? new Set(only) : new Set([...Object.keys(this.shadow), ...Object.keys(els)])) {
       const a = els[id] ? JSON.stringify(els[id]) : null;
       const b = this.shadow[id] ?? null;
       if (a === b) continue;

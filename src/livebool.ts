@@ -53,11 +53,12 @@ const sigOf = (result: El, operands: El[]) =>
  * Recomputes every live result whose operands (or own box) changed since the last call, inner
  * results first. `seen` remembers what each result was computed from. Returns the ids it changed.
  */
-export function syncLive(els: Els, seen: Map<string, string>): string[] {
-  const changed = new Set<string>();
+export function syncLive(els: Els, seen: Map<string, string>, list: El[] = Object.values(els)): string[] {
+  const changed = new Set<string>(), results = list.filter(e => e.live);
+  if (!results.length) return [];
   for (let pass = 0; pass < 8; pass++) {
     let any = false;
-    for (const r of Object.values(els)) {
+    for (const r of results) {
       if (!r.live) continue;
       const ops = operandsOf(els, r.id);
       if (!ops.length) continue;
