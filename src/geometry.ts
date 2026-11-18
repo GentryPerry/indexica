@@ -2,6 +2,7 @@ import { connGeom } from './connectors';
 import { colFractions } from './table';
 import { indentOf, isRich, levelRatio, markers, parasOf, spaceBefore } from './richtext';
 import { FONTS, type Box, type El, type Lookup } from './types';
+import { spansOf, type Run, type RunStyle } from './runs';
 
 export { ends } from './connectors';
 
@@ -58,18 +59,74 @@ export function wrapEl(e: El, maxW: number): string[] {
   return wrap(e.text, maxW, st.size, st.weight, st.family, st.italic);
 }
 
-/** One laid-out line of a text piece. `x` and `bx` are from the text box's left, `base` from its top. */
-export interface TLine { text: string; size: number; x: number; base: number; level: number; marker?: string; bx?: number }
+/** A stretch of a line in one style. `dx` is from the line's start; `w` is its width. */
+export interface Seg extends TextStyle { text: string; dx: number; w: number; u?: boolean; strike?: boolean; color?: string }
+/**
+ * One laid-out line of a text piece. `x` and `bx` are from the text box's left, `base` from its top.
+ * `size` is the paragraph's size (for its marker); styled lines carry `segs` and their width `w`.
+ */
+export interface TLine { text: string; size: number; x: number; base: number; level: number; marker?: string; bx?: number; segs?: Seg[]; w?: number }
+
+/** The drawing style of a run's characters, on top of a paragraph style. `sc` scales run sizes with shrink-to-fit. */
+export function runFace(st: TextStyle, r: RunStyle, sc = 1): TextStyle & { u?: boolean; strike?: boolean; color?: string } {
+  return { size: r.z ? Math.max(4, Math.round(r.z * sc * 10) / 10) : st.size, weight: r.w || st.weight, family: r.f ? (FONTS[r.f] || FONTS.sans).stack : st.family,
+    italic: r.i != null ? r.i : st.italic, ...(r.u ? { u: true } : {}), ...(r.x ? { strike: true } : {}), ...(r.c ? { color: r.c } : {}) };
+}
+
+/**
+ * Wraps one paragraph whose characters carry runs. `off` is the paragraph's offset in the piece's text.
+ * Returns line ranges [s, e) within the paragraph; the space a line breaks at is dropped, as in `wrap`.
+ */
+function wrapStyled(text: string, off: number, runs: Run[], maxW: number, face: (r: RunStyle) => TextStyle): [number, number][] {
+  const width = (a: number, b: number) => spansOf(runs, off + a, off + b).reduce((sum, p) => { const f = face(p.st); return sum + measurer(text.slice(p.s - off, p.e - off), f.size, f.weight, f.family, f.italic); }, 0);
+  const out: [number, number][] = [];
+  let ls = 0, le = -1, i = 0;
+  while (i <= text.length) {
+    let we = text.indexOf(' ', i); if (we < 0) we = text.length;
+    // A word too long for a line on its own is split between characters.
+    while (width(i, we) > maxW && we - i > 1) {
+      let k = we;
+      while (k > i + 1 && width(i, k) > maxW) k--;
+      if (le >= 0) { out.push([ls, le]); le = -1; }
+      out.push([i, k]); i = k; ls = i;
+    }
+    if (le < 0) { ls = i; le = we; }
+    else if (width(ls, we) > maxW) { out.push([ls, le]); ls = i; le = we; }
+    else le = we;
+    i = we + 1;
+  }
+  out.push([ls, Math.max(ls, le)]);
+  return out;
+}
 /** Lines of a text piece placed in a width, with paragraph levels, markers, and spacing, and its height. */
 export function layoutText(e: El, width: number): { lines: TLine[]; height: number } {
   const st = textStyle(e), ps = parasOf(e.text), marks = markers(ps, e.bullets), lsp = e.lsp || 1, lines: TLine[] = [];
-  let y = 0;
+  const runs = e.runs && e.runs.length ? e.runs : null, sc = runs ? st.size / textStyle({ ...e, fit: undefined }).size : 1;
+  let y = 0, off = 0;
   ps.forEach((p, i) => {
-    const size = Math.max(4, Math.round(st.size * levelRatio(e, p.level) * 10) / 10), lh = size * 1.3 * lsp;
-    const ind = indentOf(p.level, st.size, e.bullets);
+    const size = Math.max(4, Math.round(st.size * levelRatio(e, p.level) * 10) / 10);
+    const ind = indentOf(p.level, st.size, e.bullets), maxW = Math.max(size, width - ind.text), start = off + p.level;
+    off += p.level + p.text.length + 1;
     if (i) y += spaceBefore(e, p.level, st.size);
-    wrap(p.text, Math.max(size, width - ind.text), size, st.weight, st.family, st.italic).forEach((t, j) => {
-      lines.push({ text: t, size, x: ind.text, base: y + lh - size * 0.35, level: p.level, ...(j === 0 && marks[i] ? { marker: marks[i], bx: ind.marker } : {}) });
+    const mark = (j: number) => j === 0 && marks[i] ? { marker: marks[i], bx: ind.marker } : {};
+    if (!runs) {
+      const lh = size * 1.3 * lsp;
+      wrap(p.text, maxW, size, st.weight, st.family, st.italic).forEach((t, j) => {
+        lines.push({ text: t, size, x: ind.text, base: y + lh - size * 0.35, level: p.level, ...mark(j) });
+        y += lh;
+      });
+      return;
+    }
+    const pst = { ...st, size }, face = (r: RunStyle) => runFace(pst, r, sc);
+    wrapStyled(p.text, start, runs, maxW, face).forEach(([a, b], j) => {
+      const segs: Seg[] = [];
+      let dx = 0;
+      for (const sp of spansOf(runs, start + a, start + b)) {
+        const f = runFace(pst, sp.st, sc), text = p.text.slice(sp.s - start, sp.e - start), w = measurer(text, f.size, f.weight, f.family, f.italic);
+        segs.push({ ...f, text, dx, w }); dx += w;
+      }
+      const big = Math.max(size, ...segs.map(g => g.size)), lh = big * 1.3 * lsp;
+      lines.push({ text: p.text.slice(a, b), size, x: ind.text, base: y + lh - big * 0.35, level: p.level, segs, w: dx, ...mark(j) });
       y += lh;
     });
   });
@@ -206,7 +263,7 @@ export function fitPlaceholder(e: El) {
   if (!e.text || e.ph === 'picture') return;
   const full = textStyle(e).size;
   for (let size = full; size > 8; size = Math.max(8, Math.floor(size * 0.92))) {
-    if (textHeight({ ...e, size }, e.w - 4) + 8 <= e.h) { if (size < full) e.fit = size; return; }
+    if (textHeight({ ...e, fit: size }, e.w - 4) + 8 <= e.h) { if (size < full) e.fit = size; return; }
   }
   e.fit = 8;
 }

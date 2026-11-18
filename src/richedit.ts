@@ -5,19 +5,130 @@
  */
 import { textStyle } from './geometry';
 import { indentOf, levelRatio, markers, MAX_LEVEL, parasOf, spaceBefore, type Para } from './richtext';
-import type { El } from './types';
+import { normRuns, spansOf, type Run, type RunStyle } from './runs';
+import { FONTS, type El } from './types';
 
 const paras = (root: HTMLElement) => [...root.children] as HTMLElement[];
 const levelOf = (p: HTMLElement) => Math.max(0, Math.min(MAX_LEVEL, Number(p.dataset.l) || 0));
 
-/** Fills the editor with a text's paragraphs. */
-export function fillRich(root: HTMLElement, text: string | undefined) {
+/** A span showing a run's style. Sizes are kept in `data-z` (board px) and scaled to the zoom by `styleRich`. */
+function runSpan(doc: Document, text: string, st: RunStyle): HTMLElement {
+  const sp = doc.createElement('span');
+  if (st.w) sp.style.fontWeight = String(st.w);
+  if (st.i != null) sp.style.fontStyle = st.i ? 'italic' : 'normal';
+  const deco = [st.u ? 'underline' : '', st.x ? 'line-through' : ''].filter(Boolean).join(' ');
+  if (deco) sp.style.textDecorationLine = deco;
+  if (st.c) sp.style.color = st.c;
+  if (st.f) sp.style.fontFamily = (FONTS[st.f] || FONTS.sans).stack;
+  if (st.z) sp.dataset.z = String(st.z);
+  sp.textContent = text;
+  return sp;
+}
+
+/** Fills the editor with a text's paragraphs, with its runs as styled spans. */
+export function fillRich(root: HTMLElement, text: string | undefined, runs?: Run[]) {
+  const doc = root.ownerDocument;
+  let off = 0;
   root.replaceChildren(...parasOf(text).map(p => {
-    const el = document.createElement('p');
+    const el = doc.createElement('p'), start = off + p.level;
+    off += p.level + p.text.length + 1;
     el.dataset.l = String(p.level);
-    if (p.text) el.textContent = p.text; else el.append(document.createElement('br'));
+    if (!p.text) { el.append(doc.createElement('br')); return el; }
+    for (const sp of spansOf(runs, start, start + p.text.length)) {
+      const t = p.text.slice(sp.s - start, sp.e - start);
+      el.append(Object.keys(sp.st).length ? runSpan(doc, t, sp.st) : doc.createTextNode(t));
+    }
     return el;
   }));
+}
+
+const hex = (rgb: string) => {
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb);
+  return m ? '#' + [m[1], m[2], m[3]].map(v => Number(v).toString(16).padStart(2, '0')).join('') : rgb;
+};
+const squash = (f: string) => f.replace(/["'\s]/g, '').toLowerCase();
+const fontKey = (family: string) => Object.entries(FONTS).find(([, v]) => squash(v.stack) === squash(family))?.[0];
+const decoOf = (n: HTMLElement, stop: HTMLElement, win: Window) => {
+  let u = false, x = false;
+  for (let a: HTMLElement | null = n; a && a !== stop; a = a.parentElement) {
+    const d = win.getComputedStyle(a).textDecorationLine || '';
+    if (d.includes('underline')) u = true;
+    if (d.includes('line-through')) x = true;
+  }
+  return { u, x };
+};
+
+/**
+ * The editor's text and runs. Styles are read from what the browser shows (its own bold, italic,
+ * underline, and color commands write their own markup), compared with each paragraph's own style.
+ */
+export function readRichRuns(root: HTMLElement): { text: string; runs: Run[] } {
+  const win = root.ownerDocument.defaultView!, runs: Run[] = [], lines: string[] = [];
+  let off = 0;
+  for (const p of paras(root)) {
+    const level = levelOf(p), pcs = win.getComputedStyle(p);
+    let line = '\t'.repeat(level), at = off + level;
+    const walk = root.ownerDocument.createTreeWalker(p, 4);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const txt = (n.textContent || '').replace(/[\n\t]/g, ' ');
+      if (!txt) continue;
+      const el = n.parentElement!, cs = win.getComputedStyle(el), st: RunStyle = {};
+      const w = parseInt(cs.fontWeight, 10); if (w !== parseInt(pcs.fontWeight, 10)) st.w = w;
+      const it = cs.fontStyle === 'italic'; if (it !== (pcs.fontStyle === 'italic')) st.i = it;
+      const d = decoOf(el, p, win); if (d.u) st.u = true; if (d.x) st.x = true;
+      if (cs.color !== pcs.color) st.c = hex(cs.color);
+      if (cs.fontFamily !== pcs.fontFamily) { const k = fontKey(cs.fontFamily); if (k) st.f = k; }
+      const zs = el.closest('[data-z]') as HTMLElement | null;
+      // Only sizes set from the format bar count: the browser copies sizes onto spans when it joins paragraphs.
+      if (zs && p.contains(zs)) st.z = Number(zs.dataset.z);
+      runs.push({ ...st, s: at, e: at + txt.length });
+      line += txt; at += txt.length;
+    }
+    lines.push(line); off = at + 1;
+  }
+  return { text: lines.join('\n'), runs: normRuns(runs, off - 1) };
+}
+
+/** Selection start and end as offsets in the piece's text (tabs and line breaks counted), or null. */
+export function selOffsets(root: HTMLElement): [number, number] | null {
+  const sel = root.ownerDocument.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (!root.contains(r.startContainer) || !root.contains(r.endContainer)) return null;
+  const at = (node: Node, k: number) => {
+    let off = 0;
+    for (const p of paras(root)) {
+      if (p === node || p.contains(node)) {
+        const pre = root.ownerDocument.createRange(); pre.selectNodeContents(p); pre.setEnd(node, k);
+        return off + levelOf(p) + pre.toString().length;
+      }
+      off += levelOf(p) + (p.textContent || '').length + 1;
+    }
+    return off;
+  };
+  const a = at(r.startContainer, r.startOffset), b = at(r.endContainer, r.endOffset);
+  return [Math.min(a, b), Math.max(a, b)];
+}
+
+/** Selects the text between two offsets in the piece's text. */
+export function setSelOffsets(root: HTMLElement, a: number, b: number) {
+  const doc = root.ownerDocument, find = (i: number): [Node, number] => {
+    let off = 0;
+    for (const p of paras(root)) {
+      const len = (p.textContent || '').length, start = off + levelOf(p);
+      if (i <= start + len) {
+        let k = Math.max(0, i - start);
+        const walk = doc.createTreeWalker(p, 4);
+        for (let n = walk.nextNode(); n; n = walk.nextNode()) { const l = (n.textContent || '').length; if (k <= l) return [n, k]; k -= l; }
+        return [p, 0];
+      }
+      off = start + len + 1;
+    }
+    const last = paras(root).pop()!; return [last, last.childNodes.length];
+  };
+  const r = doc.createRange(), [sn, so] = find(a), [en, eo] = find(b);
+  r.setStart(sn, so); r.setEnd(en, eo);
+  const sel = doc.getSelection()!; sel.removeAllRanges(); sel.addRange(r);
 }
 
 /** The editor's text: one line per paragraph, indented with tabs. */
@@ -65,6 +176,9 @@ export function styleRich(root: HTMLElement, e: El, z: number) {
     p.style.setProperty('--bx', ind.marker * z + 'px');
     if (marks[i]) p.dataset.b = marks[i]; else delete p.dataset.b;
   });
+  // Run sizes follow shrink-to-fit like the canvas does.
+  const sc = st.size / textStyle({ ...e, fit: undefined }).size;
+  for (const sp of root.querySelectorAll<HTMLElement>('[data-z]')) sp.style.fontSize = Number(sp.dataset.z) * sc * z + 'px';
 }
 
 /** Indexes of the paragraphs the selection touches, or null when it is outside the editor. */

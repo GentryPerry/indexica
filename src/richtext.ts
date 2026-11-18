@@ -28,7 +28,7 @@ export function indentParas(text: string | undefined, from: number, to: number, 
 }
 
 /** True when a piece's text needs paragraph layout rather than plain wrapped lines. */
-export const isRich = (e: El) => e.type === 'text' && (!!e.bullets || !!e.lsp || e.psp != null || /(^|\n)\t/.test(e.text || ''));
+export const isRich = (e: El) => e.type === 'text' && (!!e.bullets || !!e.lsp || e.psp != null || !!(e.runs && e.runs.length) || /(^|\n)\t/.test(e.text || ''));
 
 /** Body placeholders step their type down by level, as DeckCraft's master does (28, 24, 20, 18 pt). */
 const LEVEL_RATIO = [1, 24 / 28, 20 / 28, 18 / 28];

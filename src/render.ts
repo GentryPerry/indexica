@@ -73,13 +73,25 @@ function blockTop(e: El, height: number): number {
   return e.va === 'bottom' ? e.y + e.h - height - 4 : e.va === 'middle' ? e.y + (e.h - height) / 2 : e.y + 4;
 }
 /** Text with paragraphs (levels, bullets, numbers, spacing): one text node per line, so each can have its own size. */
-function richText(e: El, ink: string): SVGElement {
+function richText(e: El, ink: string, c?: RenderCtx): SVGElement {
   const st = textStyle(e), { lines, height } = layoutText(e, e.w - 4), top = blockTop(e, height), g = s('g', { 'pointer-events': 'none' });
   const a = e.align || 'left';
   for (const ln of lines) {
     const ls: TextStyle = { ...st, size: ln.size };
-    const tx = a === 'center' ? e.x + 2 + ln.x + (e.w - 4 - ln.x) / 2 : a === 'right' ? e.x + e.w - 2 : e.x + 2 + ln.x;
     if (ln.marker) g.append(textBlock([ln.marker], e.x + 2 + ln.bx!, top + ln.base, ls, ink));
+    if (ln.segs) {
+      // Styled stretches are placed one after another from the line's start, each its own text node.
+      const room = e.w - 4 - ln.x, x0 = e.x + 2 + ln.x + (a === 'center' ? (room - ln.w!) / 2 : a === 'right' ? room - ln.w! : 0);
+      for (const sg of ln.segs) {
+        if (!sg.text) continue;
+        const deco = [sg.u ? 'underline' : '', sg.strike ? 'line-through' : ''].filter(Boolean).join(' ');
+        const fill = sg.color ? (c ? inkOn(c.under?.(e), sg.color, c.theme) : sg.color) : ink;
+        g.append(s('text', { x: x0 + sg.dx, y: top + ln.base, 'font-size': sg.size, 'font-family': sg.family, 'font-weight': sg.weight, 'font-style': sg.italic ? 'italic' : null,
+          'text-decoration': deco || null, fill, style: 'white-space:pre', 'pointer-events': 'none' }, sg.text));
+      }
+      continue;
+    }
+    const tx = a === 'center' ? e.x + 2 + ln.x + (e.w - 4 - ln.x) / 2 : a === 'right' ? e.x + e.w - 2 : e.x + 2 + ln.x;
     if (ln.text) g.append(textBlock([ln.text], tx, top + ln.base, ls, ink, a === 'center' ? 'middle' : a === 'right' ? 'end' : 'start'));
   }
   return g;
@@ -254,14 +266,14 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       if (!c.exp) {
         g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: 'none', stroke: c.muted, 'stroke-width': 1, 'stroke-dasharray': '5 4', 'vector-effect': 'non-scaling-stroke', 'stroke-opacity': 0.55, 'pointer-events': 'none' }));
         if (!hide && e.bullets && e.ph !== 'picture') {
-          const t = richText({ ...e, text: phPrompt(e.ph), weight: Math.min(st.weight, 500) }, ink); t.setAttribute('fill-opacity', '0.45'); g.append(t);
+          const t = richText({ ...e, text: phPrompt(e.ph), runs: undefined, weight: Math.min(st.weight, 500) }, ink); t.setAttribute('fill-opacity', '0.45'); g.append(t);
         } else if (!hide) {
           const pst = { ...st, weight: Math.min(st.weight, 500) }, ls = wrap(phPrompt(e.ph), w - 4, pst.size, pst.weight, pst.family, pst.italic);
           const [tx, anchor] = e.ph === 'picture' ? [x + w / 2, 'middle'] : lineStart(e, x, w, 2, 'left');
           const t = textBlock(ls, tx, phTop(e, ls.length, pst.size), pst, ink, anchor); t.setAttribute('fill-opacity', '0.45'); g.append(t);
         }
       }
-    } else if (!hide && isRich(e)) g.append(richText(e, ink));
+    } else if (!hide && isRich(e)) g.append(richText(e, ink, c));
     else if (!hide) { const ls = wrapEl(e, w - 4), [tx, anchor] = lineStart(e, x, w, 2, 'left'); g.append(textBlock(ls, tx, e.ph ? phTop(e, ls.length, st.size) : y + 4 + st.size * 0.95, st, ink, anchor)); }
   } else if (e.type === 'card') {
     const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';

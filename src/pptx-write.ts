@@ -11,6 +11,7 @@ import { pageTheme, themeById, type DeckTheme } from './deck';
 import { textStyle } from './geometry';
 import { fromD, worldPaths, type SubPath } from './vector';
 import { levelRatio, markers, parasOf, indentOf } from './richtext';
+import { spansOf, type RunStyle } from './runs';
 import { slideMembers, slidesOf } from './slides';
 import { cellBox, cellLook, colFractions, rowsOf } from './table';
 import { FONTS, type El, type Lookup } from './types';
@@ -80,8 +81,10 @@ const NUM = ['arabicPeriod', 'alphaLcPeriod', 'romanLcPeriod'];
 function txBody(e: El, text: string | undefined, o: { inset: [number, number]; anchor: string; align?: string; color?: string; size?: number; bold?: boolean; autofit?: boolean; tag?: string }): string {
   const st = textStyle(e), base = o.size || st.size, ps = parasOf(text), marks = markers(ps, e.bullets), tag = o.tag || 'p:txBody';
   const algn = { left: 'l', center: 'ctr', right: 'r' }[(e.align as string) || o.align || 'left'] || 'l';
-  const count: number[] = [];
+  const count: number[] = [], runs = text === e.text && e.runs && e.runs.length ? e.runs : null;
+  let off = 0;
   const paras = ps.map((p, i) => {
+    const start = off + p.level; off += p.level + p.text.length + 1;
     const size = base * levelRatio(e, p.level), ind = indentOf(p.level, base, e.bullets);
     count.length = p.level + 1; count[p.level] = (count[p.level] || 0) + 1;
     const bullet = e.bullets === 'disc' ? x('a:buFont', { typeface: 'Arial' }) + x('a:buChar', { char: marks[i] || '•' })
@@ -90,9 +93,15 @@ function txBody(e: El, text: string | undefined, o: { inset: [number, number]; a
       e.lsp ? x('a:lnSpc', {}, x('a:spcPct', { val: Math.round(e.lsp * 100000) })) : '',
       i && e.psp != null ? x('a:spcBef', {}, x('a:spcPts', { val: Math.round(e.psp * 75) })) : '',
       bullet);
-    const rPr = (t: string) => x(t, { lang: 'en-US', sz: hpt(size), b: (o.bold || st.weight >= 600) ? 1 : undefined, i: st.italic ? 1 : undefined, dirty: 0 },
-      solid(o.color || e.color || '#1d2530'), x('a:latin', { typeface: face(e) }), x('a:cs', { typeface: face(e) }));
-    return x('a:p', {}, pPr, p.text ? x('a:r', {}, rPr('a:rPr'), x('a:t', {}, esc(p.text))) : '', rPr('a:endParaRPr'));
+    // Each styled stretch of the paragraph is its own run, with its overrides on top of the piece's style.
+    const rPr = (t: string, r: RunStyle = {}) => {
+      const bold = r.w ? r.w >= 600 : !!o.bold || st.weight >= 600, ital = r.i != null ? r.i : st.italic, fc = r.f ? face({ ...e, font: r.f, tc: undefined }) : face(e);
+      return x(t, { lang: 'en-US', sz: hpt(r.z || size), b: bold ? 1 : r.w ? 0 : undefined, i: ital ? 1 : r.i === false ? 0 : undefined, u: r.u ? 'sng' : undefined, strike: r.x ? 'sngStrike' : undefined, dirty: 0 },
+        solid(r.c || o.color || e.color || '#1d2530'), x('a:latin', { typeface: fc }), x('a:cs', { typeface: fc }));
+    };
+    const body = !p.text ? '' : runs ? spansOf(runs, start, start + p.text.length).map(sp => x('a:r', {}, rPr('a:rPr', sp.st), x('a:t', {}, esc(p.text.slice(sp.s - start, sp.e - start))))).join('')
+      : x('a:r', {}, rPr('a:rPr'), x('a:t', {}, esc(p.text)));
+    return x('a:p', {}, pPr, body, rPr('a:endParaRPr'));
   });
   return x(tag, {},
     x('a:bodyPr', { wrap: 'square', lIns: emu(o.inset[0]), tIns: emu(o.inset[1]), rIns: emu(o.inset[0]), bIns: emu(o.inset[1]), rtlCol: 0, anchor: o.anchor }, o.autofit ? x('a:normAutofit') : x('a:noAutofit')),

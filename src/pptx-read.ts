@@ -11,6 +11,7 @@ import { presetDef } from './presetgeom';
 import type { SubPath, VNode } from './vector';
 import { setWorldPaths } from './vector';
 import type { El } from './types';
+import { normRuns, type Run } from './runs';
 import { find, kid, kidsOf, parseXml, textOf, type XNode } from './xml';
 import { text, unzip } from './zip';
 
@@ -271,7 +272,9 @@ export async function readPptx(buf: ArrayBuffer | Uint8Array): Promise<ImportedD
     const textOfBody = (body: XNode, ph: XNode | undefined, chain: XNode[]) => {
       const kindName = !ph ? 'p:otherStyle' : /title/i.test(typeOf(ph)) ? 'p:titleStyle' : 'p:bodyStyle';
       const lines: string[] = [];
-      let style: TextStyleIn = {}, sawRun = false, bullets: 'disc' | 'num' | undefined;
+      let style: TextStyleIn = {}, sawRun = false, bullets: 'disc' | 'num' | undefined, off = 0;
+      // Every run's own style, to keep formatting on part of a line.
+      const segs: { s: number; e: number; st: TextStyleIn & { u?: boolean; x?: boolean }; para: number }[] = [], paraSize: number[] = [], paraTally: Map<number, number>[] = [];
       for (const p of kidsOf(body, 'a:p')) {
         const pPr = kid(p, 'a:pPr'), lvl = Math.min(8, Number(pPr?.at.lvl || 0));
         const inherited = merge(masterLevel(kindName, lvl), ...chain.slice().reverse().map(c => levelStyle(kid(c, 'p:txBody', 'a:lstStyle', `a:lvl${lvl + 1}pPr`), ctx, fonts)),
@@ -280,16 +283,40 @@ export async function readPptx(buf: ArrayBuffer | Uint8Array): Promise<ImportedD
         const t = runs.map(r => r.tag === 'a:br' ? ' ' : (kid(r, 'a:t')?.text ?? '')).join('');
         if (t.trim() && inherited.bullet && inherited.bullet !== 'none' && !bullets) bullets = inherited.bullet;
         const r0 = runs.find(r => r.tag !== 'a:br'), rPr = r0 && kid(r0, 'a:rPr');
-        if (!sawRun && t.trim()) {
-          sawRun = true;
-          style = merge(inherited, levelStyle({ tag: 'x', at: {}, text: '', kids: rPr ? [{ ...rPr, tag: 'a:defRPr' }] : [] }, ctx, fonts));
+        const runStyle = (rp?: XNode) => merge(inherited, levelStyle({ tag: 'x', at: {}, text: '', kids: rp ? [{ ...rp, tag: 'a:defRPr' }] : [] }, ctx, fonts));
+        if (!sawRun && t.trim()) { sawRun = true; style = runStyle(rPr); }
+        let at = off + lvl;
+        for (const r of runs) {
+          const rt = r.tag === 'a:br' ? ' ' : (kid(r, 'a:t')?.text ?? '');
+          if (r.tag !== 'a:br' && rt) {
+            const rp = kid(r, 'a:rPr');
+            segs.push({ s: at, e: at + rt.length, para: lines.length, st: { ...runStyle(rp), u: !!rp?.at.u && rp.at.u !== 'none', x: !!rp?.at.strike && rp.at.strike !== 'noStrike' } });
+          }
+          at += rt.length;
         }
-        lines.push('\t'.repeat(lvl) + t);
+        lines.push('\t'.repeat(lvl) + t); off += lvl + t.length + 1;
       }
       while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
       const anchorOf = (b?: XNode) => kid(b, 'a:bodyPr')?.at.anchor;
       const anchor = anchorOf(body) || chain.map(c => anchorOf(kid(c, 'p:txBody'))).find(Boolean) || (kindName === 'p:titleStyle' ? 'ctr' : 't');
-      return { text: lines.join('\n'), style, bullets, anchor };
+      // A paragraph's own size is the one most of its characters have; other sizes are runs.
+      segs.forEach(g => { const tally = (paraTally[g.para] ||= new Map()), z = g.st.size ?? 0; tally.set(z, (tally.get(z) || 0) + g.e - g.s); });
+      paraTally.forEach((m, i) => { paraSize[i] = [...m.entries()].sort((a, b) => b[1] - a[1])[0][0]; });
+      // The piece takes the first paragraph's own size, so a big first word stays a run.
+      const firstSized = paraSize.findIndex(v => v != null && v > 0); if (firstSized >= 0) style = { ...style, size: paraSize[firstSized] };
+      const text = lines.join('\n'), fk = (f?: string) => fontKey(f && fonts[f] ? fonts[f] : f) || 'sans', runs: Run[] = [];
+      for (const g of segs) {
+        const r: Run = { s: g.s, e: g.e };
+        if (!!g.st.bold !== !!style.bold) r.w = g.st.bold ? 700 : 400;
+        if (!!g.st.italic !== !!style.italic) r.i = !!g.st.italic;
+        if (g.st.u) r.u = true;
+        if (g.st.x) r.x = true;
+        if (g.st.color && g.st.color.slice(0, 7) !== (style.color || '').slice(0, 7)) r.c = g.st.color.slice(0, 7);
+        if (g.st.font && fk(g.st.font) !== fk(style.font)) r.f = fk(g.st.font);
+        if (g.st.size && Math.abs(g.st.size - (paraSize[g.para] || g.st.size)) > 0.5) r.z = Math.round(g.st.size * 10) / 10;
+        runs.push(r);
+      }
+      return { text, style, bullets, anchor, runs: normRuns(runs, text.length) };
     };
 
     type Rels = Map<string, { type: string; path: string }>;
@@ -333,6 +360,7 @@ export async function readPptx(buf: ArrayBuffer | Uint8Array): Promise<ImportedD
             const kind = ph ? typeOf(ph) : '';
             const e: El = { ...base, type: 'text', text: t.text };
             applyText(e, t, fonts);
+            if (t.runs.length) e.runs = t.runs;
             if (/title/i.test(kind)) { e.ph = 'title'; } else if (kind === 'subTitle') e.ph = 'subtitle'; else if (ph && (kind === 'body' || kind === 'obj' || !ph.at.type)) e.ph = 'body';
             if (e.ph) e.va = t.anchor === 'b' ? 'bottom' : t.anchor === 'ctr' ? 'middle' : 'top';
             if (e.ph === 'body' && t.bullets) e.bullets = t.bullets;

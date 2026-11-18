@@ -41,6 +41,7 @@ import * as X from './exact';
 import * as LB from './livebool';
 import * as VE from './vecerase';
 import * as TC from './touch';
+import * as R from './runs';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -1196,6 +1197,7 @@ function placeEditor() {
   const box = cb ? [cb.x, cb.y, cb.w, cb.h] : lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 12, e.y + 4, e.w - 20, 44] : e.type === 'frame' ? [e.x - 2 + chipW, e.y - 22 * fk, Math.max(e.w - chipW, 160), 20 * fk]
     : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
   if (richEd(e)) RE.styleRich(ed, e, z);
+  if (richEd(e)) requestAnimationFrame(placeFmt);
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: richEd(e) ? 'auto' : Math.max(box[3] * z, 24) + 'px', minHeight: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z * fk + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
     padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px', paddingTop: phPad(e, st) * z + 'px',
@@ -1221,7 +1223,8 @@ function startEdit(id, cell) {
   if (e.type === 'table') { e.cells = normCells(e.cells); editCell = cell || [0, 0]; } else editCell = null;
   editing = id;
   if (richEd(e)) {
-    const red = $('#red'); RE.fillRich(red, e.text); placeEditor(); refresh(); red.focus();
+    const red = $('#red'); RE.fillRich(red, e.text, e.runs); placeEditor(); refresh(); red.focus();
+    try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* older browsers write tags instead */ }
     const r = document.createRange(); r.selectNodeContents(red); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r);
     return;
   }
@@ -1230,8 +1233,70 @@ function startEdit(id, cell) {
 /** After typing in the paragraph editor: tidy its structure, refit the piece, and redraw. */
 function richInput() {
   const e = editing && E(editing), red = $('#red'); if (!e) return;
-  RE.normalizeRich(red); e.text = RE.readRich(red); fitText(e); placeEditor(); draw();
+  RE.normalizeRich(red); readEditor(e, red, false); fitText(e); placeEditor(); draw();
 }
+/** Takes the paragraph editor's text and runs into the piece. */
+function readEditor(e, red, trim) {
+  const r = RE.readRichRuns(red); let text = r.text;
+  if (trim) text = text.replace(/\s+$/, '');
+  e.text = text; const runs = R.normRuns(r.runs, text.length);
+  if (runs.length) e.runs = runs; else delete e.runs;
+}
+/* ---------- Format bar: style for the selected words while typing ---------- */
+const FMT_SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 128];
+/** Applies a style change to the selected words through the run model, then puts the selection back. */
+function fmtModel(patch) {
+  const e = editing && E(editing), red = $('#red'); if (!e) return;
+  const at = RE.selOffsets(red); if (!at || at[0] === at[1]) return;
+  RE.normalizeRich(red); const r = RE.readRichRuns(red);
+  RE.fillRich(red, r.text, R.applyStyle(r.runs, r.text.length, at[0], at[1], patch));
+  placeEditor(); RE.setSelOffsets(red, at[0], at[1]); richInput(); fmtState();
+}
+function fmtCmd(cmd, val) { try { document.execCommand(cmd, false, val); } catch { /* not supported */ } richInput(); fmtState(); }
+/** Text size at the start of the selection: its run's size or the piece's own. */
+function fmtSize(e) {
+  const red = $('#red'), at = RE.selOffsets(red); const r = RE.readRichRuns(red);
+  return (at && R.styleAt(r.runs, at[0]).z) || G.textStyle({ ...e, fit: undefined }).size;
+}
+function fmtStep(dir) {
+  const e = editing && E(editing); if (!e) return;
+  const cur = fmtSize(e), base = G.textStyle({ ...e, fit: undefined }).size;
+  const next = dir > 0 ? FMT_SIZES.find(v => v > cur + 0.01) || cur : [...FMT_SIZES].reverse().find(v => v < cur - 0.01) || cur;
+  fmtModel({ z: Math.abs(next - base) < 0.01 ? null : next });
+}
+function placeFmt() {
+  const bar = $('#fmt'), e = editing && E(editing), red = $('#red'); if (!bar) return;
+  if (!e || !richEd(e) || red.style.display === 'none') { bar.hidden = true; return; }
+  if (!bar.childNodes.length) {
+    const keep = ev => ev.preventDefault();
+    const btn = (k, label, d, fn) => h('button', { class: 'icon-btn', 'data-f': k, title: label, 'aria-label': label, 'aria-pressed': 'false', onmousedown: keep, onclick: fn }, icon(d, 15, { 'stroke-width': 1.8 }));
+    bar.append(
+      btn('bold', 'Bold (Ctrl+B)', 'M6.5 4h4.5a3 3 0 0 1 0 6H6.5zM6.5 10h5.5a3 3 0 0 1 0 6H6.5z', () => fmtCmd('bold')),
+      btn('italic', 'Italic (Ctrl+I)', 'M12.5 4H9M11 16H7.5M11 4l-2 12', () => fmtCmd('italic')),
+      btn('underline', 'Underline (Ctrl+U)', 'M6 4v6a4 4 0 0 0 8 0V4M5 16.5h10', () => fmtCmd('underline')),
+      btn('strikeThrough', 'Strikethrough', 'M4.5 10h11M13.5 6.5c-.6-1.3-1.9-2-3.5-2-2 0-3.5 1-3.5 2.6M6.5 13.4c.6 1.3 1.9 2.1 3.5 2.1 2 0 3.5-1 3.5-2.6', () => fmtCmd('strikeThrough')),
+      h('span', { class: 'tsep', 'aria-hidden': 'true' }),
+      btn('', 'Smaller text', 'M5 10h10', () => fmtStep(-1)),
+      h('span', { class: 'fmt-size', id: 'fmt-size' }, ''),
+      btn('', 'Larger text', 'M5 10h10M10 5v10', () => fmtStep(1)),
+      h('span', { class: 'tsep', 'aria-hidden': 'true' }),
+      ...TEXT_COLORS.slice(0, 7).map(([c, name]) => h('button', { class: 'fmt-c', title: name, 'aria-label': 'Text color ' + name, style: `--c:${c}`, onmousedown: keep, onclick: () => fmtModel({ c: c === '#1d2530' ? null : c }) })),
+      h('span', { class: 'tsep', 'aria-hidden': 'true' }),
+      btn('', 'Clear formatting', 'M4 5h9M8.5 5l-2.2 10.5M12 11.5l4 4M16 11.5l-4 4', () => fmtModel(Object.fromEntries(R.RUN_KEYS.map(k => [k, null])))));
+  }
+  bar.hidden = false;
+  const r = cvBox(), er = red.getBoundingClientRect(), w = bar.offsetWidth, ht = bar.offsetHeight;
+  const x = Math.max(8, Math.min(r.width - w - 8, er.left - r.left + er.width / 2 - w / 2)), above = er.top - r.top - ht - 10;
+  bar.style.left = x + 'px'; bar.style.top = (above > 8 ? above : Math.min(r.height - ht - 8, er.bottom - r.top + 10)) + 'px';
+  fmtState();
+}
+/** Pressed looks for the style at the caret, and the size there. */
+function fmtState() {
+  const bar = $('#fmt'), e = editing && E(editing); if (!bar || bar.hidden || !e) return;
+  for (const b of bar.querySelectorAll('[data-f]')) { if (!b.dataset.f) continue; let on = false; try { on = document.queryCommandState(b.dataset.f); } catch { /* not supported */ } b.setAttribute('aria-pressed', String(on)); }
+  const sz = $('#fmt-size'); if (sz) sz.textContent = String(Math.round(fmtSize(e)));
+}
+document.addEventListener('selectionchange', () => { if (editing && $('#fmt') && !$('#fmt').hidden) fmtState(); });
 function richKey(ev) {
   ev.stopPropagation();
   const e = editing && E(editing), red = ev.currentTarget, mod = ev.ctrlKey || ev.metaKey;
@@ -1243,8 +1308,8 @@ function richKey(ev) {
   if (ev.key === 'Escape' || (ev.key === 'Enter' && mod)) { ev.preventDefault(); red.blur(); }
 }
 function endEdit() {
-  if (!editing) return; const e = E(editing), ed = $('#ed'), red = $('#red'), rich = richEd(e); editing = null; ed.style.display = 'none'; red.style.display = 'none';
-  if (e && rich) { RE.normalizeRich(red); e.text = RE.readRich(red).replace(/\s+$/, ''); red.replaceChildren(); if (!e.text.trim() && !e.ph) delete board.els[e.id]; else { if (!e.text.trim()) e.text = ''; fitText(e); } }
+  if (!editing) return; const e = E(editing), ed = $('#ed'), red = $('#red'), rich = richEd(e); editing = null; ed.style.display = 'none'; red.style.display = 'none'; const fb = $('#fmt'); if (fb) fb.hidden = true;
+  if (e && rich) { RE.normalizeRich(red); readEditor(e, red, true); red.replaceChildren(); if (!e.text.trim() && !e.ph) delete board.els[e.id]; else { if (!e.text.trim()) { e.text = ''; delete e.runs; } fitText(e); } }
   else if (e && e.type === 'table') { const [r, c] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[r][c] = ed.value.replace(/\s+$/, ''); fitText(e); editCell = null; }
   else if (e) { e.text = ed.value.replace(/\s+$/, ''); if (e.type === 'text' && !e.text && !e.ph) delete board.els[e.id]; else { if (e.type === 'frame' && !e.text) e.text = 'Frame'; if (e.type === 'card' && !e.text) e.text = 'Untitled task'; fitText(e); } }
   edFor = null; commit();
@@ -1705,6 +1770,7 @@ async function openBoard(id) {
         : h('button', { 'data-tool': t, title: label[t], 'aria-label': label[t], 'aria-pressed': 'false', onclick: () => { if (t === 'image') $('#img-file').click(); else { endDraft(); tool = t; refresh(); } } }, trayIcon(t)))),
       h('div', { class: 'fly', id: 'fly', hidden: true }),
       h('div', { class: 'selbar', id: 'selbar', role: 'toolbar', 'aria-label': 'Selection', hidden: true }),
+      h('div', { class: 'fmt', id: 'fmt', role: 'toolbar', 'aria-label': 'Format selected text', hidden: true }),
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
       h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { const slot = imgSlot; imgSlot = null; e.target.multiple = true; for (const f of [...e.target.files]) await addImage(f, null, slot); e.target.value = ''; } }),
@@ -1753,6 +1819,12 @@ async function openBoard(id) {
   cv.addEventListener('pointerdown', canvasDown); cv.addEventListener('mousedown', ev => ev.preventDefault()); cv.addEventListener('pointermove', canvasMove); cv.addEventListener('pointerleave', () => { if (hoverId) { hoverId = null; drawOverlay(); } }); cv.addEventListener('pointerup', canvasUp); cv.addEventListener('pointercancel', canvasUp);
   cv.addEventListener('wheel', ev => { ev.preventDefault(); const p = pt(ev); if (ev.ctrlKey || ev.metaKey) zoomAt(Math.exp(-ev.deltaY * 0.01), p.sx, p.sy, true); else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; drawSoon(); } }, { passive: false });
   fit(); refresh(); loadImages();
+}
+/** A style picked for a whole text piece replaces the same style on its words. */
+const RUN_OF = { font: 'f', weight: 'w', size: 'z', italic: 'i', color: 'c' };
+function wholeStyle(e, key) {
+  if (!e.runs || !RUN_OF[key]) return;
+  e.runs = R.dropKeys(e.runs, (e.text || '').length, [RUN_OF[key]]); if (!e.runs.length) delete e.runs;
 }
 /** Open the outline drawer ('ol') or the properties sheet ('pr') on small screens, or close both (null). */
 let olClose = 0;
@@ -1918,7 +1990,7 @@ function renderProps() {
   const of = types => free.filter(e => types.includes(e.type));
   const same = (els, key) => els.length && els.every(e => e[key] === els[0][key]) ? els[0][key] ?? '' : '';
   const sec = (title, ...kids) => h('section', { class: 'psec' }, title ? h('h3', null, title) : null, ...kids);
-  const setAll = (els, key, val, field) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; fitText(e); }); field ? holdCommit() : commit(); };
+  const setAll = (els, key, val, field) => { els.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; wholeStyle(e, key); fitText(e); }); field ? holdCommit() : commit(); };
   const swatch = (c, on, fn, name, small) => h('button', { class: 'sw' + (small ? ' sm' : ''), style: 'background:' + (paintFill(c, C.theme) || c), title: name || c, 'aria-label': name || 'Color ' + c, 'aria-pressed': String(!!on), onclick: fn });
   // With slides on the page, color sections lead with the deck theme's colors; picking one links it to the theme.
   const deckTh = SL.slidesOf(board.els).length ? DK.pageTheme(board.els) : null;
@@ -2053,7 +2125,7 @@ function renderProps() {
         pick('font', 'Font', Object.entries(FONTS).map(([k, v]) => [k, v.label]), same(texty, 'font') || 'sans', v => setAll(texty, 'font', v === 'sans' ? '' : v, true)),
         h('div', { class: 'grid2' },
           pick('weight', 'Weight', WEIGHTS, same(texty, 'weight') || st0.weight, v => setAll(texty, 'weight', Number(v), true)),
-          num('size', 'Size', 'Text size', () => String(Math.round(G.textStyle(texty[0]).size)), v => texty.forEach(e => { e.size = Math.min(400, Math.max(4, Math.round(v))); fitText(e); }))),
+          num('size', 'Size', 'Text size', () => String(Math.round(G.textStyle(texty[0]).size)), v => texty.forEach(e => { e.size = Math.min(400, Math.max(4, Math.round(v))); wholeStyle(e, 'size'); fitText(e); }))),
         h('div', { class: 'row' },
           h('div', { class: 'seg', role: 'group', 'aria-label': 'Text alignment' }, [['left', 'Align left', 'M3 5h14M3 10h9M3 15h11'], ['center', 'Align center', 'M3 5h14M5.5 10h9M4.5 15h11'], ['right', 'Align right', 'M3 5h14M8 10h9M6 15h11']]
             .map(([k, label, d]) => h('button', { title: label, 'aria-label': label, 'aria-pressed': String(al === k), onclick: () => setAll(texty, 'align', al === k ? '' : k) }, icon(d, 14)))),
@@ -2063,7 +2135,7 @@ function renderProps() {
       const paraEls = texty.filter(e => e.type === 'text');
       if (paraEls.length) {
         const bl = same(paraEls, 'bullets') || (paraEls.every(e => !e.bullets) ? 'none' : '');
-        const shift = by => { paraEls.forEach(e => { e.text = RT.indentParas(e.text, 0, Infinity, by); fitText(e); }); commit(); };
+        const shift = by => { paraEls.forEach(e => { const old = e.text || ''; e.text = RT.indentParas(old, 0, Infinity, by); if (e.runs) e.runs = R.reindentRuns(e.runs, old, e.text); fitText(e); }); commit(); };
         out.push(sec('Paragraph',
           h('div', { class: 'row' },
             h('div', { class: 'seg', role: 'group', 'aria-label': 'List style' }, [['none', 'No bullets', 'M4 6h12M4 10h12M4 14h12'], ['disc', 'Bullets (Ctrl+Shift+8)', 'M4 6h.01M4 10h.01M4 14h.01M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5'], ['num', 'Numbers (Ctrl+Shift+7)', 'M3.5 5h1v3M3.5 12h2l-2 2.5h2M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5']]

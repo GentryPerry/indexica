@@ -135,4 +135,30 @@ describe('pptx import', () => {
     expect(s.els.find(e => e.type === 'chart')!.chart!.kind).toBe('stackedColumn');
     expect(s.els.find(e => e.type === 'image')!.crop).toEqual([0.1, 0, 0.1, 0]);
   });
+  it('keeps formatting on part of a line both ways', async () => {
+    const { readPptx } = await import('../src/pptx-read');
+    const els = sampleDeck(), f = Object.values(els).find(e => e.type === 'frame')!;
+    const str = 'Plain bold red\n\tBig under strike serif';
+    els.rt = { id: 'rt', type: 'text', z: 500, x: f.x + 40, y: f.y + 300, w: 600, h: 80, text: str, size: 20,
+      runs: [{ s: 6, e: 10, w: 700 }, { s: 11, e: 14, c: '#e5484d' }, { s: 16, e: 19, z: 40 }, { s: 20, e: 25, u: true }, { s: 26, e: 32, x: true, i: true }, { s: 33, e: 38, f: 'serif' }] };
+    const bytes = await writePptx(els, id => els[id], { image: () => ({ bytes: PNG, ext: 'png' }), today: 'Today' });
+    const files = await unzip(bytes), xml = text(files.get('ppt/slides/slide1.xml')!);
+    expect(xml).toContain('<a:t>bold</a:t>');
+    expect(xml).toMatch(/b="1"[^>]*>(?:(?!<\/a:r>).)*<a:t>bold<\/a:t>/);
+    expect(xml).toMatch(/u="sng"/); expect(xml).toMatch(/strike="sngStrike"/);
+    const back = (await readPptx(bytes)).slides[0].els.find(e => e.text === str)!;
+    expect(back.size).toBe(20);
+    const at = (word: string) => back.runs!.find(r => str.slice(r.s, r.e) === word);
+    expect(at('bold')).toMatchObject({ w: 700 });
+    expect(at('red')).toMatchObject({ c: '#e5484d' });
+    expect(at('Big')).toMatchObject({ z: 40 });
+    expect(at('under')).toMatchObject({ u: true });
+    expect(at('strike')).toMatchObject({ x: true, i: true });
+    expect(at('serif')).toMatchObject({ f: 'serif' });
+    expect(back.runs!.some(r => str.slice(r.s, r.e).includes('Plain'))).toBe(false);
+    // A big first word stays a run instead of setting the piece's size.
+    els.rt.text = 'Huge then normal words here'; els.rt.runs = [{ s: 0, e: 4, z: 48 }];
+    const big = (await readPptx(await writePptx(els, id => els[id], { image: () => ({ bytes: PNG, ext: 'png' }), today: 'Today' }))).slides[0].els.find(e => e.text === els.rt.text)!;
+    expect(big.size).toBe(20); expect(big.runs).toEqual([{ s: 0, e: 4, z: 48 }]);
+  });
 });
