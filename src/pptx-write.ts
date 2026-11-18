@@ -5,7 +5,7 @@
  * (as literal values, so the chart draws without an embedded workbook). The deck theme becomes the
  * file's theme. Coordinates are px at 96 per inch: 9525 EMU each.
  */
-import { seriesColors, type ChartData } from './chart';
+import { isRadar, isScatter, seriesColors, xValues, type ChartData } from './chart';
 import { connGeom } from './connectors';
 import { pageTheme, themeById, type DeckTheme } from './deck';
 import { textStyle } from './geometry';
@@ -246,41 +246,61 @@ function slidePart(f: El, els: Record<string, El>, get: Lookup, th: DeckTheme, o
 /** A chart part with its data written in as literal values. */
 export function chartPart(c: ChartData, th: DeckTheme): string {
   const accents = [th.colors.accent1, th.colors.accent2, th.colors.accent3, th.colors.accent4, th.colors.accent5, th.colors.accent6];
-  const colors = seriesColors(c, accents), pie = c.kind === 'pie' || c.kind === 'doughnut';
+  const colors = seriesColors(c, accents), pie = c.kind === 'pie' || c.kind === 'doughnut', xy = isScatter(c.kind), radar = isRadar(c.kind), combo = c.kind === 'combo' && c.series.length > 1;
   const strLit = (vals: string[]) => x('c:strLit', {}, x('c:ptCount', { val: vals.length }), ...vals.map((v, i) => x('c:pt', { idx: i }, x('c:v', {}, esc(v)))));
   const numLit = (vals: number[]) => x('c:numLit', {}, x('c:formatCode', {}, 'General'), x('c:ptCount', { val: vals.length }), ...vals.map((v, i) => x('c:pt', { idx: i }, x('c:v', {}, String(v || 0)))));
   const sp = (hex: string, lineOnly = false) => x('c:spPr', {}, lineOnly ? x('a:ln', { w: 28575, cap: 'rnd' }, solid(hex), x('a:round')) : solid(hex));
   const dl = (show: boolean, pct = false) => x('c:dLbls', {}, x('c:showLegendKey', { val: 0 }), x('c:showVal', { val: show && !pct ? 1 : 0 }), x('c:showCatName', { val: 0 }), x('c:showSerName', { val: 0 }), x('c:showPercent', { val: show && pct ? 1 : 0 }), x('c:showBubbleSize', { val: 0 }));
-  const series = (kind: 'bar' | 'line' | 'area' | 'pie') => c.series.slice(0, pie ? 1 : undefined).map((s, i) => x('c:ser', {},
+  const marker = (i: number, on: boolean) => x('c:marker', {}, x('c:symbol', { val: on ? 'circle' : 'none' }), on ? x('c:size', { val: 6 }) : '', on ? sp(colors[i]) : '');
+  type Kind = 'bar' | 'line' | 'area' | 'pie' | 'scatter' | 'radar';
+  const one = (s: ChartData['series'][number], i: number, kind: Kind) => x('c:ser', {},
     x('c:idx', { val: i }), x('c:order', { val: i }), x('c:tx', {}, x('c:v', {}, esc(s.name))),
-    pie ? '' : sp(colors[i], kind === 'line'),
+    kind === 'pie' ? '' : kind === 'scatter' && c.kind === 'scatter' ? x('c:spPr', {}, x('a:ln', { w: 28575 }, x('a:noFill')))
+      : kind === 'radar' && c.kind === 'radarFilled' ? x('c:spPr', {}, x('a:solidFill', {}, x('a:srgbClr', { val: colors[i].slice(1, 7).toUpperCase() }, x('a:alpha', { val: 35000 }))), x('a:ln', { w: 19050 }, solid(colors[i])))
+      : sp(colors[i], kind === 'line' || kind === 'scatter' || kind === 'radar'),
     kind === 'bar' ? x('c:invertIfNegative', { val: 0 }) : '',
-    kind === 'line' ? x('c:marker', {}, x('c:symbol', { val: c.kind === 'lineMarkers' ? 'circle' : 'none' }), c.kind === 'lineMarkers' ? x('c:size', { val: 6 }) : '', c.kind === 'lineMarkers' ? sp(colors[i]) : '') : '',
-    pie ? c.cats.map((_, k) => x('c:dPt', {}, x('c:idx', { val: k }), x('c:bubble3D', { val: 0 }), x('c:spPr', {}, solid(colors[k]), x('a:ln', { w: 19050 }, solid('#FFFFFF'))))).join('') : '',
-    x('c:cat', {}, strLit(c.cats)), x('c:val', {}, numLit(s.vals)),
-    kind === 'line' ? x('c:smooth', { val: 0 }) : '')).join('');
+    kind === 'line' ? marker(i, c.kind === 'lineMarkers' || combo) : kind === 'scatter' ? marker(i, true) : kind === 'radar' ? marker(i, c.kind === 'radar') : '',
+    kind === 'pie' ? c.cats.map((_, k) => x('c:dPt', {}, x('c:idx', { val: k }), x('c:bubble3D', { val: 0 }), x('c:spPr', {}, solid(colors[k]), x('a:ln', { w: 19050 }, solid('#FFFFFF'))))).join('') : '',
+    kind === 'scatter' ? x('c:xVal', {}, numLit(xValues(c))) + x('c:yVal', {}, numLit(s.vals)) : x('c:cat', {}, strLit(c.cats)) + x('c:val', {}, numLit(s.vals)),
+    kind === 'line' || kind === 'scatter' ? x('c:smooth', { val: 0 }) : '');
+  const series = (kind: Kind, list = c.series.map((s, i) => [s, i] as const)) => list.slice(0, pie ? 1 : undefined).map(([s, i]) => one(s, i, kind)).join('');
   const grouping = c.kind.startsWith('percent') ? 'percentStacked' : c.kind.startsWith('stacked') ? 'stacked' : c.kind.startsWith('line') || c.kind === 'area' ? 'standard' : 'clustered';
   const horiz = c.kind.toLowerCase().includes('bar');
   const axes = x('c:axId', { val: 111 }) + x('c:axId', { val: 222 });
+  const barPlot = (list?: (readonly [ChartData['series'][number], number])[]) => x('c:barChart', {}, x('c:barDir', { val: horiz ? 'bar' : 'col' }), x('c:grouping', { val: combo ? 'clustered' : grouping }), x('c:varyColors', { val: 0 }), series('bar', list), dl(!!c.labels),
+    x('c:gapWidth', { val: 80 }), !combo && grouping !== 'clustered' ? x('c:overlap', { val: 100 }) : x('c:overlap', { val: -10 }), axes);
   let plot: string;
   if (pie) plot = x(c.kind === 'pie' ? 'c:pieChart' : 'c:doughnutChart', {}, x('c:varyColors', { val: 1 }), series('pie'), dl(c.labels !== false, true), x('c:firstSliceAng', { val: 0 }), c.kind === 'doughnut' ? x('c:holeSize', { val: 55 }) : '');
+  else if (xy) plot = x('c:scatterChart', {}, x('c:scatterStyle', { val: 'lineMarker' }), x('c:varyColors', { val: 0 }), series('scatter'), dl(!!c.labels), axes);
+  else if (radar) plot = x('c:radarChart', {}, x('c:radarStyle', { val: c.kind === 'radarFilled' ? 'filled' : 'marker' }), x('c:varyColors', { val: 0 }), series('radar'), dl(!!c.labels), axes);
+  else if (combo) {
+    const pairs = c.series.map((s, i) => [s, i] as const);
+    plot = barPlot(pairs.slice(0, -1)) + x('c:lineChart', {}, x('c:grouping', { val: 'standard' }), x('c:varyColors', { val: 0 }), series('line', pairs.slice(-1)), dl(!!c.labels), x('c:marker', { val: 1 }), axes);
+  }
   else if (c.kind.startsWith('line')) plot = x('c:lineChart', {}, x('c:grouping', { val: 'standard' }), x('c:varyColors', { val: 0 }), series('line'), dl(!!c.labels), x('c:marker', { val: 1 }), axes);
   else if (c.kind.endsWith('rea')) plot = x('c:areaChart', {}, x('c:grouping', { val: c.kind === 'stackedArea' ? 'stacked' : 'standard' }), x('c:varyColors', { val: 0 }), series('area'), dl(!!c.labels), axes);
-  else plot = x('c:barChart', {}, x('c:barDir', { val: horiz ? 'bar' : 'col' }), x('c:grouping', { val: grouping }), x('c:varyColors', { val: 0 }), series('bar'), dl(!!c.labels),
-    x('c:gapWidth', { val: 80 }), grouping !== 'clustered' ? x('c:overlap', { val: 100 }) : x('c:overlap', { val: -10 }), axes);
+  else plot = barPlot();
   const txPr = (sz: number) => x('c:txPr', {}, x('a:bodyPr'), x('a:lstStyle'), x('a:p', {}, x('a:pPr', {}, x('a:defRPr', { sz }, solid('#5D697C'))), x('a:endParaRPr', { lang: 'en-US' })));
-  const catAx = x('c:catAx', {}, x('c:axId', { val: 111 }), x('c:scaling', {}, x('c:orientation', { val: horiz ? 'maxMin' : 'minMax' })), x('c:delete', { val: 0 }), x('c:axPos', { val: horiz ? 'l' : 'b' }),
-    x('c:numFmt', { formatCode: 'General', sourceLinked: 0 }), x('c:majorTickMark', { val: 'none' }), x('c:minorTickMark', { val: 'none' }), x('c:tickLblPos', { val: 'nextTo' }),
+  // Axis titles go on the axis at that edge: the bottom one carries the horizontal title, the left one the vertical.
+  const axTitle = (text: string | undefined, upright: boolean) => !text || pie || radar ? '' : x('c:title', {}, x('c:tx', {}, x('c:rich', {}, x('a:bodyPr', upright ? { rot: -5400000, vert: 'horz' } : {}), x('a:lstStyle'),
+    x('a:p', {}, x('a:pPr', {}, x('a:defRPr', { sz: 1200, b: 1 })), x('a:r', {}, x('a:rPr', { lang: 'en-US', sz: 1200, b: 1 }, solid('#5D697C')), x('a:t', {}, esc(text)))))), x('c:overlay', { val: 0 }));
+  const titleAt = (pos: string) => pos === 'b' ? axTitle(c.xTitle, false) : axTitle(c.yTitle, true);
+  const ticks = [x('c:majorTickMark', { val: 'none' }), x('c:minorTickMark', { val: 'none' }), x('c:tickLblPos', { val: 'nextTo' })].join('');
+  const gridOf = () => c.grid !== false ? x('c:majorGridlines', {}, x('c:spPr', {}, x('a:ln', { w: 9525 }, solid('#E3E7EE')))) : '';
+  const catPos = horiz ? 'l' : 'b', valPos = horiz ? 'b' : 'l';
+  const catAx = x('c:catAx', {}, x('c:axId', { val: 111 }), x('c:scaling', {}, x('c:orientation', { val: horiz ? 'maxMin' : 'minMax' })), x('c:delete', { val: 0 }), x('c:axPos', { val: catPos }), radar ? gridOf() : '', titleAt(catPos),
+    x('c:numFmt', { formatCode: 'General', sourceLinked: 0 }), ticks,
     x('c:spPr', {}, x('a:ln', { w: 9525 }, solid('#8C96A3'))), txPr(1200), x('c:crossAx', { val: 222 }), x('c:crosses', { val: 'autoZero' }), x('c:auto', { val: 1 }), x('c:lblAlgn', { val: 'ctr' }), x('c:lblOffset', { val: 100 }), x('c:noMultiLvlLbl', { val: 0 }));
-  const valAx = x('c:valAx', {}, x('c:axId', { val: 222 }), x('c:scaling', {}, x('c:orientation', { val: 'minMax' })), x('c:delete', { val: 0 }), x('c:axPos', { val: horiz ? 'b' : 'l' }),
-    c.grid !== false ? x('c:majorGridlines', {}, x('c:spPr', {}, x('a:ln', { w: 9525 }, solid('#E3E7EE')))) : '',
-    x('c:numFmt', { formatCode: grouping === 'percentStacked' ? '0%' : 'General', sourceLinked: 0 }), x('c:majorTickMark', { val: 'none' }), x('c:minorTickMark', { val: 'none' }), x('c:tickLblPos', { val: 'nextTo' }),
-    x('c:spPr', {}, x('a:ln', {}, x('a:noFill'))), txPr(1200), x('c:crossAx', { val: 111 }), x('c:crosses', { val: 'autoZero' }), x('c:crossBetween', { val: c.kind.endsWith('rea') ? 'midCat' : 'between' }));
+  const valAx = (id: number, cross: number, pos: string, line = false) => x('c:valAx', {}, x('c:axId', { val: id }), x('c:scaling', {}, x('c:orientation', { val: 'minMax' })), x('c:delete', { val: 0 }), x('c:axPos', { val: pos }),
+    gridOf(), titleAt(pos),
+    x('c:numFmt', { formatCode: grouping === 'percentStacked' ? '0%' : 'General', sourceLinked: 0 }), ticks,
+    x('c:spPr', {}, line ? x('a:ln', { w: 9525 }, solid('#8C96A3')) : x('a:ln', {}, x('a:noFill'))), txPr(1200), x('c:crossAx', { val: cross }), x('c:crosses', { val: 'autoZero' }), x('c:crossBetween', { val: c.kind.endsWith('rea') || xy ? 'midCat' : 'between' }));
+  const axesXml = pie ? '' : xy ? valAx(111, 222, 'b', true) + valAx(222, 111, 'l') : catAx + valAx(222, 111, valPos);
   const title = c.title ? x('c:title', {}, x('c:tx', {}, x('c:rich', {}, x('a:bodyPr'), x('a:lstStyle'), x('a:p', {}, x('a:pPr', {}, x('a:defRPr', { sz: 1600, b: 1 })), x('a:r', {}, x('a:rPr', { lang: 'en-US', sz: 1600, b: 1 }), x('a:t', {}, esc(c.title)))))), x('c:overlay', { val: 0 })) : '';
   const legend = c.legend === 'none' ? '' : x('c:legend', {}, x('c:legendPos', { val: c.legend === 'right' ? 'r' : 'b' }), x('c:overlay', { val: 0 }), txPr(1200));
   return XML_HEAD + x('c:chartSpace', { 'xmlns:c': NS.c, 'xmlns:a': NS.a, 'xmlns:r': NS.r },
     x('c:roundedCorners', { val: 0 }),
-    x('c:chart', {}, title, x('c:autoTitleDeleted', { val: c.title ? 0 : 1 }), x('c:plotArea', {}, x('c:layout'), plot, pie ? '' : catAx + valAx), legend, x('c:plotVisOnly', { val: 1 }), x('c:dispBlanksAs', { val: 'gap' })),
+    x('c:chart', {}, title, x('c:autoTitleDeleted', { val: c.title ? 0 : 1 }), x('c:plotArea', {}, x('c:layout'), plot, axesXml), legend, x('c:plotVisOnly', { val: 1 }), x('c:dispBlanksAs', { val: 'gap' })),
     x('c:txPr', {}, x('a:bodyPr'), x('a:lstStyle'), x('a:p', {}, x('a:pPr', {}, x('a:defRPr', { sz: 1200 }, x('a:latin', { typeface: '+mn-lt' }))), x('a:endParaRPr', { lang: 'en-US' }))));
 }
 

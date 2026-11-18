@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addCategory, addSeries, chartLayout, dropCategory, dropSeries, fromTable, niceScale, num, sampleChart, seriesColors, tickLabel, CHART_KINDS, type Mark } from '../src/chart';
+import { hasAxes, isRadar, isScatter, addCategory, addSeries, chartLayout, dropCategory, dropSeries, fromTable, niceScale, num, sampleChart, seriesColors, tickLabel, CHART_KINDS, type Mark } from '../src/chart';
 
 const ACC = ['#111111', '#222222', '#333333', '#444444', '#555555', '#666666'];
 const INK = { ink: '#000000', muted: '#555555', grid: '#dddddd', surface: '#ffffff' };
@@ -78,5 +78,40 @@ describe('layout', () => {
   });
   it('lays out every kind without errors', () => {
     for (const [k] of CHART_KINDS) expect(chartLayout({ ...sampleChart(k), title: 'Sales', labels: true, legend: 'right' }, 300, 200, ACC, INK, measure).length).toBeGreaterThan(5);
+  });
+  it('places scatter points by their X and Y values', () => {
+    const c = { kind: 'scatter' as const, cats: ['0', '10'], series: [{ name: 'Y', vals: [0, 10] }], legend: 'none' as const, grid: false };
+    const dots = chartLayout(c, 300, 200, ACC, INK, measure).filter(m => m.k === 'dot') as Extract<Mark, { k: 'dot' }>[];
+    expect(dots).toHaveLength(2);
+    expect(dots[1].x).toBeGreaterThan(dots[0].x); expect(dots[1].y).toBeLessThan(dots[0].y);
+    const lined = chartLayout({ ...c, kind: 'scatterLines' }, 300, 200, ACC, INK, measure);
+    expect(lined.some(m => m.k === 'path' && m.stroke)).toBe(true);
+    expect(isScatter('scatter') && !isScatter('line')).toBe(true);
+    // Switched from a column chart, named categories become 1, 2, 3 across.
+    const named = chartLayout({ ...sampleChart('column'), kind: 'scatter', legend: 'none' }, 300, 200, ACC, INK, measure).filter(m => m.k === 'dot') as Extract<Mark, { k: 'dot' }>[];
+    expect(new Set(named.map(d => Math.round(d.x))).size).toBe(4);
+  });
+  it('draws a radar with one spoke per category and one outline per series', () => {
+    const c = { ...sampleChart('radar'), legend: 'none' as const };
+    const m = chartLayout(c, 300, 300, ACC, INK, measure);
+    expect(m.filter(x => x.k === 'line')).toHaveLength(4);
+    expect(m.filter(x => x.k === 'path' && x.stroke === ACC[0])).toHaveLength(1);
+    expect(m.filter(x => x.k === 'dot')).toHaveLength(12);
+    const filled = chartLayout({ ...c, kind: 'radarFilled' }, 300, 300, ACC, INK, measure);
+    expect(filled.some(x => x.k === 'path' && x.fill === ACC[1] && x.opacity === 0.35)).toBe(true);
+    expect(isRadar('radarFilled') && !hasAxes('radar') && !hasAxes('pie') && hasAxes('scatter')).toBe(true);
+  });
+  it('draws a combo as columns with the last series as a line', () => {
+    const m = chartLayout({ ...sampleChart('combo'), legend: 'none' }, 300, 200, ACC, INK, measure);
+    expect(rects(m).filter(r => r.fill !== ACC[2])).toHaveLength(8);
+    expect(m.some(x => x.k === 'path' && x.stroke === ACC[2])).toBe(true);
+    expect(m.filter(x => x.k === 'dot')).toHaveLength(4);
+  });
+  it('adds axis titles, the vertical one turned', () => {
+    const m = chartLayout({ ...sampleChart('column'), xTitle: 'Quarter', yTitle: 'Revenue' }, 300, 200, ACC, INK, measure);
+    const x = m.find(t => t.k === 'text' && t.text === 'Quarter') as Extract<Mark, { k: 'text' }>, y = m.find(t => t.k === 'text' && t.text === 'Revenue') as Extract<Mark, { k: 'text' }>;
+    expect(x.rot).toBeUndefined(); expect(y.rot).toBe(-90);
+    expect(y.x).toBeLessThan(30); expect(x.y).toBeGreaterThan(150);
+    expect(chartLayout({ ...sampleChart('pie'), xTitle: 'Nope' }, 300, 200, ACC, INK, measure).some(t => t.k === 'text' && t.text === 'Nope')).toBe(false);
   });
 });

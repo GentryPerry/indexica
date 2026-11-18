@@ -169,4 +169,17 @@ describe('pptx import', () => {
     const shape = (await readPptx(b3)).slides[0].els.find(e => e.text === 'Go now')!;
     expect(shape.runs).toEqual([{ s: 3, e: 6, w: 700 }]);
   });
+  it('round-trips scatter, radar, combo charts and axis titles', async () => {
+    const { readPptx } = await import('../src/pptx-read');
+    for (const kind of ['scatter', 'scatterLines', 'radar', 'radarFilled', 'combo'] as const) {
+      const els = sampleDeck(), ch = Object.values(els).find(e => e.type === 'chart')!;
+      ch.chart = { ...sampleChart(kind), xTitle: 'Across', yTitle: 'Up' };
+      const back = (await readPptx(await writePptx(els, id => els[id], { image: () => ({ bytes: PNG, ext: 'png' }), today: 'Today' }))).slides[0].els.find(e => e.type === 'chart')!.chart!;
+      expect(back.kind).toBe(kind);
+      expect(back.series.map(s => s.vals)).toEqual(ch.chart.series.map(s => s.vals));
+      expect(back.cats).toEqual(ch.chart.cats);
+      if (!kind.startsWith('radar')) { expect(back.xTitle).toBe('Across'); expect(back.yTitle).toBe('Up'); }
+    }
+  });
 });
+

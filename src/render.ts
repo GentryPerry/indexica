@@ -377,7 +377,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       else if (m.k === 'line') cg.append(s('line', { x1: m.x1, y1: m.y1, x2: m.x2, y2: m.y2, stroke: m.stroke, 'stroke-width': m.width, 'vector-effect': 'non-scaling-stroke' }));
       else if (m.k === 'path') cg.append(s('path', { d: m.d, fill: m.fill || 'none', stroke: m.stroke || 'none', 'stroke-width': m.width || 0, 'fill-opacity': m.opacity ?? null, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
       else if (m.k === 'dot') cg.append(s('circle', { cx: m.x, cy: m.y, r: m.r, fill: m.fill, stroke: m.stroke, 'stroke-width': 1.5 }));
-      else if (!hide) { const t = s('text', { x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10, 'font-size': Math.round(m.size * 10) / 10, 'font-family': fam, 'font-weight': m.weight || 400, fill: m.fill, 'text-anchor': m.anchor }); t.textContent = m.text; cg.append(t); }
+      else if (!hide) { const t = s('text', { x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10, 'font-size': Math.round(m.size * 10) / 10, 'font-family': fam, 'font-weight': m.weight || 400, fill: m.fill, 'text-anchor': m.anchor, transform: m.rot ? `rotate(${m.rot} ${Math.round(m.x * 10) / 10} ${Math.round(m.y * 10) / 10})` : null }); t.textContent = m.text; cg.append(t); }
     }
     g.append(cg);
   } else if (e.type === 'table' && e.tstyle) {

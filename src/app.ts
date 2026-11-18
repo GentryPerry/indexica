@@ -1168,7 +1168,10 @@ function chartSections(e) {
         h('button', { 'aria-pressed': String((c.legend || 'bottom') === k), title: label, onclick: () => { c.legend = k; commit(); } }, k === 'none' ? 'None' : k === 'right' ? 'Right' : 'Below')))),
     h('div', { class: 'row' },
       h('button', { class: 'fbtn', 'aria-pressed': String(pie ? c.labels !== false : !!c.labels), onclick: () => { c.labels = pie ? c.labels === false : !c.labels; commit(); } }, 'Data labels'),
-      pie ? null : h('button', { class: 'fbtn', 'aria-pressed': String(c.grid !== false), onclick: () => { c.grid = c.grid === false; commit(); } }, 'Gridlines')));
+      pie ? null : h('button', { class: 'fbtn', 'aria-pressed': String(c.grid !== false), onclick: () => { c.grid = c.grid === false; commit(); } }, 'Gridlines')),
+    CH.hasAxes(c.kind) ? h('div', { class: 'grid2' },
+      h('input', { class: 'inp', placeholder: 'Horizontal axis title', 'aria-label': 'Horizontal axis title', value: c.xTitle || '', oninput: ev => { if (ev.target.value) c.xTitle = ev.target.value; else delete c.xTitle; live(); }, onchange: done }),
+      h('input', { class: 'inp', placeholder: 'Vertical axis title', 'aria-label': 'Vertical axis title', value: c.yTitle || '', oninput: ev => { if (ev.target.value) c.yTitle = ev.target.value; else delete c.yTitle; live(); }, onchange: done })) : null);
   const x = (label, fn, dis) => h('button', { class: 'cd-x', title: label, 'aria-label': label, disabled: !!dis, onclick: fn }, icon('M6 6l8 8M14 6l-8 8', 10));
   const dataSec = h('section', { class: 'psec' }, h('h3', null, 'Chart data'),
     h('div', { class: 'cdata' }, h('table', null,
@@ -1182,7 +1185,8 @@ function chartSections(e) {
     h('div', { class: 'row' },
       h('button', { class: 'fbtn', onclick: () => replace(CH.addCategory(c)) }, 'Add row'),
       pie ? null : h('button', { class: 'fbtn', onclick: () => replace(CH.addSeries(c)) }, 'Add series')),
-    h('p', { class: 'hint' }, pie ? 'A pie shows the first series. Paste rows from a spreadsheet into any cell to replace the data.' : 'Paste rows from a spreadsheet into any cell to replace the data: series across the top, categories down the side.'));
+    h('p', { class: 'hint' }, CH.isScatter(c.kind) ? 'Scatter charts read the first column as X values and each series as Y values. Paste rows from a spreadsheet into any cell to replace the data.'
+      : c.kind === 'combo' ? 'The last series is drawn as a line over the columns. Paste rows from a spreadsheet into any cell to replace the data.' : pie ? 'A pie shows the first series. Paste rows from a spreadsheet into any cell to replace the data.' : 'Paste rows from a spreadsheet into any cell to replace the data: series across the top, categories down the side.'));
   return [typeSec, dataSec];
 }
 

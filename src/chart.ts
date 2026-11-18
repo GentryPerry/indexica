@@ -1,11 +1,13 @@
 /**
  * Charts, after DeckCraft's chart model: a small data table (categories by series) drawn as column,
- * bar, line, area, pie, or doughnut charts, stacked or percent where it makes sense, colored from the
- * deck theme's accents. `chartLayout` turns a chart into plain drawing marks so the renderer stays thin
+ * bar, line, area, pie, doughnut, scatter (categories are the X values), radar, or combo (columns with
+ * the last series as a line) charts, stacked or percent where it makes sense, colored from the deck
+ * theme's accents, with optional titles on the horizontal and vertical axes. `chartLayout` turns a chart into plain drawing marks so the renderer stays thin
  * and the layout can be tested.
  */
 
-export type ChartKind = 'column' | 'stackedColumn' | 'percentColumn' | 'bar' | 'stackedBar' | 'percentBar' | 'line' | 'lineMarkers' | 'area' | 'stackedArea' | 'pie' | 'doughnut';
+export type ChartKind = 'column' | 'stackedColumn' | 'percentColumn' | 'bar' | 'stackedBar' | 'percentBar' | 'line' | 'lineMarkers' | 'area' | 'stackedArea' | 'pie' | 'doughnut'
+  | 'scatter' | 'scatterLines' | 'radar' | 'radarFilled' | 'combo';
 export interface Series { name: string; vals: number[]; color?: string }
 export interface ChartData {
   kind: ChartKind;
@@ -15,6 +17,9 @@ export interface ChartData {
   legend?: 'bottom' | 'right' | 'none';
   labels?: boolean;
   grid?: boolean;
+  /** Titles on the horizontal (x) and vertical (y) axes, by where they sit. */
+  xTitle?: string;
+  yTitle?: string;
 }
 
 export const CHART_KINDS: [ChartKind, string, string][] = [
@@ -30,13 +35,28 @@ export const CHART_KINDS: [ChartKind, string, string][] = [
   ['stackedArea', 'Stacked area', 'M3 16v-3l4-3 4 1 6-4v9zM3 13l4-6 4 1 6-5'],
   ['pie', 'Pie', 'M10 3a7 7 0 1 0 7 7h-7zM12 2a6 6 0 0 1 6 6h-6z'],
   ['doughnut', 'Doughnut', 'M10 3a7 7 0 1 0 .01 0M10 7a3 3 0 1 0 .01 0'],
+  ['scatter', 'Scatter', 'M3 3v14h14M6.5 13h.01M9 9.5h.01M12 11h.01M14.5 6h.01M8 6.5h.01'],
+  ['scatterLines', 'Scatter with lines', 'M3 3v14h14M6 14l3-4 3 1 4-6M6 14h.01M9 10h.01M12 11h.01M16 5h.01'],
+  ['radar', 'Radar', 'M10 2.5l7 5-2.7 8.5H5.7L3 7.5zM10 6l3.5 3-1.5 4.5h-4L6.5 9z'],
+  ['radarFilled', 'Filled radar', 'M10 2.5l7 5-2.7 8.5H5.7L3 7.5zM10 6l3.5 3-1.5 4.5h-4L6.5 9zM10 7.5l2 2-1 3H9l-1-3z'],
+  ['combo', 'Column and line', 'M4.5 16v-5M8.5 16V8M12.5 16v-4M16.5 16V9M3 9l4-3 4 3 6-5'],
 ];
+/** Charts drawn on X and Y value axes rather than categories. */
+export const isScatter = (k: ChartKind) => k === 'scatter' || k === 'scatterLines';
+export const isRadar = (k: ChartKind) => k === 'radar' || k === 'radarFilled';
+/** X values of a scatter chart: the categories when they are numbers, otherwise 1, 2, 3 in order (a chart switched from columns). */
+export const xValues = (c: ChartData) => c.cats.every(s => s.trim() !== '' && Number.isFinite(Number(s.replace(/[,$€£%\s]/g, '')))) ? c.cats.map(num) : c.cats.map((_, i) => i + 1);
+/** Charts that can carry axis titles. */
+export const hasAxes = (k: ChartKind) => k !== 'pie' && k !== 'doughnut' && !isRadar(k);
 
-/** PowerPoint's starting chart: four quarters, three series. */
-export const sampleChart = (kind: ChartKind = 'column'): ChartData => ({
+/** PowerPoint's starting chart: four quarters, three series (and, for scatter, its X and Y sample). */
+export const sampleChart = (kind: ChartKind = 'column'): ChartData => isScatter(kind) ? {
+  kind, cats: ['0.7', '1.8', '2.6', '3.2', '4.1'], legend: 'bottom', grid: true,
+  series: [{ name: 'Y values', vals: [2.7, 3.2, 0.8, 2.4, 3.9] }],
+} : {
   kind, cats: ['Q1', 'Q2', 'Q3', 'Q4'], legend: 'bottom', grid: true,
   series: [{ name: 'Series 1', vals: [4.3, 2.5, 3.5, 4.5] }, { name: 'Series 2', vals: [2.4, 4.4, 1.8, 2.8] }, { name: 'Series 3', vals: [2, 2, 3, 5] }],
-});
+};
 
 /* ---------- Data editing ---------- */
 
@@ -86,7 +106,7 @@ export type Mark =
   | { k: 'path'; d: string; fill?: string; stroke?: string; width?: number; opacity?: number }
   | { k: 'line'; x1: number; y1: number; x2: number; y2: number; stroke: string; width: number }
   | { k: 'dot'; x: number; y: number; r: number; fill: string; stroke: string }
-  | { k: 'text'; x: number; y: number; text: string; size: number; fill: string; anchor: 'start' | 'middle' | 'end'; weight?: number };
+  | { k: 'text'; x: number; y: number; text: string; size: number; fill: string; anchor: 'start' | 'middle' | 'end'; weight?: number; rot?: number };
 
 export interface ChartInk { ink: string; muted: string; grid: string; surface: string }
 type Measure = (text: string, size: number) => number;
@@ -135,15 +155,28 @@ export function chartLayout(c: ChartData, w: number, h: number, accents: string[
   }
 
   if (pie) { pieMarks(c, out, colors, (left + right) / 2, (top + bottom) / 2, Math.max(4, Math.min(right - left, bottom - top) / 2), fs, ink); return out; }
+  if (isRadar(c.kind)) { radarMarks(c, out, colors, left, top, right, bottom, fs, ink, measure); return out; }
+
+  // Axis titles take the outer edge: the vertical one turned on the left, the horizontal one along the bottom.
+  const axisTitles = hasAxes(c.kind);
+  let yTitleX = 0, xTitleY = 0;
+  if (axisTitles && c.yTitle) { yTitleX = left + fs * 0.7; left += fs * 1.6; }
+  if (axisTitles && c.xTitle) { xTitleY = bottom - fs * 0.25; bottom -= fs * 1.7; }
+  const titles = (pl: number, pt: number, pr: number, pb: number) => {
+    if (yTitleX) out.push({ k: 'text', x: yTitleX, y: (pt + pb) / 2, text: c.yTitle!, size: fs, fill: ink.muted, anchor: 'middle', weight: 600, rot: -90 });
+    if (xTitleY) out.push({ k: 'text', x: (pl + pr) / 2, y: xTitleY, text: c.xTitle!, size: fs, fill: ink.muted, anchor: 'middle', weight: 600 });
+  };
+  if (isScatter(c.kind)) { scatterMarks(c, out, colors, left, top, right, bottom, fs, ink, measure, titles); return out; }
 
   // Values per category: stacked sums, or plain extremes.
-  const n = c.cats.length, ser = c.series, stacked = STACKED.has(c.kind), percent = PERCENT.has(c.kind), horiz = HORIZ.has(c.kind);
+  const n = c.cats.length, all = c.series, combo = c.kind === 'combo' && all.length > 1, ser = combo ? all.slice(0, -1) : all, stacked = STACKED.has(c.kind), percent = PERCENT.has(c.kind), horiz = HORIZ.has(c.kind);
   const totals = c.cats.map((_, i) => ser.reduce((a, s) => a + Math.abs(s.vals[i] || 0), 0) || 1);
   const val = (si: number, i: number) => { const v = ser[si].vals[i] || 0; return percent ? v / totals[i] : v; };
   let lo = 0, hi = 0;
   for (let i = 0; i < n; i++) {
     if (stacked) { let pos = 0, neg = 0; ser.forEach((_, si) => { const v = val(si, i); if (v >= 0) pos += v; else neg += v; }); hi = Math.max(hi, pos); lo = Math.min(lo, neg); }
     else ser.forEach((_, si) => { hi = Math.max(hi, val(si, i)); lo = Math.min(lo, val(si, i)); });
+    if (combo) { const v = all[all.length - 1].vals[i] || 0; hi = Math.max(hi, v); lo = Math.min(lo, v); }
   }
   const sc = percent ? { min: Math.min(0, lo), max: 1, step: 0.25 } : niceScale(lo, hi);
   const ticks: number[] = []; for (let v = sc.min; v <= sc.max + sc.step * 1e-6; v += sc.step) ticks.push(+v.toFixed(10));
@@ -153,6 +186,7 @@ export function chartLayout(c: ChartData, w: number, h: number, accents: string[
   const catW = Math.max(0, ...c.cats.map(t => measure(t, fs))) + fs * 0.6;
   if (horiz) { left += catW; bottom -= fs * 1.6; } else { left += valW; bottom -= fs * 1.6; }
   const pw = Math.max(1, right - left), ph = Math.max(1, bottom - top);
+  titles(left, top, right, bottom);
   const vpos = (v: number) => horiz ? left + ((v - sc.min) / (sc.max - sc.min)) * pw : bottom - ((v - sc.min) / (sc.max - sc.min)) * ph;
 
   for (const t of ticks) {
@@ -212,7 +246,81 @@ export function chartLayout(c: ChartData, w: number, h: number, accents: string[
       }
     });
   });
+  if (combo) {
+    // The last series rides over the columns as a line with markers.
+    const li = all.length - 1, ls = all[li], pts = c.cats.map((_, i) => [left + band * (i + 0.5), vpos(ls.vals[i] || 0)] as [number, number]);
+    out.push({ k: 'path', d: pts.map(([x, y], i) => `${i ? 'L' : 'M'}${r1(x)} ${r1(y)}`).join(''), stroke: colors[li], width: Math.max(2, fs / 5) });
+    pts.forEach(([x, y], i) => { out.push({ k: 'dot', x, y, r: Math.max(3, fs / 3.5), fill: colors[li], stroke: ink.surface }); label(ls.vals[i] || 0, x, y - fs * 0.6); });
+  }
   return out;
+}
+
+/**
+ * Scatter: the categories are X values and each series a set of Y values, on two value axes with
+ * round bounds. With lines, points join in the order of the table, as PowerPoint draws them.
+ */
+function scatterMarks(c: ChartData, out: Mark[], colors: string[], left: number, top: number, right: number, bottom: number, fs: number, ink: ChartInk, measure: Measure,
+  titles: (l: number, t: number, r: number, b: number) => void) {
+  const xs = xValues(c), ys = c.series.flatMap(s => s.vals.map(v => v || 0));
+  const sx = niceScale(Math.min(0, ...xs), Math.max(0, ...xs)), sy = niceScale(Math.min(0, ...ys), Math.max(0, ...ys));
+  const ticks = (s: { min: number; max: number; step: number }) => { const o: number[] = []; for (let v = s.min; v <= s.max + s.step * 1e-6; v += s.step) o.push(+v.toFixed(10)); return o; };
+  const tx = ticks(sx), ty = ticks(sy);
+  left += Math.max(...ty.map(v => measure(tickLabel(v), fs))) + fs * 0.6; bottom -= fs * 1.6;
+  const pw = Math.max(1, right - left), ph = Math.max(1, bottom - top);
+  titles(left, top, right, bottom);
+  const X = (v: number) => left + ((v - sx.min) / (sx.max - sx.min)) * pw, Y = (v: number) => bottom - ((v - sy.min) / (sy.max - sy.min)) * ph;
+  for (const v of ty) {
+    if (c.grid !== false) out.push({ k: 'line', x1: left, y1: r1(Y(v)), x2: right, y2: r1(Y(v)), stroke: ink.grid, width: 1 });
+    out.push({ k: 'text', x: left - fs * 0.5, y: Y(v) + fs * 0.35, text: tickLabel(v), size: fs, fill: ink.muted, anchor: 'end' });
+  }
+  for (const v of tx) {
+    if (c.grid !== false) out.push({ k: 'line', x1: r1(X(v)), y1: top, x2: r1(X(v)), y2: bottom, stroke: ink.grid, width: 1 });
+    out.push({ k: 'text', x: X(v), y: bottom + fs * 1.3, text: tickLabel(v), size: fs, fill: ink.muted, anchor: 'middle' });
+  }
+  const zy = Y(Math.max(sy.min, Math.min(sy.max, 0))), zx = X(Math.max(sx.min, Math.min(sx.max, 0)));
+  out.push({ k: 'line', x1: left, y1: r1(zy), x2: right, y2: r1(zy), stroke: ink.muted, width: 1 }, { k: 'line', x1: r1(zx), y1: top, x2: r1(zx), y2: bottom, stroke: ink.muted, width: 1 });
+  c.series.forEach((s, si) => {
+    const pts = xs.map((x, i) => [X(x), Y(s.vals[i] || 0)] as [number, number]);
+    if (c.kind === 'scatterLines') out.push({ k: 'path', d: pts.map(([x, y], i) => `${i ? 'L' : 'M'}${r1(x)} ${r1(y)}`).join(''), stroke: colors[si], width: Math.max(2, fs / 5) });
+    pts.forEach(([x, y], i) => {
+      out.push({ k: 'dot', x, y, r: Math.max(3.5, fs / 3), fill: colors[si], stroke: ink.surface });
+      if (c.labels) out.push({ k: 'text', x, y: y - fs * 0.7, text: tickLabel(s.vals[i] || 0), size: fs * 0.9, fill: ink.ink, anchor: 'middle' });
+    });
+  });
+}
+
+/**
+ * Radar: one spoke per category from the center, rings at round values, and each series a closed
+ * outline (filled, for the filled kind), starting at twelve o'clock and going clockwise.
+ */
+function radarMarks(c: ChartData, out: Mark[], colors: string[], left: number, top: number, right: number, bottom: number, fs: number, ink: ChartInk, measure: Measure) {
+  const n = Math.max(3, c.cats.length), vals = c.series.flatMap(s => s.vals.map(v => v || 0));
+  const sc = niceScale(Math.min(0, ...vals), Math.max(0, ...vals), 4);
+  const labW = Math.max(0, ...c.cats.map(t => measure(t, fs)));
+  const cx = (left + right) / 2, cy = (top + bottom) / 2 + fs * 0.2, r = Math.max(4, Math.min((right - left) / 2 - labW - fs * 0.6, (bottom - top) / 2 - fs * 1.4));
+  const ang = (i: number) => -Math.PI / 2 + (i / n) * Math.PI * 2, at = (i: number, v: number) => {
+    const k = (v - sc.min) / (sc.max - sc.min || 1);
+    return [cx + r * k * Math.cos(ang(i)), cy + r * k * Math.sin(ang(i))] as [number, number];
+  };
+  const poly = (pts: [number, number][]) => pts.map(([x, y], i) => `${i ? 'L' : 'M'}${r1(x)} ${r1(y)}`).join('') + 'Z';
+  for (let v = sc.min + sc.step; v <= sc.max + sc.step * 1e-6; v += sc.step) {
+    if (c.grid !== false) out.push({ k: 'path', d: poly(Array.from({ length: n }, (_, i) => at(i, v))), stroke: ink.grid, width: 1 });
+    const [, y] = at(0, v);
+    out.push({ k: 'text', x: cx + fs * 0.3, y: y + fs * 0.35, text: tickLabel(+v.toFixed(10)), size: fs * 0.85, fill: ink.muted, anchor: 'start' });
+  }
+  for (let i = 0; i < n; i++) {
+    const [x, y] = at(i, sc.max), a = ang(i), cos = Math.cos(a);
+    out.push({ k: 'line', x1: r1(cx), y1: r1(cy), x2: r1(x), y2: r1(y), stroke: ink.grid, width: 1 });
+    const lx = cx + (r + fs * 0.6) * cos, ly = cy + (r + fs * 0.6) * Math.sin(a) + fs * 0.35 + (Math.sin(a) < -0.9 ? -fs * 0.3 : Math.sin(a) > 0.9 ? fs * 0.5 : 0);
+    out.push({ k: 'text', x: lx, y: ly, text: c.cats[i] ?? '', size: fs, fill: ink.muted, anchor: Math.abs(cos) < 0.2 ? 'middle' : cos > 0 ? 'start' : 'end' });
+  }
+  c.series.forEach((s, si) => {
+    const pts = Array.from({ length: n }, (_, i) => at(i, s.vals[i] || 0));
+    out.push(c.kind === 'radarFilled' ? { k: 'path', d: poly(pts), fill: colors[si], opacity: 0.35, stroke: colors[si], width: Math.max(1.5, fs / 7) }
+      : { k: 'path', d: poly(pts), stroke: colors[si], width: Math.max(2, fs / 5) });
+    if (c.kind === 'radar') pts.forEach(([x, y]) => out.push({ k: 'dot', x, y, r: Math.max(3, fs / 3.5), fill: colors[si], stroke: ink.surface }));
+    if (c.labels) pts.forEach(([x, y], i) => out.push({ k: 'text', x, y: y - fs * 0.6, text: tickLabel(s.vals[i] || 0), size: fs * 0.9, fill: ink.ink, anchor: 'middle' }));
+  });
 }
 
 /** Pie and doughnut slices for the first series, starting at twelve o'clock and going clockwise. */

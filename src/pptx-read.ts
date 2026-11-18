@@ -148,8 +148,11 @@ const merge = (...ss: TextStyleIn[]): TextStyleIn => Object.assign({}, ...ss.map
 function chartFrom(doc: XNode | undefined): ChartData | null {
   const plot = doc && kid(doc, 'c:chart', 'c:plotArea');
   if (!plot) return null;
-  const node = plot.kids.find(k => /^c:(bar|bar3D|line|line3D|area|area3D|pie|pie3D|doughnut)Chart$/.test(k.tag));
+  const kinds = plot.kids.filter(k => /^c:(bar|bar3D|line|line3D|area|area3D|pie|pie3D|doughnut|scatter|radar)Chart$/.test(k.tag));
+  const node = kinds[0];
   if (!node) return null;
+  // Columns with a line over them come in as a combo chart, the line's series last.
+  const lineOver = kinds.find(k => k.tag === 'c:lineChart'), comboChart = node.tag === 'c:barChart' && !!lineOver && kid(node, 'c:barDir')?.at.val !== 'bar';
   const type = node.tag.slice(2).replace('3D', '').replace('Chart', ''), grouping = kid(node, 'c:grouping')?.at.val || 'clustered';
   const horiz = kid(node, 'c:barDir')?.at.val === 'bar';
   let kind: ChartKind = 'column';
@@ -162,12 +165,22 @@ function chartFrom(doc: XNode | undefined): ChartData | null {
   else if (type === 'area') kind = grouping === 'stacked' || grouping === 'percentStacked' ? 'stackedArea' : 'area';
   else if (type === 'pie') kind = 'pie';
   else if (type === 'doughnut') kind = 'doughnut';
+  else if (type === 'scatter') {
+    // Points only when the series lines are switched off; otherwise points joined by lines.
+    const style = kid(node, 'c:scatterStyle')?.at.val, noLine = kidsOf(node, 'c:ser').every(s => !!kid(s, 'c:spPr', 'a:ln', 'a:noFill'));
+    kind = style === 'marker' || noLine ? 'scatter' : 'scatterLines';
+  }
+  else if (type === 'radar') kind = kid(node, 'c:radarStyle')?.at.val === 'filled' ? 'radarFilled' : 'radar';
+  if (comboChart) kind = 'combo';
   const pts = (n: XNode | undefined) => { const out: string[] = []; for (const p of find(n, 'c:pt')) out[Number(p.at.idx)] = textOf(kid(p, 'c:v') || p); return out; };
-  const series: Series[] = kidsOf(node, 'c:ser').map((s, i) => {
+  const serNodes = [...kidsOf(node, 'c:ser'), ...(comboChart ? kidsOf(lineOver, 'c:ser') : [])];
+  const series: Series[] = serNodes.map((s, i) => {
     const tx = kid(s, 'c:tx'), name = tx ? (find(tx, 'c:v')[0] ? textOf(find(tx, 'c:v')[0]) : '') : '';
-    return { name: name || `Series ${i + 1}`, vals: pts(kid(s, 'c:val')).map(v => Number(v) || 0) };
+    return { name: name || `Series ${i + 1}`, vals: pts(kid(s, 'c:val') || kid(s, 'c:yVal')).map(v => Number(v) || 0) };
   });
-  const first = kidsOf(node, 'c:ser')[0], cats = first ? pts(kid(first, 'c:cat')) : [];
+  const first = serNodes[0], cats = first ? pts(kid(first, 'c:cat') || kid(first, 'c:xVal')) : [];
+  // Axis titles by where their axis sits: the bottom one is the horizontal title, the left one the vertical.
+  const axisTitle = (pos: string) => { const ax = plot.kids.find(k => /^c:(cat|val|date|ser)Ax$/.test(k.tag) && kid(k, 'c:axPos')?.at.val === pos && kid(k, 'c:title') && kid(k, 'c:delete')?.at.val !== '1'); return ax ? find(kid(ax, 'c:title'), 'a:t').map(t => t.text).join('') || undefined : undefined; };
   const n = Math.max(cats.length, ...series.map(s => s.vals.length));
   const title = kid(doc, 'c:chart', 'c:title'), legend = kid(doc, 'c:chart', 'c:legend');
   return {
@@ -176,6 +189,7 @@ function chartFrom(doc: XNode | undefined): ChartData | null {
     legend: !legend ? 'none' : kid(legend, 'c:legendPos')?.at.val === 'r' ? 'right' : 'bottom',
     labels: find(node, 'c:showVal').some(v => v.at.val === '1') || find(node, 'c:showPercent').some(v => v.at.val === '1'),
     grid: !!find(plot, 'c:majorGridlines').length,
+    ...(axisTitle('b') ? { xTitle: axisTitle('b') } : {}), ...(axisTitle('l') ? { yTitle: axisTitle('l') } : {}),
   };
 }
 
