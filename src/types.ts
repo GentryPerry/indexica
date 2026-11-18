@@ -107,6 +107,22 @@ export interface El {
   /** Table cell text, row by row, and whether the first row is a header. */
   cells?: string[][];
   header?: boolean;
+  /** Table style (see `TABLE_KINDS` in `table.ts`) with its accent color, and which parts it marks:
+   *  banded rows, first column, total row. Unset style means the board's plain card table. */
+  tstyle?: string;
+  tacc?: string;
+  band?: boolean;
+  firstCol?: boolean;
+  lastRow?: boolean;
+  /** Pictures: crop as fractions of the image cut from each side [left, top, right, bottom], corner
+   *  radius or an oval shape, and adjustments (-1 to 1, 0 unchanged) plus black and white. */
+  crop?: [number, number, number, number];
+  rad?: number;
+  oval?: boolean;
+  bright?: number;
+  contrast?: number;
+  sat?: number;
+  gray?: boolean;
   /** Table column widths as shares of the table width. Unset means equal columns. */
   colw?: number[];
   /** Draw this piece with a rough, hand-drawn outline. */

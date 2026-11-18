@@ -80,3 +80,46 @@ export function stepCell(e: El, r: number, c: number, back: boolean): [number, n
   const cols = colsOf(e), i = r * cols + c + (back ? -1 : 1);
   return i < 0 || i >= rowsOf(e) * cols ? null : [Math.floor(i / cols), i % cols];
 }
+
+/* ---------- Table styles (DeckCraft's built-in looks, generated from one accent color) ---------- */
+
+export type TableKind = 'none' | 'grid' | 'light1' | 'light2' | 'medium2' | 'medium4' | 'dark1';
+export const TABLE_KINDS: [TableKind, string][] = [
+  ['medium2', 'Medium 2'], ['medium4', 'Medium 4'], ['light1', 'Light 1'], ['light2', 'Light 2'], ['dark1', 'Dark 1'], ['grid', 'Grid only'], ['none', 'No style'],
+];
+
+const lin = (v: number) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+const gam = (v: number) => v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
+function rgb(hex: string): number[] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  const s = m ? m[1] : '2e6fd8';
+  return [0, 2, 4].map(i => parseInt(s.slice(i, i + 2), 16) / 255);
+}
+const hexOf = (c: number[]) => '#' + c.map(v => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0')).join('');
+/** DrawingML tint: `k` of the color, the rest white, mixed in linear light (tint 20% is a pale wash). */
+export const tint = (hex: string, k: number) => hexOf(rgb(hex).map(v => gam(lin(v) * k + (1 - k))));
+/** DrawingML shade: `k` of the color, the rest black, in linear light. */
+export const shade = (hex: string, k: number) => hexOf(rgb(hex).map(v => gam(lin(v) * k)));
+
+/** How one cell of a styled table looks. Unset fill or text means none or the default ink. */
+export interface CellLook { fill?: string; text?: string; bold: boolean; border?: [string, number] }
+
+/**
+ * A cell's look in a styled table: header row, total row, first column, and banded rows pick the
+ * parts of the style, as DeckCraft's renderer does for PowerPoint's built-in styles.
+ */
+export function cellLook(e: El, r: number, c: number): CellLook {
+  const kind = (e.tstyle || 'medium2') as TableKind, a = e.tacc || '#2e6fd8', rows = rowsOf(e);
+  const header = !!e.header && r === 0, total = !!e.lastRow && r === rows - 1 && rows > 1, first = !!e.firstCol && c === 0;
+  const bodyR = e.header ? r - 1 : r, banded = !!e.band && !header && !total && bodyR % 2 === 0;
+  const strong = header || total || first;
+  switch (kind) {
+    case 'none': return { bold: header };
+    case 'grid': return { bold: header, border: ['#1d2530', 0.75] };
+    case 'light1': { const fill = banded ? tint(a, 0.2) : undefined; return { fill, bold: strong, border: header ? [a, 1] : undefined }; }
+    case 'light2': return { fill: header ? a : undefined, text: header ? '#ffffff' : undefined, bold: header || total || first, border: [a, 1] };
+    case 'dark1': return { fill: header ? '#000000' : banded ? shade(a, 0.6) : shade(a, 0.75), text: '#ffffff', bold: header || total || first, border: ['#ffffff', 1] };
+    case 'medium4': return { fill: header || banded ? tint(a, 0.4) : tint(a, 0.2), bold: strong, border: [a, 0.75] };
+    default: return { fill: strong ? a : banded ? tint(a, 0.4) : tint(a, 0.2), text: strong ? '#ffffff' : undefined, bold: strong, border: ['#ffffff', 1] };
+  }
+}

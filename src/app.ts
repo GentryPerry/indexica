@@ -13,7 +13,7 @@ import { miniFit, miniToWorld, union } from './layout';
 import { outlineRows, TYPE_NAMES, LIVE_NAMES } from './outline';
 import { migrateBoard, clonePages, nextPageName, TEMPLATES } from './templates';
 import { groupTasks } from './tasks';
-import { emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol } from './table';
+import { TABLE_KINDS, cellLook, emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol } from './table';
 import { buildPdf } from './pdf';
 import * as G from './geometry';
 import { Store } from './store';
@@ -26,6 +26,7 @@ import * as SL from './slides';
 import * as DK from './deck';
 import * as RT from './richtext';
 import * as RE from './richedit';
+import * as PIC from './picture';
 import * as V from './vector';
 import * as B from './boolean';
 import { BRUSHES, PROFILES, brushOutline, outlineD, profileOutline, shaped, eraseStroke, touches } from './brush';
@@ -371,6 +372,31 @@ function encodeImage(bmp, scale, alpha) {
   if (alpha) { x.drawImage(bmp, 0, 0, c.width, c.height); const u = c.toDataURL('image/webp', 0.85); if (u.startsWith('data:image/webp')) return u; }
   x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(bmp, 0, 0, c.width, c.height); return c.toDataURL('image/jpeg', 0.84);
 }
+/** The insert buttons in an empty content placeholder: a styled table filling it, or a picture. */
+function phInsert(id, what) {
+  const ph = E(id); if (!ph) return;
+  if (what === 'picture') { imgSlot = id; const inp = $('#img-file'); if (inp) { inp.multiple = false; inp.addEventListener('cancel', () => { imgSlot = null; inp.multiple = true; }, { once: true }); inp.click(); } return; }
+  const rows = 4, cols = 3, rowH = 52, t = { id: uid('e'), type: 'table', z: ph.z, x: ph.x, y: ph.y, w: ph.w, h: Math.min(ph.h, rows * rowH), cells: emptyCells(rows, cols), header: true, tstyle: 'medium2', band: true, size: 20 };
+  DK.linkTheme(t, 'tacc', 'accent1', deckTheme());
+  delete board.els[id]; board.els[t.id] = t; sel = new Set([t.id]); commit(); startEdit(t.id, [0, 0]);
+}
+/* Cropping a picture: the image stays put while the handles move the window and a drag slides the image under it. */
+let cropId = null;
+function startCrop(id) {
+  const e = E(id); if (!e || e.type !== 'image' || e.locked) return;
+  if (e.rot) return toast('Straighten the picture to crop it.');
+  if (editing) endEdit(); cropId = id; sel = new Set([id]); refresh();
+  toast('Drag the handles to crop, drag the picture to move it inside. Enter or Esc when done.');
+}
+function endCrop() { if (!cropId) return; cropId = null; commit(); refresh(); }
+/** The faded rest of the image around a picture's crop window, and its outline. */
+function cropMarks(e, k) {
+  const f = PIC.fullRect(e), href = e.src && images.get(e.src), id = 'cropout-' + e.id;
+  return s('g', { 'pointer-events': 'none' },
+    s('clipPath', { id }, s('path', { d: `M${f.x} ${f.y}h${f.w}v${f.h}h${-f.w}zM${e.x} ${e.y}v${e.h}h${e.w}v${-e.h}z`, 'clip-rule': 'evenodd' })),
+    href ? s('image', { x: f.x, y: f.y, width: f.w, height: f.h, href, preserveAspectRatio: 'none', opacity: 0.35, 'clip-path': `url(#${id})` }) : null,
+    s('rect', { x: f.x, y: f.y, width: f.w, height: f.h, fill: 'none', stroke: C.accent, 'stroke-width': k, 'stroke-dasharray': `${4 * k} ${3 * k}` }));
+}
 /** True for a slide placeholder still showing its prompt. */
 const emptyPh = e => !!e && e.type === 'text' && !!e.ph && !e.locked && (e.ph === 'picture' || !(e.text || '').trim());
 /** A click on an empty placeholder starts typing in it, or picks a picture for a picture placeholder. */
@@ -394,10 +420,8 @@ async function addImage(file, at, slotId) {
   const e = { id: uid('e'), type: 'image', z: topZ() + 1, x: Math.round(c.x - w / 2), y: Math.round(c.y - ht / 2), w, h: ht, src: id };
   const slot = slotId && E(slotId);
   if (slot) {
-    // A picture placeholder takes the picture, fitted inside its box and centered, on the same layer.
-    const k = Math.min(slot.w / bmp.width, slot.h / bmp.height);
-    Object.assign(e, { z: slot.z, w: Math.round(bmp.width * k), h: Math.round(bmp.height * k) });
-    e.x = Math.round(slot.x + (slot.w - e.w) / 2); e.y = Math.round(slot.y + (slot.h - e.h) / 2);
+    // A placeholder takes the picture filling its box, cropped to fit (double-click to adjust the crop), on the same layer.
+    e.z = slot.z; PIC.fillBox(e, slot, bmp.width / bmp.height);
     delete board.els[slot.id];
   }
   board.els[e.id] = e; sel = new Set([e.id]); tool = 'select'; commit();
@@ -609,6 +633,7 @@ function drawOverlay(extra) {
       if (solo && !e.locked && !(mode && mode.k === 'connEnd')) for (const [n, at] of [['ca', gm.p], ['cb', gm.q]]) out.push(s('circle', { 'data-h': n, cx: at.x, cy: at.y, r: 4.5 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.25 * k, style: 'cursor:move' }, s('title', null, 'Drag to re-attach this end')));
       continue;
     }
+    if (e.id === cropId) out.push(cropMarks(e, k));
     const g = s('g', { transform: e.rot ? `rotate(${e.rot} ${e.x + e.w / 2} ${e.y + e.h / 2})` : null },
       s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': 1.25 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
     if (solo && !e.locked) {
@@ -626,7 +651,7 @@ function drawOverlay(extra) {
     out.push(g);
     if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k, !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode && !e.rot));
     // Quick connect: drag a + handle to another piece, or click it to add a connected piece on that side.
-    if (solo && !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode) for (const sd of SIDES) {
+    if (solo && !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode && e.id !== cropId) for (const sd of SIDES) {
       const at = sidePoint(e, sd, 20 * k), r = 6.5 * k;
       out.push(s('g', { 'data-h': 'qc-' + sd, class: 'qc', style: 'cursor:crosshair' },
         s('title', null, 'Drag to connect, or click to add a connected piece'),
@@ -778,7 +803,11 @@ function makeBox(type, x, y, w, ht, keep = false) {
   if (['rect', 'ellipse', 'diamond'].includes(type)) e.fill = '#ffffff';
   if (type === 'card') Object.assign(e, { text: 'New task', status: 'todo', due: '', notes: '' });
   if (type === 'frame') e.text = 'Frame';
-  if (type === 'table') { delete e.text; Object.assign(e, { cells: emptyCells(3, 3), header: true }); }
+  if (type === 'table') {
+    delete e.text; Object.assign(e, { cells: emptyCells(3, 3), header: true });
+    // On a slide a table takes the deck's table style, painted from the theme's first accent.
+    if (slideAt(e)) { Object.assign(e, { tstyle: 'medium2', band: true, size: 20 }); DK.linkTheme(e, 'tacc', 'accent1', deckTheme()); }
+  }
   const stuck = type === 'sticker' || type === 'tape';
   if (stuck) delete e.text;
   if (type === 'sticker') Object.assign(e, { shape: stamp.shape, fill: stamp.fill });
@@ -881,6 +910,59 @@ function quickAdd(src, side) {
   sel = new Set([n.id]); commit(); startEdit(n.id);
 }
 
+/* ---------- Table styles and pictures (panel) ---------- */
+/** A small picture of a table style in an accent: three rows of three cells. */
+function tableThumb(kind, acc) {
+  const t = { id: 'tt', type: 'table', z: 0, x: 0, y: 0, w: 60, h: 36, cells: emptyCells(3, 3), header: true, band: true, tstyle: kind, tacc: acc };
+  const cellsOut = [];
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+    const lk = cellLook(t, r, c), x = c * 20, y = r * 12;
+    cellsOut.push(s('rect', { x, y, width: 20, height: 12, fill: lk.fill || '#ffffff', stroke: lk.border ? lk.border[0] : 'none', 'stroke-width': lk.border ? 1 : 0 }));
+  }
+  return s('svg', { viewBox: '0 0 60 36', width: 60, height: 36, 'aria-hidden': 'true' }, s('rect', { width: 60, height: 36, fill: '#ffffff' }), ...cellsOut);
+}
+/** Table style choices: a plain board table or one of the deck styles, its accent, and which parts it marks. */
+function tableStyleUI(tb) {
+  const th = SL.slidesOf(board.els).length ? deckTheme() : null, acc = tb.tacc || (th ? th.colors.accent1 : '#2e6fd8');
+  const setKind = k => { if (k === '') { ['tstyle', 'tacc', 'band', 'firstCol', 'lastRow'].forEach(x => delete tb[x]); if (tb.tc) delete tb.tc.tacc; } else { if (!tb.tstyle) { tb.band = true; if (th) DK.linkTheme(tb, 'tacc', 'accent1', th); else tb.tacc = acc; } tb.tstyle = k; } commit(); };
+  const flag = (key, label) => h('button', { class: 'fbtn', 'aria-pressed': String(!!tb[key]), onclick: () => { if (tb[key]) delete tb[key]; else tb[key] = true; commit(); } }, label);
+  const accents = th ? DK.SWATCH_SLOTS.filter(x => x.startsWith('accent') || x === 'dk1').map(slot => [th.colors[slot], DK.SLOT_NAMES[slot], slot]) : VIVID.map(c => [c, null, null]);
+  return [
+    h('div', { class: 'f-label' }, 'Style'),
+    h('div', { class: 'tstyles', role: 'group', 'aria-label': 'Table style' },
+      h('button', { class: 'tsty', 'aria-pressed': String(!tb.tstyle), title: 'Board table: a card with a soft header', onclick: () => setKind('') }, h('span', { class: 'tsty-card' }), h('span', null, 'Board')),
+      TABLE_KINDS.map(([k, label]) => h('button', { class: 'tsty', 'aria-pressed': String(tb.tstyle === k), title: label, onclick: () => setKind(k) }, tableThumb(k, acc), h('span', null, label)))),
+    tb.tstyle && !['none', 'grid'].includes(tb.tstyle) ? [h('div', { class: 'f-label' }, th ? 'Accent (theme)' : 'Accent'),
+      h('div', { class: 'swatches' }, accents.map(([c, name, slot]) => h('button', { class: 'sw sm', style: 'background:' + c, title: name || c, 'aria-label': name || 'Color ' + c, 'aria-pressed': String((tb.tacc || '') === c),
+        onclick: () => { if (slot) DK.linkTheme(tb, 'tacc', slot, th); else { tb.tacc = c; if (tb.tc) delete tb.tc.tacc; } commit(); } })))] : null,
+    h('div', { class: 'row wrap' }, flag('header', 'Header row'), tb.tstyle ? [flag('band', 'Banded rows'), flag('firstCol', 'First column'), flag('lastRow', 'Total row')] : null),
+  ];
+}
+/** The Picture section: crop, corners, border, and adjustments. */
+function pictureSection(e, num, pick, swatch) {
+  const pct = v => Math.round((v || 0) * 100);
+  const slider = (key, label) => h('label', { class: 'slider' }, h('span', null, label),
+    h('input', { type: 'range', min: -100, max: 100, step: 1, value: pct(e[key]), style: `--fill:${(pct(e[key]) + 100) / 2}%`, 'aria-label': label,
+      oninput: ev => { const v = Number(ev.target.value) / 100; ev.target.style.setProperty('--fill', (Number(ev.target.value) + 100) / 2 + '%'); if (v) e[key] = v; else delete e[key]; ev.target.nextSibling.textContent = String(Math.round(v * 100)); draw(); },
+      onchange: () => holdCommit(), ondblclick: () => { delete e[key]; commit(); } }),
+    h('span', { class: 'slider-v' }, String(pct(e[key]))));
+  const corner = e.oval ? 'oval' : String(e.rad || 0);
+  const ratios = [['Original', 0], ['1:1', 1], ['4:3', 4 / 3], ['16:9', 16 / 9], ['3:4', 3 / 4]];
+  return h('section', { class: 'psec' }, h('h3', null, 'Picture'),
+    h('button', { class: 'fbtn', 'aria-pressed': String(cropId === e.id), title: 'Crop (double-click the picture)', disabled: !!e.locked, onclick: () => cropId === e.id ? endCrop() : startCrop(e.id) }, icon('M6 3v11h11M3 6h11v11', 14), cropId === e.id ? 'Done cropping' : 'Crop'),
+    h('div', { class: 'row' },
+      h('div', { class: 'seg grow', role: 'group', 'aria-label': 'Crop to shape' }, ratios.map(([l, r]) => h('button', { title: r ? 'Crop to ' + l : 'Show the whole picture', disabled: !!e.locked, onclick: () => { if (r) PIC.cropTo(e, r); else PIC.resetCrop(e); commit(); } }, r ? l : 'Full')))),
+    h('div', { class: 'grid2' },
+      pick('pic-corner', 'Corners', [['0', 'Square'], ['8', 'Rounded'], ['24', 'Round'], ['oval', 'Oval']], corner, v => { if (v === 'oval') { e.oval = true; delete e.rad; } else { delete e.oval; if (v === '0') delete e.rad; else e.rad = Number(v); } commit(); }),
+      pick('pic-border', 'Border width', [['0', 'No border'], ['2', '2 px'], ['4', '4 px'], ['8', '8 px']], String(e.stroke && e.sw ? e.sw : 0), v => { if (v === '0') { delete e.sw; delete e.stroke; } else { e.sw = Number(v); if (!e.stroke) e.stroke = '#ffffff'; } commit(); })),
+    e.sw ? h('div', { class: 'swatches' }, ['#ffffff', '#17202d', ...VIVID].map(c => swatch(c, e.stroke === c, () => { e.stroke = c; commit(); }, null, true))) : null,
+    h('div', { class: 'f-label' }, 'Adjust'),
+    slider('bright', 'Brightness'), slider('contrast', 'Contrast'), slider('sat', 'Saturation'),
+    h('div', { class: 'row' },
+      h('button', { class: 'fbtn', 'aria-pressed': String(!!e.gray), onclick: () => { if (e.gray) delete e.gray; else e.gray = true; commit(); } }, 'Black and white'),
+      h('button', { class: 'fbtn', disabled: !PIC.adjustments(e), onclick: () => { ['bright', 'contrast', 'sat', 'gray'].forEach(k => delete e[k]); commit(); } }, 'Reset')));
+}
+
 /* ---------- Text editing ---------- */
 /** Text pieces edit in the paragraph editor; everything else in the plain one. */
 const richEd = e => !!e && e.type === 'text';
@@ -974,6 +1056,14 @@ function onDown(ev) {
   if (vedit && vEditDown(ev, p, id, dbl)) return;
   if (tool === 'vpen') { vPenDown(ev, p, dbl); return; }
   if (tool === 'select') {
+    const act = ev.target.closest && ev.target.closest('[data-ph-act]');
+    if (act && id) { phInsert(id, act.getAttribute('data-ph-act')); return; }
+    if (cropId) {
+      const ce = E(cropId), hd0 = ev.target.dataset && ev.target.dataset.h;
+      if (ce && hd0 && hd0.length <= 2) { mode = { k: 'resize', hd: hd0, e: ce, o: clone(ce), p, others: [], crop: PIC.fullRect(ce) }; return; }
+      if (ce && id === cropId) { mode = { k: 'cpan', e: ce, full: PIC.fullRect(ce), c0: ce.crop ? [...ce.crop] : null, p }; return; }
+      endCrop();
+    }
     if (ev.target.dataset && ev.target.dataset.h) { const e = selEls()[0], hd = ev.target.dataset.h; 
       if (hd.startsWith('gs-')) {
         // Scale the whole selection away from the corner opposite the one being dragged.
@@ -1003,6 +1093,7 @@ function onDown(ev) {
     }
     if (inner) id = inner.id;
     if (dbl && id && E(id).type === 'path') { enterVedit(id); return; }
+    if (dbl && id && E(id).type === 'image') { startCrop(id); return; }
     if (dbl) { if (id) { sel = new Set([id]); refresh(); startEdit(id, E(id).type === 'table' ? cellAt(E(id), p.x, p.y) : null); } else makeBox('sticky', p.x, p.y, 0, 0); return; }
     if (id) {
       const had = sel.has(id);
@@ -1086,6 +1177,12 @@ function onMove(ev) {
     if (mode.box0 && !ev.ctrlKey && !ev.metaKey) { const r = snapMove({ x: mode.box0.x + dx, y: mode.box0.y + dy, w: mode.box0.w, h: mode.box0.h }, mode.others, 6 / cam.z); dx += r.dx; dy += r.dy; guides = r.guides; gaps = r.gaps; }
     for (const o of mode.start) { const e = E(o.id); if (e.type === 'conn') { e.ax = o.ax + dx; e.ay = o.ay + dy; e.bx = o.bx + dx; e.by = o.by + dy; } else { e.x = Math.round(o.x + dx); e.y = Math.round(o.y + dy); } }
     draw(); drawOverlay(s('g', null, guideMarks(guides), gapMarks(gaps)));
+  } else if (mode.k === 'resize' && mode.crop) {
+    const { e, o, hd } = mode, r = G.resizeBox(o, hd, p.x - mode.p.x, p.y - mode.p.y, 10, ev.shiftKey ? o.w / o.h : undefined);
+    PIC.setWindow(e, r, mode.crop); draw(); drawOverlay();
+  } else if (mode.k === 'cpan') {
+    if (mode.c0) mode.e.crop = [...mode.c0]; else delete mode.e.crop;
+    PIC.panCrop(mode.e, p.x - mode.p.x, p.y - mode.p.y, mode.full); draw(); drawOverlay();
   } else if (mode.k === 'resize') {
     // Pictures and stickers keep their shape from the corners; Shift does the same for anything else.
     const { e, o, hd } = mode, ratio = o.type === 'image' || o.type === 'sticker' || ev.shiftKey ? o.w / o.h : undefined;
@@ -1141,7 +1238,7 @@ function onUp(ev) {
   if (m.k === 'vhandle') { drawDraft(); return; }
   if (m.k === 'vnode' || m.k === 'vhand') { if (m.k === 'vhand' || m.moved) { fitPath(m.e); commit(); } else drawOverlay(); return; }
   if (m.k === 'drag') { if (m.moved || m.dup) commit(); else if (m.had && sel.size > 1) { sel = new Set(E(m.id) && E(m.id).boolIn ? withKids(m.id) : group(m.id)); refresh(); } else if (sel.size === 1 && emptyPh(E(m.id))) phClick(E(m.id)); else drawOverlay(); }
-  else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale') commit();
+  else if (m.k === 'resize' || m.k === 'grotate' || m.k === 'gscale' || m.k === 'cpan') commit();
   else if (m.k === 'connEnd') commit();
   else if (m.k === 'marquee') refresh();
   else if (m.k === 'grad') commit();
@@ -1176,6 +1273,7 @@ function onKey(ev) {
     if (k === 'escape' || k === 'enter') { finishDraft(false); ev.preventDefault(); return; }
     if (k === 'backspace' || k === 'delete') { vdraft.nodes.pop(); if (!vdraft.nodes.length) vdraft = null; drawDraft(); ev.preventDefault(); return; }
   }
+  if (cropId && (k === 'escape' || k === 'enter')) { endCrop(); ev.preventDefault(); return; }
   if (vedit && !mod) {
     if (k === 'escape' || k === 'enter') { exitVedit(); ev.preventDefault(); return; }
     if (k === 'backspace' || k === 'delete') { removeVNodes(); ev.preventDefault(); return; }
@@ -1535,9 +1633,10 @@ function renderProps() {
       out.push(sec('Table',
         h('div', { class: 'stepper' }, h('span', null, 'Rows'), h('button', { class: 'ibtn', 'aria-label': 'Remove last row', disabled: r <= 1, onclick: () => resize(removeRow(tb.cells, r - 1), -1, 0) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(r)), h('button', { class: 'ibtn', 'aria-label': 'Add a row', onclick: () => resize(insertRow(tb.cells, r), 1, 0) }, icon('M10 5v10M5 10h10', 14))),
         h('div', { class: 'stepper' }, h('span', null, 'Columns'), h('button', { class: 'ibtn', 'aria-label': 'Remove last column', disabled: c <= 1, onclick: () => resize(removeCol(tb.cells, c - 1), 0, -1) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(c)), h('button', { class: 'ibtn', 'aria-label': 'Add a column', onclick: () => resize(insertCol(tb.cells, c), 0, 1) }, icon('M10 5v10M5 10h10', 14))),
-        h('button', { class: 'fbtn', 'aria-pressed': String(!!tb.header), onclick: () => { if (tb.header) delete tb.header; else tb.header = true; commit(); } }, 'Header row'),
+        tableStyleUI(tb),
         h('p', { class: 'hint' }, 'Double-click a cell to type. Tab moves to the next cell.')));
     }
+    if (one && one.type === 'image') out.push(pictureSection(one, num, pick, swatch));
     const vivid = of(['sticker', 'tape']), tapes = of(['tape']);
     if (vivid.length) out.push(sec('Color', h('div', { class: 'swatches' }, VIVID.map(c => swatch(c, same(vivid, 'fill') === c, () => setAll(vivid, 'fill', c)))),
       tapes.length ? pick('tape-pattern', 'Tape pattern', Object.entries(TAPES), same(tapes, 'pattern') || 'stripes', v => setAll(tapes, 'pattern', v, true)) : null));

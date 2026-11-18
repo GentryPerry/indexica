@@ -5,7 +5,8 @@ import { isRich } from './richtext';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
-import { cellBox, colFractions, rowsOf } from './table';
+import { cellBox, cellLook, colFractions, rowsOf } from './table';
+import { adjustments } from './picture';
 import { hashId, roughPath, shapeOutline, wobble } from './sketch';
 import { SURFACE, chip, inkOn, outlineFor, paintFill, type Theme } from './palette';
 import { flatten, pathD, scaleOf } from './vector';
@@ -77,6 +78,44 @@ function richText(e: El, ink: string): SVGElement {
     if (ln.marker) g.append(textBlock([ln.marker], e.x + 2 + ln.bx!, top + ln.base, ls, ink));
     if (ln.text) g.append(textBlock([ln.text], tx, top + ln.base, ls, ink, a === 'center' ? 'middle' : a === 'right' ? 'end' : 'start'));
   }
+  return g;
+}
+
+/**
+ * A picture: its cropped window of the image, clipped to rounded corners or an oval, with its
+ * adjustments as an SVG filter and an optional border.
+ */
+function pictureNodes(e: El, href: string, c: RenderCtx): SVGElement[] {
+  const { x, y, w, h } = e, [l, t, r, b] = e.crop || [0, 0, 0, 0], tag = `${e.id}${c.exp ? '-x' : ''}`, out: SVGElement[] = [];
+  const img = s('image', { x: 0, y: 0, width: 1, height: 1, href, preserveAspectRatio: 'none' });
+  const ad = adjustments(e);
+  if (ad) {
+    const f = (ch: string) => s(ch, { type: 'linear', slope: ad.slope, intercept: ad.intercept });
+    out.push(s('filter', { id: 'pf-' + tag, 'color-interpolation-filters': 'sRGB' }, s('feColorMatrix', { type: 'saturate', values: ad.sat }), s('feComponentTransfer', null, f('feFuncR'), f('feFuncG'), f('feFuncB'))));
+    img.setAttribute('filter', `url(#pf-${tag})`);
+  }
+  const win = s('svg', { x, y, width: w, height: h, viewBox: `${l} ${t} ${Math.max(0.001, 1 - l - r)} ${Math.max(0.001, 1 - t - b)}`, preserveAspectRatio: 'none', overflow: 'hidden' }, img);
+  const rad = Math.min(e.rad || 0, w / 2, h / 2), shape = () => e.oval ? s('ellipse', { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2 }) : s('rect', { x, y, width: w, height: h, rx: rad });
+  // The clip goes on a wrapper: on the inner svg itself it would be read in the image's own 0 to 1 units.
+  if (e.oval || rad) { out.push(s('clipPath', { id: 'pc-' + tag }, shape()), s('g', { 'clip-path': `url(#pc-${tag})` }, win)); }
+  else out.push(win);
+  if (e.stroke && e.stroke !== 'none' && (e.sw || 0) > 0) { const o = shape(); o.setAttribute('fill', 'none'); o.setAttribute('stroke', e.stroke); o.setAttribute('stroke-width', String(e.sw)); o.setAttribute('pointer-events', 'none'); out.push(o); }
+  return out;
+}
+
+/** Insert buttons in an empty content placeholder, as in PowerPoint: a table or a picture. */
+function insertTiles(e: El, c: RenderCtx): SVGElement {
+  const u = Math.max(28, Math.min(56, Math.min(e.w, e.h) * 0.14)), gap = u * 0.4, cx = e.x + e.w / 2, cy = e.y + e.h * 0.6, g = s('g');
+  const tiles: [string, string, string][] = [
+    ['table', 'Insert a table', 'M4 5.5h12v9H4zM4 8.5h12M4 11.5h12M8 5.5v9M12 5.5v9'],
+    ['picture', 'Insert a picture', 'M4 5h12v10H4zM4 13l3.5-3.5 2.5 2.5 2-2 4 3.5M12.5 8.2h.01'],
+  ];
+  tiles.forEach(([act, label, d], i) => {
+    const x = cx + (i - 1) * (u + gap) + gap / 2, y = cy - u / 2;
+    g.append(s('g', { 'data-ph-act': act, style: 'cursor:pointer' }, s('title', null, label),
+      s('rect', { x, y, width: u, height: u, rx: u * 0.18, fill: c.frame, stroke: c.muted, 'stroke-opacity': 0.35, 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke' }),
+      s('path', { d, transform: `translate(${x + u * 0.15} ${y + u * 0.15}) scale(${u * 0.7 / 20})`, fill: 'none', stroke: c.muted, 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' })));
+  });
   return g;
 }
 
@@ -188,6 +227,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const ink = inkOn(c.under?.(e), e.color, c.theme), empty = !e.text || !e.text.trim() || e.ph === 'picture';
     if (e.ph && empty) {
       // An empty placeholder shows a dashed box and its prompt on the board, and nothing in exports.
+      if (!c.exp && (e.ph === 'body' || e.ph === 'body2')) g.append(insertTiles(e, c));
       if (!c.exp) {
         g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: 'none', stroke: c.muted, 'stroke-width': 1, 'stroke-dasharray': '5 4', 'vector-effect': 'non-scaling-stroke', 'stroke-opacity': 0.55, 'pointer-events': 'none' }));
         if (!hide && e.bullets && e.ph !== 'picture') {
@@ -273,9 +313,23 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     if (marks.d) g.append(s('path', { d: marks.d, 'clip-path': `url(#${clip})`, 'pointer-events': 'none', ...(marks.filled ? { fill: '#ffffff', 'fill-opacity': 0.6 } : { fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.5, 'stroke-width': marks.d && e.pattern === 'grid' ? 1.2 : 4 }) }));
   } else if (e.type === 'image') {
     const href = e.src ? c.image?.(e.src) : undefined;
-    if (href) g.append(s('image', { x, y, width: w, height: h, href, preserveAspectRatio: 'none' }));
+    if (href) g.append(...pictureNodes(e, href, c));
     else g.append(s('rect', { x, y, width: w, height: h, rx: 6, fill: SURFACE[c.theme].head, stroke: c.frameLine, 'stroke-dasharray': '6 4' }),
       textBlock(['Loading picture'], x + w / 2, y + h / 2 + 4, { size: 13, weight: 500, family: st.family, italic: false }, c.muted, 'middle'));
+  } else if (e.type === 'table' && e.tstyle) {
+    // A styled table (slides): flat cells painted from one accent, as PowerPoint's table styles.
+    const rows = rowsOf(e), cols = Math.max(1, ...(e.cells || [['']]).map(r => r.length)), lines: SVGElement[] = [];
+    g.append(s('rect', { x, y, width: w, height: h, fill: 'transparent' }));
+    for (let r = 0; r < rows; r++) for (let k = 0; k < cols; k++) {
+      const b = cellBox(e, r, k), look = cellLook(e, r, k), text = (e.cells?.[r]?.[k]) || '';
+      if (look.fill) g.append(s('rect', { x: b.x, y: b.y, width: b.w, height: b.h, fill: look.fill, 'pointer-events': 'none' }));
+      if (look.border) lines.push(s('rect', { x: b.x, y: b.y, width: b.w, height: b.h, fill: 'none', stroke: look.border[0], 'stroke-width': look.border[1], 'pointer-events': 'none' }));
+      if (!text || (hide && c.editCell && c.editCell[0] === r && c.editCell[1] === k)) continue;
+      const cs = look.bold ? { ...st, weight: Math.max(st.weight, 700) } : st, ink = look.text || (e.color ? e.color : inkOn(look.fill, undefined, look.fill ? 'light' : c.theme));
+      const ls = wrapEl({ ...e, text, weight: cs.weight }, b.w - 16).slice(0, Math.max(1, Math.floor((b.h - 8) / lh)));
+      lines.push(textBlock(ls, b.x + 8, b.y + b.h / 2 - ls.length * lh / 2 + cs.size * 0.97, cs, ink));
+    }
+    g.append(...lines);
   } else if (e.type === 'table') {
     const rows = rowsOf(e), fr = colFractions(e), sf = SURFACE[c.theme], line = sf.grid, r8 = 8;
     g.append(s('rect', { x, y, width: w, height: h, rx: r8, fill: sf.card, stroke: sf.cardLine, filter: shadow }));
