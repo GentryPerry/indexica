@@ -1,5 +1,6 @@
 import { connGeom } from './connectors';
 import { colFractions, rowFractions } from './table';
+import { CARD, cardList, cardTitle } from './tasks';
 import { indentOf, isRich, levelRatio, markers, parasOf, spaceBefore } from './richtext';
 import { FONTS, type Box, type El, type Lookup } from './types';
 import { spansOf, type Run, type RunStyle } from './runs';
@@ -131,6 +132,12 @@ export function layoutText(e: El, width: number): { lines: TLine[]; height: numb
     });
   });
   return { lines, height: y };
+}
+/** Height of a task card's title and checklist, without the insets. */
+export function cardTextHeight(e: El): number {
+  const st = textStyle(e), title = wrap(cardTitle(e) || ' ', e.w - CARD.pad * 2, st.size, st.weight, st.family, st.italic).length * st.size * 1.3;
+  const list = cardList(e);
+  return title + (list ? CARD.gap + layoutText(list, e.w - CARD.pad * 2).height : 0);
 }
 /** Height of the text inside a shape or note: plain wrapped lines, or styled lines when it has runs. */
 export const boxTextHeight = (e: El, width: number) => (e.runs && e.runs.length) || e.bullets || /(^|\n)\t/.test(e.text || '') ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
@@ -276,6 +283,7 @@ export function fitText(e: El) {
   else if (e.type === 'text' && e.ph) fitPlaceholder(e);
   else if (e.type === 'text') e.h = Math.ceil(textHeight(e, e.w - 4) + 8);
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(boxTextHeight(e, e.w - 24) + 20));
+  else if (e.type === 'card') e.h = Math.max(CARD.min, Math.ceil(cardTextHeight(e) + CARD.top + CARD.foot));
   else if (e.type === 'table' && e.cells) {
     const st = textStyle(e), fr = colFractions(e);
     // What each row needs: its tallest cell, styled words included.

@@ -13,6 +13,7 @@ import { miniFit, miniToWorld, union } from './layout';
 import { outlineRows, TYPE_NAMES, LIVE_NAMES } from './outline';
 import { migrateBoard, clonePages, nextPageName, TEMPLATES } from './templates';
 import { groupTasks } from './tasks';
+import * as TK from './tasks';
 import { TABLE_KINDS, cellLook, emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol, rowFractions, edgesOf } from './table';
 import { buildPdf } from './pdf';
 import * as G from './geometry';
@@ -1203,14 +1204,14 @@ function chartSections(e) {
 /* ---------- Text editing ---------- */
 /** Text pieces edit in the paragraph editor; everything else in the plain one. */
 /** Pieces that edit in the paragraph editor, so words can carry their own style. */
-const RICH_TYPES = ['text', 'sticky', 'rect', 'ellipse', 'diamond', 'table'];
+const RICH_TYPES = ['text', 'sticky', 'rect', 'ellipse', 'diamond', 'table', 'card'];
 const richEd = e => !!e && RICH_TYPES.includes(e.type);
 function placeEditor() {
   const e = editing && E(editing); if (!e) return;
   const ed = richEd(e) ? $('#red') : $('#ed');
   const onCanvas = ['text', 'frame', 'conn'].includes(e.type), z = cam.z, st = G.textStyle(e), lab = e.type === 'conn' ? connGeom(e, E).label : null, centered = !!lab || ['rect', 'ellipse', 'diamond'].includes(e.type);
   const cb = e.type === 'table' && editCell ? cellBox(e, editCell[0], editCell[1]) : null, fk = e.type === 'frame' ? 1 / Math.min(1, Math.max(0.2, cam.z)) : 1, chipW = e.slide ? (G.measure(String(e.slide), 11, 600) + 18) * fk : 0;
-  const box = cb ? [cb.x, cb.y, cb.w, cb.h] : lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + 12, e.y + 4, e.w - 20, 44] : e.type === 'frame' ? [e.x - 2 + chipW, e.y - 22 * fk, Math.max(e.w - chipW, 160), 20 * fk]
+  const box = cb ? [cb.x, cb.y, cb.w, cb.h] : lab ? [lab.x - 90, lab.y - 15, 180, 30] : e.type === 'card' ? [e.x + TK.CARD.pad - 8, e.y + TK.CARD.top - 8, e.w - 2 * (TK.CARD.pad - 8), e.h - TK.CARD.foot] : e.type === 'frame' ? [e.x - 2 + chipW, e.y - 22 * fk, Math.max(e.w - chipW, 160), 20 * fk]
     : e.type === 'text' ? [e.x - 2, e.y - 2, e.w + 4, e.h + 4] : [e.x, e.y, e.w, e.h];
   if (richEd(e)) RE.styleRich(ed, e, z);
   if (richEd(e)) requestAnimationFrame(placeFmt);
@@ -1276,7 +1277,7 @@ function readEditor(e, red, trim) {
   }
   e.text = text;
   if (runs.length) e.runs = runs; else delete e.runs;
-  if (e.bullets === 'check') { const ck = RE.readChecked(red); if (ck.length) e.checked = ck; else delete e.checked; }
+  if (e.bullets === 'check' || e.type === 'card') { const ck = RE.readChecked(red); if (ck.length) e.checked = ck; else delete e.checked; }
 }
 /* ---------- Format bar: style for the selected words while typing ---------- */
 const FMT_SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 128];
@@ -1303,7 +1304,7 @@ function fmtStep(dir) {
 }
 function placeFmt() {
   const bar = $('#fmt'), e = editing && E(editing), red = $('#red'); if (!bar) return;
-  if (!e || !richEd(e) || red.style.display === 'none') { bar.hidden = true; return; }
+  if (!e || !richEd(e) || e.type === 'card' || red.style.display === 'none') { bar.hidden = true; return; }
   if (!bar.childNodes.length) {
     const keep = ev => ev.preventDefault();
     const btn = (k, label, d, fn) => h('button', { class: 'icon-btn', 'data-f': k, title: label, 'aria-label': label, 'aria-pressed': 'false', onmousedown: keep, onclick: fn }, icon(d, 15, { 'stroke-width': 1.8 }));
@@ -1337,7 +1338,19 @@ document.addEventListener('selectionchange', () => { if (editing && $('#fmt') &&
 function richKey(ev) {
   ev.stopPropagation();
   const e = editing && E(editing), red = ev.currentTarget, mod = ev.ctrlKey || ev.metaKey;
-  const listy = e && (e.type === 'text' || e.type === 'sticky');
+  const listy = e && (e.type === 'text' || e.type === 'sticky' || e.type === 'card');
+  if (e && e.type === 'card' && ev.key === 'Enter' && !ev.shiftKey && !mod) {
+    // A task card is a title with a checklist under it: Enter adds the next item; Enter on an empty item steps it
+    // out a level, or at the top level drops it and finishes the card.
+    const at = RE.selectedParas(red), p = at && red.children[at[0]];
+    if (p && at[0] === at[1] && at[0] > 0 && !(p.textContent || '').trim()) {
+      ev.preventDefault();
+      if (Number(p.dataset.l) > 0) { if (RE.indentRich(red, -1)) richInput(); return; }
+      p.remove(); red.blur(); return;
+    }
+    return;
+  }
+  if (e && e.type === 'card' && ev.key === 'Tab') { const at = RE.selectedParas(red); ev.preventDefault(); if (at && at[0] > 0 && RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
   if (ev.key === 'Tab' && e && e.type === 'sticky' && !e.bullets && !/(^|\n)\t/.test(e.text || '')) { ev.preventDefault(); const id = e.id; red.blur(); nextSticky(id); return; }
   if (ev.key === 'Enter' && !ev.shiftKey && !mod && listy && e.bullets) {
     // In a list, Enter on an empty indented item steps it out a level, as in Notion and Google Docs.
@@ -1355,7 +1368,7 @@ function richKey(ev) {
 }
 function endEdit() {
   if (!editing) return; const e = E(editing), ed = $('#ed'), red = $('#red'), rich = richEd(e); editing = null; ed.style.display = 'none'; red.style.display = 'none'; const fb = $('#fmt'); if (fb) fb.hidden = true;
-  if (e && rich) { RE.normalizeRich(red); readEditor(e, red, true); red.replaceChildren(); if (e.type === 'table') { fitText(e); editCell = null; } else if (!e.text.trim() && !e.ph && e.type === 'text') delete board.els[e.id]; else { if (!e.text.trim()) { e.text = ''; delete e.runs; } fitText(e); } }
+  if (e && rich) { RE.normalizeRich(red); readEditor(e, red, true); red.replaceChildren(); if (e.type === 'table') { fitText(e); editCell = null; } else if (!e.text.trim() && !e.ph && e.type === 'text') delete board.els[e.id]; else { if (!e.text.trim()) { e.text = ''; delete e.runs; } if (e.type === 'card' && !TK.cardTitle(e)) e.text = 'Untitled task' + e.text.slice(e.text.split('\n')[0].length); fitText(e); } }
   else if (e && e.type === 'table') { const [r, c] = editCell || [0, 0]; e.cells = normCells(e.cells); e.cells[r][c] = ed.value.replace(/\s+$/, ''); fitText(e); editCell = null; }
   else if (e) { e.text = ed.value.replace(/\s+$/, ''); if (e.type === 'text' && !e.text && !e.ph) delete board.els[e.id]; else { if (e.type === 'frame' && !e.text) e.text = 'Frame'; if (e.type === 'card' && !e.text) e.text = 'Untitled task'; fitText(e); } }
   edFor = null; commit();
@@ -2138,7 +2151,7 @@ function taskFields(cur, pre, save) {
   const id = n => pre + 'task-' + n;
   return [
     h('label', { class: 'f-label', for: id('title') }, 'Title'),
-    h('input', { class: 'inp', type: 'text', id: id('title'), value: cur.text, oninput: e => { cur.text = e.target.value; draw(); }, onchange: save }),
+    h('input', { class: 'inp', type: 'text', id: id('title'), value: TK.cardTitle(cur), oninput: e => { cur.text = [e.target.value, ...(cur.text || '').split('\n').slice(1)].join('\n'); delete cur.runs; fitText(cur); draw(); }, onchange: save }),
     h('div', { class: 'grid2' },
       h('select', { class: 'sel', id: id('status'), 'aria-label': 'Status', value: cur.status, onchange: e => { cur.status = e.target.value; save(); } }, Object.entries(STATUS).map(([k, v]) => h('option', { value: k }, v[0]))),
       h('input', { class: 'inp', type: 'date', id: id('due'), 'aria-label': 'Due date', value: cur.due || '', onchange: e => { cur.due = e.target.value; save(); } })),
@@ -2417,7 +2430,7 @@ function renderTasks() {
     const late = c.due && c.due < today() && c.status !== 'done';
     const where = taskScope === 'all' && board.pages.length > 1 ? ' \u00b7 ' + (pageOf(c.id) || {}).name : '';
     return h('button', { class: 'trow' + (cur === c ? ' on' : ''), onclick: () => gotoCard(c) },
-      h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, c.text), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : '') + where)));
+      h('i', { style: 'background:' + STATUS[c.status][1] }), h('div', null, h('strong', null, TK.cardTitle(c)), h('small', { class: late ? 'late' : '' }, STATUS[c.status][0] + (c.due ? (late ? ' · overdue ' : ' · due ') + c.due : '') + where)));
   }) : [h('p', { class: 'note' }, none)]));
 }
 function renderKanban() {
@@ -2433,7 +2446,7 @@ function renderKanban() {
         ondragstart: e => e.dataTransfer.setData('text/plain', c.id), onclick: () => { sel = new Set([c.id]); rightTab = 'design'; refresh(); },
         onkeydown: e => { if (e.key === 'Enter') { sel = new Set([c.id]); rightTab = 'design'; refresh(); } },
         ondblclick: () => { kanban = false; gotoCard(c); } },
-        h('strong', null, c.text), multi ? h('small', null, (pageOf(c.id) || {}).name) : null, c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
+        h('strong', null, TK.cardTitle(c)), multi ? h('small', null, (pageOf(c.id) || {}).name) : null, c.due ? h('small', { class: late ? 'late' : '' }, (late ? 'Overdue ' : 'Due ') + c.due) : null, c.notes ? h('p', null, c.notes) : null);
     })),
     h('button', { class: 'kadd', onclick: () => { kanban = false; addTask(k); } }, icon('M10 4.5v11M4.5 10h11', 14), 'Add task'))));
 }

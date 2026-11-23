@@ -76,7 +76,7 @@ export function indentOf(level: number, base: number, kind?: Bullets): { marker:
 }
 
 /** True when paragraph `i` of a checklist is checked off. */
-export const isChecked = (e: El, i: number) => e.bullets === 'check' && !!e.checked && e.checked.includes(i);
+export const isChecked = (e: El, i: number) => (e.bullets === 'check' || e.type === 'card') && !!e.checked && e.checked.includes(i);
 
 /** Checks or unchecks paragraph `i`, keeping the list sorted and dropping it when empty. */
 export function toggleChecked(e: El, i: number): El {

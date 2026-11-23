@@ -2,6 +2,7 @@ import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
 import { layoutText, measure, STICKY_PAD, textStyle, wrap, wrapEl, type TextStyle, type TLine } from './geometry';
 import { CHECK, isChecked, isRich } from './richtext';
+import { CARD, cardList, cardProgress, cardTitle } from './tasks';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
@@ -324,13 +325,23 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';
     const sf = SURFACE[c.theme], ch = chip(col, c.theme), done = status === 'done';
     g.append(s('rect', { x, y, width: w, height: h, rx: 10, fill: sf.card, stroke: sf.cardLine, filter: shadow }));
-    if (!hide) g.append(textBlock(wrapEl(e, w - 28).slice(0, 2), x + 14, y + 12 + st.size, st, done && !e.color ? c.muted : inkOn(sf.card, e.color, c.theme)));
+    const ink = done && !e.color ? c.muted : inkOn(sf.card, e.color, c.theme), tl = wrap(cardTitle(e), w - CARD.pad * 2, st.size, st.weight, st.family, st.italic);
+    if (!hide) {
+      g.append(textBlock(tl, x + CARD.pad, y + CARD.top + st.size, st, ink));
+      // The checklist under the title: one box per item, drawn like a note's checklist.
+      const list = cardList(e);
+      if (list) {
+        const items = runBlock(list, x, y + CARD.top + tl.length * st.size * 1.3 + CARD.gap - CARD.pad, w, h, CARD.pad, 'top', 'left', ink, sf.card, c);
+        for (const hit of items.querySelectorAll('[data-chk]')) hit.setAttribute('data-chk', String(Number(hit.getAttribute('data-chk')) + 1));
+        g.append(items);
+      }
+    }
     const pill: TextStyle = { size: 11, weight: 600, family: textStyle({ ...e, font: undefined }).family, italic: false };
     const pw = measure(label, 11, 600) + 26, py = y + h - 32;
     g.append(s('rect', { x: x + 12, y: py, width: pw, height: 20, rx: 10, fill: ch.bg, 'pointer-events': 'none' }),
       s('circle', { cx: x + 22, cy: py + 10, r: 3, fill: ch.dot, 'pointer-events': 'none' }),
       textBlock([label], x + 29, py + 14, pill, ch.text));
-    const extra = [e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
+    const [nDone, nAll] = cardProgress(e), extra = [nAll ? `${nDone}/${nAll}` : '', e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
     if (extra) g.append(textBlock([extra], x + 20 + pw, py + 14, { ...pill, weight: late ? 600 : 500 }, late ? (c.theme === 'dark' ? '#ff9a9a' : '#c23434') : c.muted));
   } else if (e.type === 'frame') {
     // A slide shows its real background in either theme; other frames follow the theme.
