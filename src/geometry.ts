@@ -238,20 +238,22 @@ export const STICKY_SIZES = [24, 20, 17, 15, 13, 12, 11];
 export const STICKY_SIDE = 200;
 /** Room kept at the foot of a sticky for its author's name. */
 export const stickyFoot = (e: El) => (e.author && !e.noAuthor ? 18 : 0);
+/** Space between a sticky note's edge and its text, on every side (10% of a default note, close to FigJam's). */
+export const STICKY_PAD = 20;
 
 /**
  * Sticky notes keep their size and pick the largest text size that fits; only when even the smallest
  * does not fit does the note grow taller. A size chosen by hand turns this off and the note grows.
  */
 export function fitSticky(e: El) {
-  const room = (h: number) => h - 28 - stickyFoot(e);
+  const P2 = STICKY_PAD * 2, room = (h: number) => h - P2 - stickyFoot(e);
   if (!e.size) {
     for (const size of STICKY_SIZES) {
-      if (boxTextHeight({ ...e, fit: size }, e.w - 28) <= room(e.h)) { e.fit = size; return; }
+      if (boxTextHeight({ ...e, fit: size }, e.w - P2) <= room(e.h)) { e.fit = size; return; }
     }
     e.fit = STICKY_SIZES[STICKY_SIZES.length - 1];
   } else delete e.fit;
-  e.h = Math.max(e.h, Math.ceil(boxTextHeight(e, e.w - 28) + 28 + stickyFoot(e)));
+  e.h = Math.max(e.h, Math.ceil(boxTextHeight(e, e.w - P2) + P2 + stickyFoot(e)));
 }
 
 /**

@@ -50,9 +50,9 @@ describe('bounds', () => {
 
 describe('fitText', () => {
   it('grows a sticky note so text is not clipped', () => {
-    const note = el({ type: 'sticky', w: 124, h: 40, size: 14, text: 'aaaaaaaaa bbbbbbbbb ccccccccc ddddddddd' });
+    const note = el({ type: 'sticky', w: 136, h: 40, size: 14, text: 'aaaaaaaaa bbbbbbbbb ccccccccc ddddddddd' });
     fitText(note);
-    expect(note.h).toBe(Math.ceil(4 * 14 * 1.3 + 28));
+    expect(note.h).toBe(Math.ceil(4 * 14 * 1.3 + 40)); // text 96 wide, 20 margin each side
   });
   it('never shrinks a shape', () => {
     const box = el({ h: 200, text: 'hi' });

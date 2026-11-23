@@ -1,6 +1,6 @@
 import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
-import { layoutText, measure, textStyle, wrap, wrapEl, type TextStyle, type TLine } from './geometry';
+import { layoutText, measure, STICKY_PAD, textStyle, wrap, wrapEl, type TextStyle, type TLine } from './geometry';
 import { isRich } from './richtext';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
@@ -237,12 +237,13 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     const fill = paintFill(e.fill, c.theme);
     g.append(s('rect', { x, y, width: w, height: h, rx: 3, fill, filter: shadow }));
     const ink = inkOn(fill, e.color, c.theme);
-    if (!hide && e.runs && e.runs.length) g.append(runBlock(e, x, y, w, h, 14, 'top', 'left', ink, fill, c));
-    else if (!hide) { const [tx, anchor] = lineStart(e, x, w, 14, 'left'); g.append(textBlock(wrapEl(e, w - 28), tx, y + 14 + st.size, st, ink, anchor)); }
+    const P = STICKY_PAD;
+    if (!hide && e.runs && e.runs.length) g.append(runBlock(e, x, y, w, h, P, 'top', 'left', ink, fill, c));
+    else if (!hide) { const [tx, anchor] = lineStart(e, x, w, P, 'left'); g.append(textBlock(wrapEl(e, w - 2 * P), tx, y + P + st.size, st, ink, anchor)); }
     // The author's name sits small at the foot of the note, as in FigJam.
     const who = e.author && !e.noAuthor && c.nameOf ? c.nameOf(e.author) : '';
     if (who) {
-      const t = textBlock([who.length > 32 ? who.slice(0, 31) + '…' : who], x + 14, y + h - 12, { size: 11, weight: 500, family: FONTS.sans.stack, italic: false }, ink);
+      const t = textBlock([who.length > 32 ? who.slice(0, 31) + '…' : who], x + P, y + h - 12, { size: 11, weight: 500, family: FONTS.sans.stack, italic: false }, ink);
       t.setAttribute('fill-opacity', '0.6'); g.append(t);
     }
   } else if (e.type === 'rect' && e.preset && presetDef(e.preset)) {

@@ -17,6 +17,13 @@ describe('preset shapes', () => {
       for (const p of ps) expect(nums(p.d).every(Number.isFinite), `${n} ${w}x${h}`).toBe(true);
     }
   });
+  it('lets the many-pointed stars change point depth (the standard caps their handle at a length)', () => {
+    for (const n of ['star24', 'star32']) {
+      const def = presetDef(n)!, a = dragHandle(def, 300, 300, {}, 0, 150, 90).adj;
+      expect(a, n).toBeGreaterThan(15000); expect(a, n).toBeLessThan(25000);
+      expect(presetHandles(def, 300, 300, { adj: a })[0].y).toBeCloseTo(90, 0);
+    }
+  });
   it('draws a rectangle as its box', () => {
     expect(presetPaths(presetDef('rect')!, 100, 50)[0].d).toBe('M0 0L100 0L100 50L0 50Z');
   });

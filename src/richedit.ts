@@ -97,6 +97,8 @@ export function selOffsets(root: HTMLElement): [number, number] | null {
   if (!root.contains(r.startContainer) || !root.contains(r.endContainer)) return null;
   const at = (node: Node, k: number) => {
     let off = 0;
+    // A range on the editor itself (select all) counts whole paragraphs: k is a child index.
+    if (node === root) { for (const p of paras(root).slice(0, k)) off += levelOf(p) + (p.textContent || '').length + 1; return Math.max(0, k >= paras(root).length ? off - 1 : off); }
     for (const p of paras(root)) {
       if (p === node || p.contains(node)) {
         const pre = root.ownerDocument.createRange(); pre.selectNodeContents(p); pre.setEnd(node, k);

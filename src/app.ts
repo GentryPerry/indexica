@@ -273,7 +273,7 @@ function saveTemplate(name, pages) {
 function templatePicker() {
   closeMenu(); const old = $('#tpl'); if (old) old.remove();
   const close = () => { const m = $('#tpl'); if (m) m.remove(); };
-  const card = (name, blurb, thumb, pick, extra) => h('div', { class: 'card tcard' },
+  const card = (name, blurb, thumb, pick, extra) => h('div', { class: 'card tcard', onclick: ev => { if (!ev.target.closest('button')) { close(); pick(); } } },
     h('button', { class: 'thumb', 'aria-label': 'Start from ' + name, onclick: () => { close(); pick(); } }, thumbSvg(thumb)),
     h('div', { class: 'c-row' }, h('div', { class: 'c-text' }, h('div', { class: 'c-name' }, name), h('div', { class: 'meta' }, blurb)), extra || null));
   const mine = index.templates || [];
@@ -831,6 +831,12 @@ function drawOverlay(extra) {
   ov.replaceChildren(...out); touchTargets(); placeSelBar();
 }
 /** Ids that move together: the unlocked selection plus everything sitting inside a selected frame. */
+/** The innermost frame whose empty area is under the point (clicking a frame's body picks it, as FigJam sections do). */
+function frameBodyAt(p) {
+  let best = null;
+  for (const e of all()) if (e.type === 'frame' && !e.boolIn && p.x >= e.x && p.y >= e.y && p.x <= e.x + e.w && p.y <= e.y + e.h && (!best || e.w * e.h < best.w * best.h)) best = e;
+  return best;
+}
 function moveSet() {
   const move = new Set(selEls().filter(e => !e.locked).map(e => e.id));
   for (const f of selEls()) if (f.type === 'frame' && !f.locked) for (const e of all()) if (e.type !== 'conn' && e.type !== 'frame' && !e.locked && e.x >= f.x && e.y >= f.y && e.x + e.w <= f.x + f.w && e.y + e.h <= f.y + f.h) move.add(e.id);
@@ -899,6 +905,14 @@ function nextSticky(id) {
   // Keep stepping right until the new note is not sitting on top of another piece.
   const hits = () => all().some(x => x.type !== 'frame' && x.type !== 'conn' && x.x < e.x + e.w && x.x + x.w > e.x && x.y < e.y + e.h && x.y + x.h > e.y);
   for (let i = 0; i < 40 && hits(); i++) e.x += 20;
+  board.els[e.id] = e; sel = new Set([e.id]); commit(); startEdit(e.id);
+}
+/** Enter on a task card: the next card goes right below it, empty and ready to type, like the next line of a to-do list. */
+function nextCard(id) {
+  const o = E(id); if (!o || o.type !== 'card') return;
+  const e = { ...clone(o), id: uid('e'), z: topZ() + 1, y: o.y + o.h + 12, text: '', status: 'todo', due: '', notes: '' }; delete e.g; delete e.locked; delete e.boolIn; delete e.slide;
+  const hits = () => all().some(x => x.type !== 'frame' && x.type !== 'conn' && x.x < e.x + e.w && x.x + x.w > e.x && x.y < e.y + e.h && x.y + x.h > e.y);
+  for (let i = 0; i < 60 && hits(); i++) e.y += 12;
   board.els[e.id] = e; sel = new Set([e.id]); commit(); startEdit(e.id);
 }
 function addTask(status) {
@@ -1206,13 +1220,13 @@ function placeEditor() {
   if (richEd(e)) requestAnimationFrame(placeFmt);
   Object.assign(ed.style, { display: 'block', left: cam.x + box[0] * z + 'px', top: cam.y + box[1] * z + 'px', width: box[2] * z + 'px', height: richEd(e) ? 'auto' : Math.max(box[3] * z, 24) + 'px', minHeight: Math.max(box[3] * z, 24) + 'px',
     fontSize: st.size * z * fk + 'px', fontFamily: st.family, fontWeight: st.weight, fontStyle: st.italic ? 'italic' : 'normal',
-    padding: (e.type === 'sticky' ? 10 : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px', paddingTop: phPad(e, st) * z + 'px',
+    padding: (e.type === 'sticky' ? G.STICKY_PAD : e.type === 'frame' || e.type === 'text' || lab ? 2 : 8) * z + 'px', paddingTop: phPad(e, st) * z + 'px',
     textAlign: e.align || (centered ? 'center' : 'left'), ...editorPaint(e, onCanvas),
     transform: e.rot && !lab ? `rotate(${e.rot}deg)` : '', transformOrigin: lab ? '' : `${(e.x + e.w / 2 - box[0]) * z}px ${(e.y + e.h / 2 - box[1]) * z}px` });
 }
 /** Top padding that keeps a placeholder's text where it is drawn (anchored middle or bottom) while editing. */
 function phPad(e, st) {
-  if (e.type === 'sticky') return 10;
+  if (e.type === 'sticky') return G.STICKY_PAD;
   if (!e.ph || e.type !== 'text' || !e.va || e.va === 'top') return ['frame', 'text', 'conn'].includes(e.type) ? 2 : 8;
   const block = Math.max(st.size * 1.3, G.textHeight(e, e.w - 4));
   return Math.max(2, e.va === 'bottom' ? e.h - block - 2 : (e.h - block) / 2 + 2);
@@ -1222,16 +1236,20 @@ function editorPaint(e, onCanvas) {
   const th = C.theme === 'dark' && e.type !== 'frame' && slideAt(e) ? 'light' : C.theme;
   const under = e.type === 'text' ? (underFn(board.els, th) || (() => undefined))(e) : undefined;
   const bg = under || (onCanvas ? (th === 'light' ? LIGHT.frame : C.frame) : ['card', 'table'].includes(e.type) ? SURFACE[th].card : paintFill(e.fill, th) || C.frame);
-  return { background: bg, color: inkOn(bg, e.color, th) };
+  // Shapes are still drawn while their text is edited, so the editor stays clear instead of covering them with a box.
+  return { background: ['rect', 'ellipse', 'diamond'].includes(e.type) ? 'transparent' : bg, color: inkOn(bg, e.color, th) };
 }
-function startEdit(id, cell) {
+function startEdit(id, cell, at) {
   const e = E(id); if (!e || e.locked || !TEXTY.includes(e.type)) return;
   if (e.type === 'table') { e.cells = normCells(e.cells); editCell = cell || [0, 0]; } else editCell = null;
   editing = id;
   if (richEd(e)) {
     const red = $('#red'), [src, runs] = edSource(e); RE.fillRich(red, src, runs); placeEditor(); refresh(); red.focus();
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* older browsers write tags instead */ }
-    const r = document.createRange(); r.selectNodeContents(red); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r);
+    // A double-click puts the caret where it landed (so dragging then picks words, as in Figma); Enter and new pieces select everything.
+    const hit = at && document.caretRangeFromPoint ? document.caretRangeFromPoint(at.x, at.y) : null;
+    const r = hit && red.contains(hit.startContainer) && (e.text || '').trim() ? hit : document.createRange(); if (r !== hit) r.selectNodeContents(red);
+    const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r);
     return;
   }
   const ed = $('#ed'); ed.value = e.type === 'table' ? e.cells[editCell[0]][editCell[1]] : e.text || ''; placeEditor(); refresh(); ed.focus(); ed.select();
@@ -1277,11 +1295,12 @@ function fmtCmd(cmd, val) { try { document.execCommand(cmd, false, val); } catch
 /** Text size at the start of the selection: its run's size or the piece's own. */
 function fmtSize(e) {
   const red = $('#red'), at = RE.selOffsets(red); const r = RE.readRichRuns(red);
-  return (at && R.styleAt(r.runs, at[0]).z) || G.textStyle({ ...e, fit: undefined }).size;
+  const z = at && R.styleAt(r.runs, at[0]).z, base = G.textStyle({ ...e, fit: undefined }).size, shown = G.textStyle(e).size;
+  return z ? z * shown / base : shown;
 }
 function fmtStep(dir) {
   const e = editing && E(editing); if (!e) return;
-  const cur = fmtSize(e), base = G.textStyle({ ...e, fit: undefined }).size;
+  const base = G.textStyle({ ...e, fit: undefined }).size, k = G.textStyle(e).size / base, cur = fmtSize(e) / k;
   const next = dir > 0 ? FMT_SIZES.find(v => v > cur + 0.01) || cur : [...FMT_SIZES].reverse().find(v => v < cur - 0.01) || cur;
   fmtModel({ z: Math.abs(next - base) < 0.01 ? null : next });
 }
@@ -1504,7 +1523,7 @@ function onDown(ev) {
     const inner = selectedOperandAt(p);
     if (dbl && (inner || (id && E(id).live))) {
       if (inner && inner.type === 'path' && !inner.live) { enterVedit(inner.id); return; }
-      if (inner && !inner.live && TEXTY.includes(inner.type)) { startEdit(inner.id); return; }
+      if (inner && !inner.live && TEXTY.includes(inner.type)) { startEdit(inner.id, null, { x: ev.clientX, y: ev.clientY }); return; }
       const level = inner ? (inner.live ? inner : E(inner.boolIn)) : E(id);
       const hit = LB.operandAt(board.els, level.id, p.x, p.y);
       if (hit) { sel = new Set(withKids(hit.id)); refresh(); return; }
@@ -1513,7 +1532,9 @@ function onDown(ev) {
     if (inner) id = inner.id;
     if (dbl && id && E(id).type === 'path') { enterVedit(id); return; }
     if (dbl && id && E(id).type === 'image') { startCrop(id); return; }
-    if (dbl) { if (id) { sel = new Set([id]); refresh(); startEdit(id, E(id).type === 'table' ? cellAt(E(id), p.x, p.y) : null); } else makeBox('sticky', p.x, p.y, 0, 0); return; }
+    // Empty frame body: a click selects the frame and dragging moves it with what it holds; Ctrl or Cmd draws a selection box instead.
+    if (!id && !dbl && !touchUI && !(ev.ctrlKey || ev.metaKey)) { const fr = frameBodyAt(p); if (fr) id = fr.id; }
+    if (dbl) { if (id) { sel = new Set([id]); refresh(); startEdit(id, E(id).type === 'table' ? cellAt(E(id), p.x, p.y) : null, { x: ev.clientX, y: ev.clientY }); } else makeBox('sticky', p.x, p.y, 0, 0); return; }
     if (id) {
       const had = sel.has(id);
       if (ev.shiftKey) { group(id).forEach(i => had ? sel.delete(i) : sel.add(i)); refresh(); return; }
@@ -1559,7 +1580,7 @@ function hoverAt(ev) {
     const p = pt(ev), roots = panelEls(), one = roots.length === 1 ? roots[0] : null;
     const level = one && one.live ? one : one && one.boolIn && sel.size ? E(one.boolIn) : null;
     if (level) { const o = LB.operandAt(board.els, level.id, p.x, p.y); if (o && !sel.has(o.id) || (o && o.live)) id = o.id; }
-    if (!id) { const d = idAt(ev.target, ev); if (d && !sel.has(d)) id = d; }
+    if (!id) { const d = idAt(ev.target, ev) || (!(ev.ctrlKey || ev.metaKey) && frameBodyAt(p)?.id); if (d && !sel.has(d)) id = d; }
   }
   if (id !== hoverId) { hoverId = id; drawOverlay(); }
 }
@@ -1802,7 +1823,14 @@ async function openBoard(id) {
         onpaste: ev => { ev.preventDefault(); ev.stopPropagation(); RE.pastePlain(document, ev.clipboardData ? ev.clipboardData.getData('text/plain') : ''); } }),
       h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit,
         oninput: ev => { const e = editing && E(editing); if (e && (e.type === 'sticky' || e.ph)) { e.text = ev.target.value; const h0 = e.h; fitText(e); placeEditor(); if (e.h !== h0) draw(); } },
-        onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
+        onkeydown: e => { e.stopPropagation();
+          // Task cards: Enter adds the next one below; Enter on an empty, otherwise blank card ends the list; Shift+Enter is a line break.
+          if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && editing && E(editing).type === 'card') {
+            e.preventDefault(); const id = editing, c = E(id);
+            if (!e.target.value.trim() && !c.notes && !c.due) { delete board.els[id]; sel = new Set(); e.target.blur(); return; }
+            e.target.blur(); nextCard(id); return;
+          }
+          if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
           if (e.key === 'Enter' && !e.shiftKey && editing && E(editing).type === 'table') { e.preventDefault(); e.target.blur(); return; }
           if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
     h('aside', { class: 'props', 'aria-label': 'Properties' },
@@ -2173,7 +2201,7 @@ function renderProps() {
             pick('para-sp', 'Space between paragraphs', [['', 'Auto'], [0, 'None'], [6, '6 px'], [12, '12 px'], [18, '18 px'], [24, '24 px']], same(paraEls, 'psp') ?? '', v => { paraEls.forEach(e => { if (v === '') delete e.psp; else e.psp = Number(v); fitText(e); }); commit(); }))));
       }
     }
-    if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit)));
+    if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit), h('p', { class: 'hint' }, 'While typing a task, Enter adds the next one below. Enter on an empty task finishes.')));
     if (free.filter(e => e.type !== 'conn').length > 1) out.push(sec('Align', h('div', { class: 'grid4' }, ALIGN.map(([k, label, d]) => h('button', { class: 'ibtn', title: label, 'aria-label': label, onclick: () => align(k) }, icon(d, 16))))));
     const locked = list.every(e => e.locked);
     const act = (label, d, fn, cls = '', disabled = false) => h('button', { class: 'ibtn' + cls, title: label, 'aria-label': label, disabled, onclick: fn }, icon(d, 16));

@@ -14,6 +14,15 @@ interface HandleDef { pos: [string, string]; x?: Lim; y?: Lim; r?: Lim; a?: Lim 
 export interface PresetDef { av?: [string, string][]; gd?: [string, string][]; ah?: HandleDef[]; tx?: [string, string, string, string]; p: PathDef[] }
 
 let defs: Record<string, PresetDef> | null = null;
+
+/**
+ * Erratum in the standard's file: star24 and star32 cap their handle at "ssd2" (half the short side, a
+ * length) though their adjust value runs to 50000, so any drag pinned the points flat. PowerPoint uses 50000.
+ */
+function fixDefs(d: Record<string, PresetDef>) {
+  for (const n of ['star24', 'star32']) for (const hd of d[n]?.ah || []) if (hd.y && hd.y[2] === 'ssd2') hd.y = [hd.y[0], hd.y[1], 50000];
+  return d;
+}
 let loading: Promise<void> | null = null;
 
 /** Unpacks the shape definitions once. Resolves when they are ready. */
@@ -22,12 +31,12 @@ export function loadPresets(): Promise<void> {
   if (!loading) loading = (async () => {
     const bin = Uint8Array.from(atob(PRESETS_GZ), c => c.charCodeAt(0));
     const text = await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    defs = JSON.parse(text);
+    defs = fixDefs(JSON.parse(text));
   })();
   return loading;
 }
 /** Uses already-unpacked definitions (tests). */
-export const setPresets = (d: Record<string, PresetDef>) => { defs = d; };
+export const setPresets = (d: Record<string, PresetDef>) => { defs = fixDefs(d); };
 export const presetsReady = () => !!defs;
 export const presetDef = (name?: string): PresetDef | undefined => (defs && name ? defs[name] : undefined);
 export const presetNames = () => Object.keys(defs || {});
@@ -202,7 +211,10 @@ export const SHAPE_GROUPS: [string, string[]][] = [
 
 /** A readable name for a preset: rightArrow becomes Right arrow. */
 export function presetLabel(name: string): string {
-  const special: Record<string, string> = { rect: 'Rectangle', roundRect: 'Rounded rectangle', rtTriangle: 'Right triangle', homePlate: 'Pentagon arrow', irregularSeal1: 'Explosion 1', irregularSeal2: 'Explosion 2', diagStripe: 'Diagonal stripe', snip1Rect: 'Snipped rectangle', round1Rect: 'Round corner rectangle' };
+  const special: Record<string, string> = { rect: 'Rectangle', roundRect: 'Rounded rectangle', rtTriangle: 'Right triangle', homePlate: 'Pentagon arrow', irregularSeal2: 'Explosion 2', diagStripe: 'Diagonal stripe', snip1Rect: 'Snipped rectangle', round1Rect: 'Round corner rectangle',
+    snip2SameRect: 'Snip same side corners', snip2DiagRect: 'Snip diagonal corners', snipRoundRect: 'Snip and round corner', round2SameRect: 'Round same side corners', round2DiagRect: 'Round diagonal corners',
+    ribbon: 'Ribbon down', ribbon2: 'Ribbon up', ellipseRibbon: 'Curved ribbon down', ellipseRibbon2: 'Curved ribbon up', wedgeRectCallout: 'Rectangle callout', wedgeRoundRectCallout: 'Rounded rectangle callout', wedgeEllipseCallout: 'Oval callout',
+    flowChartInputOutput: 'Flowchart data', bracketPair: 'Double bracket', bracePair: 'Double brace', leftRightUpArrow: 'Left, right, and up arrow', irregularSeal1: 'Explosion 1' };
   if (special[name]) return special[name];
   const s = name.replace(/^flowChart/, 'Flowchart ').replace(/^math/, '').replace(/([a-z])([A-Z0-9])/g, '$1 $2').toLowerCase().trim();
   return s.charAt(0).toUpperCase() + s.slice(1);
