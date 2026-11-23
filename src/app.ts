@@ -42,6 +42,7 @@ import * as LB from './livebool';
 import * as VE from './vecerase';
 import * as TC from './touch';
 import * as R from './runs';
+import * as CB from './ctxbar';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -828,7 +829,7 @@ function drawOverlay(extra) {
   }
   if (extra) out.push(extra);
   const hm = hoverMark(k); if (hm) out.unshift(hm);
-  ov.replaceChildren(...out); touchTargets(); placeSelBar();
+  ov.replaceChildren(...out); touchTargets(); placeSelBar(); placeCtxBar();
 }
 /** Ids that move together: the unlocked selection plus everything sitting inside a selected frame. */
 /** The innermost frame whose empty area is under the point (clicking a frame's body picks it, as FigJam sections do). */
@@ -1471,6 +1472,65 @@ function placeSelBar() {
   bar.style.left = Math.max(8, Math.min(r.width - w - 8, cx - w / 2)) + 'px';
   bar.style.top = Math.max(top, Math.min(r.height - ht - 76, y0 >= top ? y0 : y1)) + 'px';
 }
+/* ---------- Selection toolbar (mouse): color, font, size, bold, and text color above the selection, as in FigJam ---------- */
+let ctxOpen = null, ctxSig = '';
+function placeCtxBar() {
+  const bar = $('#ctx'); if (!bar) return;
+  const list = !touchUI && board && tool === 'select' && sel.size && !mode && !editing && !vedit && !cropId && !kanban ? panelEls() : [];
+  const k = list.length ? CB.ctxKinds(list) : null, b = k ? bounds(list) : null;
+  if (!b) { bar.hidden = true; ctxOpen = null; ctxSig = ''; return; }
+  const sig = JSON.stringify([list, ctxOpen, C.theme]);
+  if (sig !== ctxSig || bar.hidden) {
+    ctxSig = sig;
+    const keep = ev => { if (ev.target.tagName !== 'SELECT') ev.preventDefault(); };
+    const set = (key, val) => { list.forEach(e => { if (val === '' || val == null || val === false) delete e[key]; else e[key] = val; wholeStyle(e, key); fitText(e); }); ctxOpen = null; commit(); };
+    const btn = (label, body, fn, pressed) => h('button', { class: 'icon-btn', title: label, 'aria-label': label, 'aria-pressed': pressed == null ? null : String(!!pressed), onclick: ev => { ev.stopPropagation(); fn(ev); } }, body);
+    const opener = (c, label, which) => btn(label, h('span', { class: 'ctx-dot' + (which === 'color' ? ' ink' : ''), style: `--c:${c}` }), () => { ctxOpen = ctxOpen === which ? null : which; placeCtxBar(); }, ctxOpen === which);
+    const sep = () => h('span', { class: 'tsep', 'aria-hidden': 'true' });
+    const parts = [];
+    if (k.fill) {
+      const f = CB.shared(list, e => e.fill || '');
+      parts.push(opener(paintFill(f || (list[0].type === 'frame' ? '' : '#ffffff'), C.theme) || C.frame, 'Color', 'fill'));
+    }
+    if (k.text) {
+      const font = CB.shared(list, e => e.font || 'sans'), st = G.textStyle(list[0]), bold = list.every(e => G.textStyle(e).weight >= 600);
+      const auto = list.every(e => e.type === 'sticky' && !e.size);
+      const step = dir => { list.forEach(e => { e.size = CB.stepSize(G.textStyle(e).size, dir); wholeStyle(e, 'size'); fitText(e); }); commit(); };
+      const col = CB.shared(list, e => e.color || ''), ink = col || (list[0].type === 'text' ? C.ink : inkOn(paintFill(list[0].fill, C.theme) || '#ffffff', '', C.theme));
+      if (parts.length) parts.push(sep());
+      parts.push(
+        h('select', { class: 'sel ctx-font', 'aria-label': 'Font', title: 'Font', onchange: ev => { const v = ev.target.value; ev.target.blur(); set('font', v === 'sans' ? '' : v); } },
+          font === undefined ? h('option', { value: '', selected: true, disabled: true }, 'Mixed') : null,
+          Object.entries(FONTS).map(([key, v]) => h('option', { value: key, selected: key === font }, v.label))),
+        btn('Smaller text', icon('M5 10h10', 15, { 'stroke-width': 1.8 }), () => step(-1)),
+        h('span', { class: 'fmt-size', title: auto ? 'Text size (shrinks to fit the note; pick a size to fix it)' : 'Text size' }, String(Math.round(st.size))),
+        btn('Larger text', icon('M5 10h10M10 5v10', 15, { 'stroke-width': 1.8 }), () => step(1)),
+        btn('Bold', icon('M6.5 4h4.5a3 3 0 0 1 0 6H6.5zM6.5 10h5.5a3 3 0 0 1 0 6H6.5z', 15, { 'stroke-width': 1.8 }), () => set('weight', bold ? '' : 700), bold),
+        opener(ink, 'Text color', 'color'));
+    }
+    if (k.note) {
+      const wide = list.every(e => e.w > e.h * 1.5);
+      parts.push(sep(), btn(wide ? 'Make square' : 'Make wide', icon(wide ? 'M5 5h10v10H5z' : 'M2.5 6.5h15v7h-15z', 15, { 'stroke-width': 1.6 }), () => { list.forEach(e => { e.w = wide ? e.h : Math.round(e.h * 2); fitText(e); }); commit(); }));
+    }
+    const sw = (c, name, on, fn, cls = '') => h('button', { class: 'fmt-c ' + cls, title: name, 'aria-label': name, 'aria-pressed': String(on), style: `--c:${c}`, onclick: ev => { ev.stopPropagation(); fn(); } });
+    let row = null;
+    if (ctxOpen === 'fill') {
+      const cur = CB.shared(list, e => e.fill || ''), frames = list.some(e => e.type === 'frame');
+      row = [frames ? sw(C.frame, 'Default', !cur, () => set('fill', ''), 'plain') : null,
+        ...FILLS.map((c, i) => sw(paintFill(c, C.theme) || c, FILL_NAMES[i], cur === c, () => { if (list.every(e => e.type === 'sticky')) lastSticky = c; set('fill', c); }))];
+    } else if (ctxOpen === 'color') {
+      const cur = CB.shared(list, e => e.color || '');
+      row = TEXT_COLORS.map(([c, name]) => sw(c, name, c === '#1d2530' ? !cur : cur === c, () => set('color', c === '#1d2530' ? '' : c)));
+    }
+    bar.replaceChildren(...[h('div', { class: 'ctx-main' }, ...parts), row ? h('div', { class: 'ctx-row', role: 'group', 'aria-label': ctxOpen === 'fill' ? 'Colors' : 'Text colors' }, ...row) : null].filter(Boolean));
+    bar.onmousedown = keep;
+  }
+  bar.hidden = false;
+  const r = cvBox(), w = bar.offsetWidth, ht = bar.offsetHeight;
+  const cx = cam.x + (b.x + b.w / 2) * cam.z, y0 = cam.y + b.y * cam.z - ht - 46, y1 = cam.y + (b.y + b.h) * cam.z + 46;
+  bar.style.left = Math.max(8, Math.min(r.width - w - 8, cx - w / 2)) + 'px';
+  bar.style.top = Math.max(8, Math.min(r.height - ht - 76, y0 >= 8 ? y0 : y1)) + 'px';
+}
 /** Small handles get an invisible ring of extra target so a fingertip can catch them. */
 function touchTargets() {
   if (!touchUI) return;
@@ -1816,6 +1876,7 @@ async function openBoard(id) {
       h('div', { class: 'fly', id: 'fly', hidden: true }),
       h('div', { class: 'selbar', id: 'selbar', role: 'toolbar', 'aria-label': 'Selection', hidden: true }),
       h('div', { class: 'fmt', id: 'fmt', role: 'toolbar', 'aria-label': 'Format selected text', hidden: true }),
+      h('div', { class: 'fmt ctx', id: 'ctx', role: 'toolbar', 'aria-label': 'Style the selection', hidden: true }),
       h('div', { class: 'mini', id: 'mini', title: 'Click or drag to move around the board (M hides this)' }),
       h('div', { class: 'kan', id: 'kan', hidden: true }),
       h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { const slot = imgSlot; imgSlot = null; e.target.multiple = true; for (const f of [...e.target.files]) await addImage(f, null, slot); e.target.value = ''; } }),
@@ -2077,7 +2138,7 @@ function renderProps() {
         num('prop-h', 'H', 'Height', () => String(Math.round(e.h)), v => { if (e.live) return liveEdit(e, 'scale', Math.max(10, v) / e.h); const r = e.w / e.h; e.h = Math.max(10, Math.round(v)); if (keep) e.w = Math.round(e.h * r); fitText(e); }, lock || pen || e.type === 'text'),
         num('prop-rot', 'Turn', 'Rotation in degrees', () => Math.round(e.rot || 0) + '°', v => { if (e.live) return liveEdit(e, 'turn', G.normAngle(Math.round(v))); const a = G.normAngle(Math.round(v)); if (a) e.rot = a; else delete e.rot; }, lock))));
     }
-    const fillable = of(['sticky', 'rect', 'ellipse', 'diamond']);
+    const fillable = of(['sticky', 'rect', 'ellipse', 'diamond', 'frame']);
     if (fillable.length) out.push(sec('Fill', themeSw(fillable, 'fill'), h('div', { class: 'swatches' }, FILLS.map((c, i) => swatch(c, same(fillable, 'fill') === c, () => { if (fillable.every(e => e.type === 'sticky')) lastSticky = c; setAll(fillable, 'fill', c); }, FILL_NAMES[i])))));
     const notes = of(['sticky']);
     if (notes.length && notes.length === free.length) {
