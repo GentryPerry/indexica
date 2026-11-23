@@ -916,8 +916,7 @@ function addTask(status) {
   const cards = all().filter(e => e.type === 'card'), r = cvBox();
   const x = cards.length ? Math.min(...cards.map(c => c.x)) : Math.round((r.width / 2 - cam.x) / cam.z - 120), y = cards.length ? Math.max(...cards.map(c => c.y + c.h)) + 20 : Math.round((r.height / 2 - cam.y) / cam.z - 50);
   const e = { id: uid('e'), type: 'card', z: topZ() + 1, x, y, w: 240, h: 100, text: 'New task', status, due: '', notes: '' };
-  board.els[e.id] = e; sel = new Set([e.id]); rightTab = 'design'; edFor = null; commit();
-  const title = $('#d-task-title'); if (title) { title.focus(); title.select(); }
+  board.els[e.id] = e; sel = new Set([e.id]); rightTab = 'design'; edFor = null; commit(); startEdit(e.id);
 }
 function align(kind) {
   const list = selEls().filter(e => !e.locked && e.type !== 'conn'), b = bounds(list); if (!b || list.length < 2) return;
@@ -1339,18 +1338,27 @@ function richKey(ev) {
   ev.stopPropagation();
   const e = editing && E(editing), red = ev.currentTarget, mod = ev.ctrlKey || ev.metaKey;
   const listy = e && (e.type === 'text' || e.type === 'sticky' || e.type === 'card');
-  if (e && e.type === 'card' && ev.key === 'Enter' && !ev.shiftKey && !mod) {
-    // A task card is a title with a checklist under it: Enter adds the next item; Enter on an empty item steps it
-    // out a level, or at the top level drops it and finishes the card.
+  const checklist = e && (e.type === 'card' || ((e.type === 'text' || e.type === 'sticky') && e.bullets === 'check'));
+  if (checklist && ev.key === 'Enter' && !ev.shiftKey && !mod) {
+    // A to-do list: Enter adds the next task (a subtask inside subtasks). Enter on an empty subtask moves it back
+    // out to a main task; on an empty main task it stays put. Escape finishes the list.
     const at = RE.selectedParas(red), p = at && red.children[at[0]];
-    if (p && at[0] === at[1] && at[0] > 0 && !(p.textContent || '').trim()) {
+    if (p && at[0] === at[1] && !(p.textContent || '').trim()) {
       ev.preventDefault();
-      if (Number(p.dataset.l) > 0) { if (RE.indentRich(red, -1)) richInput(); return; }
-      p.remove(); red.blur(); return;
+      if (Number(p.dataset.l) > 0 && RE.indentRich(red, -1)) richInput();
+      return;
     }
     return;
   }
-  if (e && e.type === 'card' && ev.key === 'Tab') { const at = RE.selectedParas(red); ev.preventDefault(); if (at && at[0] > 0 && RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
+  if (checklist && ev.key === 'Tab') {
+    // Tab tucks a task under the one above it as a subtask (never deeper than one step below it); Shift+Tab brings it back.
+    ev.preventDefault(); const at = RE.selectedParas(red);
+    if (!at) return;
+    if (ev.shiftKey) { if (RE.indentRich(red, -1)) richInput(); return; }
+    const kids = [...red.children], above = at[0] > 0 ? Number(kids[at[0] - 1].dataset.l) || 0 : -1;
+    if (kids.slice(at[0], at[1] + 1).every(k => (Number(k.dataset.l) || 0) <= above) && RE.indentRich(red, 1)) richInput();
+    return;
+  }
   if (ev.key === 'Tab' && e && e.type === 'sticky' && !e.bullets && !/(^|\n)\t/.test(e.text || '')) { ev.preventDefault(); const id = e.id; red.blur(); nextSticky(id); return; }
   if (ev.key === 'Enter' && !ev.shiftKey && !mod && listy && e.bullets) {
     // In a list, Enter on an empty indented item steps it out a level, as in Notion and Google Docs.
@@ -2150,8 +2158,6 @@ function holdCommit() { panelHold = true; try { commit(); } finally { panelHold 
 function taskFields(cur, pre, save) {
   const id = n => pre + 'task-' + n;
   return [
-    h('label', { class: 'f-label', for: id('title') }, 'Title'),
-    h('input', { class: 'inp', type: 'text', id: id('title'), value: TK.cardTitle(cur), oninput: e => { cur.text = [e.target.value, ...(cur.text || '').split('\n').slice(1)].join('\n'); delete cur.runs; fitText(cur); draw(); }, onchange: save }),
     h('div', { class: 'grid2' },
       h('select', { class: 'sel', id: id('status'), 'aria-label': 'Status', value: cur.status, onchange: e => { cur.status = e.target.value; save(); } }, Object.entries(STATUS).map(([k, v]) => h('option', { value: k }, v[0]))),
       h('input', { class: 'inp', type: 'date', id: id('due'), 'aria-label': 'Due date', value: cur.due || '', onchange: e => { cur.due = e.target.value; save(); } })),

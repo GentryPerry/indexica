@@ -1,6 +1,6 @@
 import { connGeom } from './connectors';
 import { colFractions, rowFractions } from './table';
-import { CARD, cardList, cardTitle } from './tasks';
+import { CARD, cardList } from './tasks';
 import { indentOf, isRich, levelRatio, markers, parasOf, spaceBefore } from './richtext';
 import { FONTS, type Box, type El, type Lookup } from './types';
 import { spansOf, type Run, type RunStyle } from './runs';
@@ -133,12 +133,8 @@ export function layoutText(e: El, width: number): { lines: TLine[]; height: numb
   });
   return { lines, height: y };
 }
-/** Height of a task card's title and checklist, without the insets. */
-export function cardTextHeight(e: El): number {
-  const st = textStyle(e), title = wrap(cardTitle(e) || ' ', e.w - CARD.pad * 2, st.size, st.weight, st.family, st.italic).length * st.size * 1.3;
-  const list = cardList(e);
-  return title + (list ? CARD.gap + layoutText(list, e.w - CARD.pad * 2).height : 0);
-}
+/** Height of a task card's checklist, without the insets. */
+export const cardTextHeight = (e: El): number => layoutText(cardList(e), e.w - CARD.pad * 2).height;
 /** Height of the text inside a shape or note: plain wrapped lines, or styled lines when it has runs. */
 export const boxTextHeight = (e: El, width: number) => (e.runs && e.runs.length) || e.bullets || /(^|\n)\t/.test(e.text || '') ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
 /** Height of a text piece's lines in a width: plain wrapped lines, or the paragraph layout. */

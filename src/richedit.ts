@@ -7,7 +7,6 @@ import { textStyle } from './geometry';
 import { CHECK, indentOf, levelRatio, markers, MAX_LEVEL, parasOf, spaceBefore, type Para } from './richtext';
 import { normRuns, spansOf, type Run, type RunStyle } from './runs';
 import { FONTS, type El } from './types';
-import { CARD } from './tasks';
 
 const paras = (root: HTMLElement) => [...root.children] as HTMLElement[];
 const levelOf = (p: HTMLElement) => Math.max(0, Math.min(MAX_LEVEL, Number(p.dataset.l) || 0));
@@ -170,15 +169,14 @@ export function normalizeRich(root: HTMLElement): boolean {
 export function styleRich(root: HTMLElement, e: El, z: number) {
   const st = textStyle(e), list = paras(root);
   const ps: Para[] = list.map(p => ({ level: levelOf(p), text: p.textContent || 'x' }));
-  // A task card: the first paragraph is its title, the rest a checklist in regular weight (see tasks.ts).
+  // A task card is a to-do list: every paragraph is a task with a box, in regular weight (see tasks.ts).
   const card = e.type === 'card', kind = card ? 'check' : e.bullets, marks = markers(ps, kind);
-  if (card) marks[0] = '';
   list.forEach((p, i) => {
-    const title = card && i === 0, l = ps[i].level, size = st.size * levelRatio(e, l), ind = indentOf(l, st.size, title ? undefined : kind);
+    const l = ps[i].level, size = st.size * levelRatio(e, l), ind = indentOf(l, st.size, kind);
     p.style.fontSize = size * z + 'px';
     p.style.paddingLeft = ind.text * z + 'px';
-    p.style.marginTop = (card && i === 1 ? CARD.gap : i ? spaceBefore(e, l, st.size) : 0) * z + 'px';
-    p.style.fontWeight = card && !title ? '400' : '';
+    p.style.marginTop = (i ? spaceBefore(e, l, st.size) : 0) * z + 'px';
+    p.style.fontWeight = card ? '400' : '';
     p.style.lineHeight = String(1.3 * (e.lsp || 1));
     p.style.setProperty('--bx', ind.marker * z + 'px');
     // Checklist boxes are drawn by CSS from data-chk (and data-done when checked off), not as a character.
