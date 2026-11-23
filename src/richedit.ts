@@ -4,7 +4,7 @@
  * text stays plain; `readRich` turns the paragraphs back into lines with leading tabs.
  */
 import { textStyle } from './geometry';
-import { indentOf, levelRatio, markers, MAX_LEVEL, parasOf, spaceBefore, type Para } from './richtext';
+import { CHECK, indentOf, levelRatio, markers, MAX_LEVEL, parasOf, spaceBefore, type Para } from './richtext';
 import { normRuns, spansOf, type Run, type RunStyle } from './runs';
 import { FONTS, type El } from './types';
 
@@ -25,14 +25,15 @@ function runSpan(doc: Document, text: string, st: RunStyle): HTMLElement {
   return sp;
 }
 
-/** Fills the editor with a text's paragraphs, with its runs as styled spans. */
-export function fillRich(root: HTMLElement, text: string | undefined, runs?: Run[]) {
+/** Fills the editor with a text's paragraphs, with its runs as styled spans and checked-off checklist items marked. */
+export function fillRich(root: HTMLElement, text: string | undefined, runs?: Run[], checked?: number[]) {
   const doc = root.ownerDocument;
   let off = 0;
-  root.replaceChildren(...parasOf(text).map(p => {
+  root.replaceChildren(...parasOf(text).map((p, i) => {
     const el = doc.createElement('p'), start = off + p.level;
     off += p.level + p.text.length + 1;
     el.dataset.l = String(p.level);
+    if (checked && checked.includes(i)) el.dataset.done = '1';
     if (!p.text) { el.append(doc.createElement('br')); return el; }
     for (const sp of spansOf(runs, start, start + p.text.length)) {
       const t = p.text.slice(sp.s - start, sp.e - start);
@@ -176,7 +177,8 @@ export function styleRich(root: HTMLElement, e: El, z: number) {
     p.style.marginTop = (i ? spaceBefore(e, l, st.size) : 0) * z + 'px';
     p.style.lineHeight = String(1.3 * (e.lsp || 1));
     p.style.setProperty('--bx', ind.marker * z + 'px');
-    if (marks[i]) p.dataset.b = marks[i]; else delete p.dataset.b;
+    // Checklist boxes are drawn by CSS from data-chk (and data-done when checked off), not as a character.
+    if (marks[i] === CHECK) { p.dataset.chk = ''; delete p.dataset.b; } else { delete p.dataset.chk; if (marks[i]) p.dataset.b = marks[i]; else delete p.dataset.b; }
   });
   // Run sizes follow shrink-to-fit like the canvas does.
   const sc = st.size / textStyle({ ...e, fit: undefined }).size;
@@ -210,4 +212,25 @@ export function pastePlain(doc: Document, text: string) {
     if (i) doc.execCommand('insertParagraph');
     if (line) doc.execCommand('insertText', false, line.replace(/\t/g, ' '));
   });
+}
+
+/** Indexes of the checked-off paragraphs. An empty paragraph never stays checked (a new item made by Enter starts open). */
+export function readChecked(root: HTMLElement): number[] {
+  const out: number[] = [];
+  paras(root).forEach((p, i) => {
+    if (p.dataset.done !== '1') return;
+    if (!(p.textContent || '').trim()) { delete p.dataset.done; return; }
+    out.push(i);
+  });
+  return out;
+}
+
+/** When a press lands on a paragraph's checkbox (the space left of its text), checks or unchecks it. True when it did. */
+export function toggleAt(root: HTMLElement, target: EventTarget | null, offsetX: number): boolean {
+  const p = target as HTMLElement | null;
+  if (!p || p.parentElement !== root || p.tagName !== 'P' || p.dataset.chk == null) return false;
+  const pad = parseFloat(p.ownerDocument.defaultView!.getComputedStyle(p).paddingLeft) || 0;
+  if (offsetX > pad) return false;
+  if (p.dataset.done === '1') delete p.dataset.done; else if ((p.textContent || '').trim()) p.dataset.done = '1';
+  return true;
 }

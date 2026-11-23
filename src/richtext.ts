@@ -5,7 +5,9 @@
  */
 import type { El } from './types';
 
-export type Bullets = 'disc' | 'num';
+export type Bullets = 'disc' | 'num' | 'check';
+/** The marker a checklist paragraph gets: a box drawn as a shape, never a character (see render and the editor). */
+export const CHECK = 'check';
 export interface Para { level: number; text: string }
 export const MAX_LEVEL = 8;
 
@@ -57,6 +59,7 @@ export function markers(ps: Para[], kind?: Bullets): string[] {
   const count: number[] = [];
   return ps.map(p => {
     if (!p.text.trim()) return '';
+    if (kind === 'check') return CHECK;
     if (kind === 'disc') return DISC[p.level % DISC.length];
     count.length = p.level + 1;
     count[p.level] = (count[p.level] || 0) + 1;
@@ -68,6 +71,26 @@ export function markers(ps: Para[], kind?: Bullets): string[] {
 /** Horizontal steps for a level, in px for a base size: where the marker sits and where text starts. */
 export function indentOf(level: number, base: number, kind?: Bullets): { marker: number; text: number } {
   // Numbers need room for "10." where a bullet needs a dot.
-  const step = base * 1.25, hang = base * (kind === 'num' ? 1.35 : 0.75);
+  const step = base * 1.25, hang = base * (kind === 'num' ? 1.35 : kind === 'check' ? 1.3 : 0.75);
   return kind ? { marker: level * step, text: level * step + hang } : { marker: 0, text: level * step };
+}
+
+/** True when paragraph `i` of a checklist is checked off. */
+export const isChecked = (e: El, i: number) => e.bullets === 'check' && !!e.checked && e.checked.includes(i);
+
+/** Checks or unchecks paragraph `i`, keeping the list sorted and dropping it when empty. */
+export function toggleChecked(e: El, i: number): El {
+  const set = new Set(e.checked || []);
+  if (set.has(i)) set.delete(i); else set.add(i);
+  const list = [...set].sort((a, b) => a - b);
+  if (list.length) e.checked = list; else delete e.checked;
+  return e;
+}
+
+/** Drops checked indexes past the last paragraph (after text got shorter outside the editor). */
+export function clampChecked(e: El): El {
+  if (!e.checked) return e;
+  const n = parasOf(e.text).length, list = e.checked.filter(i => i >= 0 && i < n);
+  if (list.length) e.checked = list; else delete e.checked;
+  return e;
 }

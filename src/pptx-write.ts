@@ -88,7 +88,9 @@ function txBody(e: El, text: string | undefined, o: { inset: [number, number]; a
     const size = base * levelRatio(e, p.level), ind = indentOf(p.level, base, e.bullets);
     count.length = p.level + 1; count[p.level] = (count[p.level] || 0) + 1;
     const bullet = e.bullets === 'disc' ? x('a:buFont', { typeface: 'Arial' }) + x('a:buChar', { char: marks[i] || '•' })
-      : e.bullets === 'num' ? x('a:buFont', { typeface: '+mj-lt' }) + x('a:buAutoNum', { type: NUM[p.level % 3] }) : x('a:buNone');
+      : e.bullets === 'num' ? x('a:buFont', { typeface: '+mj-lt' }) + x('a:buAutoNum', { type: NUM[p.level % 3] })
+      // Checklists use Wingdings boxes, as PowerPoint's own checkbox bullets do: an empty box, or a ticked one when checked off.
+      : e.bullets === 'check' ? x('a:buFont', { typeface: 'Wingdings', pitchFamily: 2, charset: 2 }) + x('a:buChar', { char: e.checked && e.checked.includes(i) ? '\u00fe' : 'o' }) : x('a:buNone');
     const pPr = x('a:pPr', { lvl: p.level || undefined, marL: emu(ind.text), indent: e.bullets ? -emu(ind.text - ind.marker) : 0, algn },
       e.lsp ? x('a:lnSpc', {}, x('a:spcPct', { val: Math.round(e.lsp * 100000) })) : '',
       i && e.psp != null ? x('a:spcBef', {}, x('a:spcPts', { val: Math.round(e.psp * 75) })) : '',

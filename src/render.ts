@@ -1,7 +1,7 @@
 import { connGeom, type Pt } from './connectors';
 import { s, today } from './dom';
 import { layoutText, measure, STICKY_PAD, textStyle, wrap, wrapEl, type TextStyle, type TLine } from './geometry';
-import { isRich } from './richtext';
+import { CHECK, isChecked, isRich } from './richtext';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
@@ -72,32 +72,50 @@ function blockTop(e: El, height: number): number {
   if (!e.ph) return e.y + 4;
   return e.va === 'bottom' ? e.y + e.h - height - 4 : e.va === 'middle' ? e.y + (e.h - height) / 2 : e.y + 4;
 }
+/**
+ * A checklist box for paragraph `i`, drawn as a shape so it looks the same everywhere (and is never an
+ * emoji). Checked boxes fill with the accent and show a tick. On the board a slightly larger invisible
+ * square carries `data-chk` so a click can toggle it.
+ */
+function checkBox(e: El, i: number, x: number, base: number, size: number, ink: string, c?: RenderCtx): SVGElement {
+  const side = Math.max(6, size * 0.78), top = base - size * 0.72, on = isChecked(e, i), acc = (c && c.accent) || '#0b6bcb';
+  const g = s('g', { 'pointer-events': 'none' },
+    s('rect', { x, y: top, width: side, height: side, rx: side * 0.22, fill: on ? acc : 'none', stroke: on ? acc : ink, 'stroke-opacity': on ? 1 : 0.7, 'stroke-width': Math.max(1, side * 0.1) }));
+  if (on) g.append(s('path', { d: `M${x + side * 0.24} ${top + side * 0.52}L${x + side * 0.43} ${top + side * 0.7}L${x + side * 0.77} ${top + side * 0.3}`, fill: 'none', stroke: '#ffffff', 'stroke-width': Math.max(1.2, side * 0.14), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  if (c && !c.exp) g.append(s('rect', { 'data-chk': i, x: x - side * 0.3, y: top - side * 0.3, width: side * 1.6, height: side * 1.6, fill: 'transparent', 'pointer-events': 'all', style: 'cursor:pointer' }, s('title', null, on ? 'Mark as not done' : 'Mark as done')));
+  return g;
+}
+/** A checked-off line: struck through and faded. */
+const doneLook = (n: Element) => { n.setAttribute('text-decoration', 'line-through'); n.setAttribute('fill-opacity', '0.5'); return n; };
+
 /** Text with paragraphs (levels, bullets, numbers, spacing): one text node per line, so each can have its own size. */
 function richText(e: El, ink: string, c?: RenderCtx): SVGElement {
   const st = textStyle(e), { lines, height } = layoutText(e, e.w - 4), top = blockTop(e, height), g = s('g', { 'pointer-events': 'none' });
   const a = e.align || 'left';
   for (const ln of lines) {
     const ls: TextStyle = { ...st, size: ln.size };
-    if (ln.marker) g.append(textBlock([ln.marker], e.x + 2 + ln.bx!, top + ln.base, ls, ink));
+    const done = ln.para != null && isChecked(e, ln.para);
+    if (ln.marker === CHECK) g.append(checkBox(e, ln.para!, e.x + 2 + ln.bx!, top + ln.base, ln.size, ink, c));
+    else if (ln.marker) g.append(textBlock([ln.marker], e.x + 2 + ln.bx!, top + ln.base, ls, ink));
     if (ln.segs) {
       const room = e.w - 4 - ln.x, x0 = e.x + 2 + ln.x + (a === 'center' ? (room - ln.w!) / 2 : a === 'right' ? room - ln.w! : 0);
-      segNodes(g, ln, x0, top + ln.base, ink, c && c.under?.(e), c);
+      segNodes(g, ln, x0, top + ln.base, ink, c && c.under?.(e), c, done);
       continue;
     }
     const tx = a === 'center' ? e.x + 2 + ln.x + (e.w - 4 - ln.x) / 2 : a === 'right' ? e.x + e.w - 2 : e.x + 2 + ln.x;
-    if (ln.text) g.append(textBlock([ln.text], tx, top + ln.base, ls, ink, a === 'center' ? 'middle' : a === 'right' ? 'end' : 'start'));
+    if (ln.text) { const t = textBlock([ln.text], tx, top + ln.base, ls, ink, a === 'center' ? 'middle' : a === 'right' ? 'end' : 'start'); g.append(done ? doneLook(t) : t); }
   }
   return g;
 }
 
 /** Styled stretches of one line, placed one after another from `x0`, each its own text node. */
-function segNodes(g: SVGElement, ln: TLine, x0: number, y: number, ink: string, under: string | undefined, c?: RenderCtx) {
+function segNodes(g: SVGElement, ln: TLine, x0: number, y: number, ink: string, under: string | undefined, c?: RenderCtx, done = false) {
   for (const sg of ln.segs || []) {
     if (!sg.text) continue;
-    const deco = [sg.u ? 'underline' : '', sg.strike ? 'line-through' : ''].filter(Boolean).join(' ');
+    const deco = [sg.u ? 'underline' : '', sg.strike || done ? 'line-through' : ''].filter(Boolean).join(' ');
     const fill = sg.color ? (c ? inkOn(under, sg.color, c.theme) : sg.color) : ink;
     g.append(s('text', { x: x0 + sg.dx, y, 'font-size': sg.size, 'font-family': sg.family, 'font-weight': sg.weight, 'font-style': sg.italic ? 'italic' : null,
-      'text-decoration': deco || null, fill, style: 'white-space:pre', 'pointer-events': 'none' }, sg.text));
+      'text-decoration': deco || null, fill, 'fill-opacity': done ? 0.5 : null, style: 'white-space:pre', 'pointer-events': 'none' }, sg.text));
   }
 }
 /**
@@ -107,7 +125,17 @@ function segNodes(g: SVGElement, ln: TLine, x0: number, y: number, ink: string, 
 function runBlock(e: El, bx: number, by: number, bw: number, bh: number, pad: number, valign: 'top' | 'middle', fallback: 'left' | 'center', ink: string, paint: string | undefined, c: RenderCtx): SVGElement {
   const room = bw - pad * 2, { lines, height } = layoutText(e, room), g = s('g', { 'pointer-events': 'none' }), a = e.align || fallback;
   const top = valign === 'middle' ? by + bh / 2 - height / 2 : by + pad;
-  for (const ln of lines) segNodes(g, ln, bx + pad + ln.x + (a === 'center' ? (room - ln.x - (ln.w || 0)) / 2 : a === 'right' ? room - ln.x - (ln.w || 0) : 0), top + ln.base, ink, paint, c);
+  const st = textStyle(e);
+  for (const ln of lines) {
+    const done = ln.para != null && isChecked(e, ln.para);
+    if (ln.marker === CHECK) g.append(checkBox(e, ln.para!, bx + pad + ln.bx!, top + ln.base, ln.size, ink, c));
+    else if (ln.marker) g.append(textBlock([ln.marker], bx + pad + ln.bx!, top + ln.base, { ...st, size: ln.size }, ink));
+    // Lines without runs carry no measured width: measure them so centered and right-aligned text lands right.
+    const lw = ln.segs ? ln.w || 0 : measure(ln.text, ln.size, st.weight, st.family, st.italic);
+    const x0 = bx + pad + ln.x + (a === 'center' ? (room - ln.x - lw) / 2 : a === 'right' ? room - ln.x - lw : 0);
+    if (ln.segs) segNodes(g, ln, x0, top + ln.base, ink, paint, c, done);
+    else if (ln.text) { const t = textBlock([ln.text], x0, top + ln.base, { ...st, size: ln.size }, ink); g.append(done ? doneLook(t) : t); }
+  }
   return g;
 }
 /**
@@ -238,7 +266,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     g.append(s('rect', { x, y, width: w, height: h, rx: 3, fill, filter: shadow }));
     const ink = inkOn(fill, e.color, c.theme);
     const P = STICKY_PAD;
-    if (!hide && e.runs && e.runs.length) g.append(runBlock(e, x, y, w, h, P, 'top', 'left', ink, fill, c));
+    if (!hide && ((e.runs && e.runs.length) || e.bullets || /(^|\n)\t/.test(e.text || ''))) g.append(runBlock(e, x, y, w, h, P, 'top', 'left', ink, fill, c));
     else if (!hide) { const [tx, anchor] = lineStart(e, x, w, P, 'left'); g.append(textBlock(wrapEl(e, w - 2 * P), tx, y + P + st.size, st, ink, anchor)); }
     // The author's name sits small at the foot of the note, as in FigJam.
     const who = e.author && !e.noAuthor && c.nameOf ? c.nameOf(e.author) : '';
@@ -283,7 +311,7 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
       if (!c.exp) {
         g.append(s('rect', { x, y, width: w, height: h, rx: 4, fill: 'none', stroke: c.muted, 'stroke-width': 1, 'stroke-dasharray': '5 4', 'vector-effect': 'non-scaling-stroke', 'stroke-opacity': 0.55, 'pointer-events': 'none' }));
         if (!hide && e.bullets && e.ph !== 'picture') {
-          const t = richText({ ...e, text: phPrompt(e.ph), runs: undefined, weight: Math.min(st.weight, 500) }, ink); t.setAttribute('fill-opacity', '0.45'); g.append(t);
+          const t = richText({ ...e, text: phPrompt(e.ph), runs: undefined, checked: undefined, weight: Math.min(st.weight, 500) }, ink); t.setAttribute('fill-opacity', '0.45'); g.append(t);
         } else if (!hide) {
           const pst = { ...st, weight: Math.min(st.weight, 500) }, ls = wrap(phPrompt(e.ph), w - 4, pst.size, pst.weight, pst.family, pst.italic);
           const [tx, anchor] = e.ph === 'picture' ? [x + w / 2, 'middle'] : lineStart(e, x, w, 2, 'left');

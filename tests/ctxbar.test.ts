@@ -6,16 +6,16 @@ const el = (o: Partial<El>): El => ({ id: Math.random().toString(36).slice(2), t
 
 describe('selection toolbar', () => {
   it('gives notes fill, text, and note controls', () => {
-    expect(ctxKinds([el({ type: 'sticky' })])).toEqual({ fill: true, text: true, note: true });
+    expect(ctxKinds([el({ type: 'sticky' })])).toEqual({ fill: true, text: true, note: true, list: true });
   });
   it('gives frames a fill only', () => {
-    expect(ctxKinds([el({ type: 'frame' })])).toEqual({ fill: true, text: false, note: false });
+    expect(ctxKinds([el({ type: 'frame' })])).toEqual({ fill: true, text: false, note: false, list: false });
   });
   it('gives text a text section only', () => {
-    expect(ctxKinds([el({ type: 'text' })])).toEqual({ fill: false, text: true, note: false });
+    expect(ctxKinds([el({ type: 'text' })])).toEqual({ fill: false, text: true, note: false, list: true });
   });
   it('mixes to what every piece shares', () => {
-    expect(ctxKinds([el({ type: 'sticky' }), el({ type: 'rect' })])).toEqual({ fill: true, text: true, note: false });
+    expect(ctxKinds([el({ type: 'sticky' }), el({ type: 'rect' })])).toEqual({ fill: true, text: true, note: false, list: false });
     expect(ctxKinds([el({ type: 'frame' }), el({ type: 'text' })])).toBeNull();
   });
   it('stays away from locked pieces, booleans, and other types', () => {

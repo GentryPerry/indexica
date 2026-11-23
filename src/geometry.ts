@@ -65,7 +65,7 @@ export interface Seg extends TextStyle { text: string; dx: number; w: number; u?
  * One laid-out line of a text piece. `x` and `bx` are from the text box's left, `base` from its top.
  * `size` is the paragraph's size (for its marker); styled lines carry `segs` and their width `w`.
  */
-export interface TLine { text: string; size: number; x: number; base: number; level: number; marker?: string; bx?: number; segs?: Seg[]; w?: number }
+export interface TLine { text: string; size: number; x: number; base: number; level: number; marker?: string; bx?: number; segs?: Seg[]; w?: number; para?: number }
 
 /** The drawing style of a run's characters, on top of a paragraph style. `sc` scales run sizes with shrink-to-fit. */
 export function runFace(st: TextStyle, r: RunStyle, sc = 1): TextStyle & { u?: boolean; strike?: boolean; color?: string } {
@@ -112,7 +112,7 @@ export function layoutText(e: El, width: number): { lines: TLine[]; height: numb
     if (!runs) {
       const lh = size * 1.3 * lsp;
       wrap(p.text, maxW, size, st.weight, st.family, st.italic).forEach((t, j) => {
-        lines.push({ text: t, size, x: ind.text, base: y + lh - size * 0.35, level: p.level, ...mark(j) });
+        lines.push({ text: t, size, x: ind.text, base: y + lh - size * 0.35, level: p.level, para: i, ...mark(j) });
         y += lh;
       });
       return;
@@ -126,14 +126,14 @@ export function layoutText(e: El, width: number): { lines: TLine[]; height: numb
         segs.push({ ...f, text, dx, w }); dx += w;
       }
       const big = Math.max(size, ...segs.map(g => g.size)), lh = big * 1.3 * lsp;
-      lines.push({ text: p.text.slice(a, b), size, x: ind.text, base: y + lh - big * 0.35, level: p.level, segs, w: dx, ...mark(j) });
+      lines.push({ text: p.text.slice(a, b), size, x: ind.text, base: y + lh - big * 0.35, level: p.level, segs, w: dx, para: i, ...mark(j) });
       y += lh;
     });
   });
   return { lines, height: y };
 }
 /** Height of the text inside a shape or note: plain wrapped lines, or styled lines when it has runs. */
-export const boxTextHeight = (e: El, width: number) => e.runs && e.runs.length ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
+export const boxTextHeight = (e: El, width: number) => (e.runs && e.runs.length) || e.bullets || /(^|\n)\t/.test(e.text || '') ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
 /** Height of a text piece's lines in a width: plain wrapped lines, or the paragraph layout. */
 export const textHeight = (e: El, width: number) => isRich(e) ? layoutText(e, width).height : wrapEl(e, width).length * textStyle(e).size * 1.3;
 

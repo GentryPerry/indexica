@@ -36,7 +36,9 @@ export interface El {
   va?: 'top' | 'middle' | 'bottom';
   /** Text paragraphs: bullets or numbers, line spacing (a multiple of single), and space above each
    *  paragraph in px. Levels are leading tabs in the text (see `richtext.ts`). */
-  bullets?: 'disc' | 'num';
+  bullets?: 'disc' | 'num' | 'check';
+  /** Checklist (bullets 'check'): the paragraphs that are checked off, by index. */
+  checked?: number[];
   lsp?: number;
   psp?: number;
   /** Formatting on part of the text: character ranges with style overrides (see `runs.ts`). */

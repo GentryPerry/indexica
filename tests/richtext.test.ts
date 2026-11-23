@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { indentParas, isRich, joinParas, levelRatio, markers, parasOf } from '../src/richtext';
+import { CHECK, clampChecked, indentOf, indentParas, isChecked, isRich, joinParas, levelRatio, markers, parasOf, toggleChecked } from '../src/richtext';
 import { fitText, layoutText, setMeasurer, textHeight } from '../src/geometry';
 import type { El } from '../src/types';
 
@@ -54,5 +54,30 @@ describe('layout', () => {
     expect(layoutText(e, 100).lines.length).toBe(2);
     expect(layoutText(e, 100).height).toBe(2 * 20 * 1.3 * 1.5);
     fitText(e); expect(e.h).toBe(Math.ceil(78 + 8));
+  });
+});
+
+describe('checklists', () => {
+  it('marks every item with a box, empty lines too while typing but none on the board', () => {
+    expect(markers(parasOf('a\n\tb\n'), 'check')).toEqual([CHECK, CHECK, '']);
+  });
+  it('toggles items and keeps the list tidy', () => {
+    const e = { id: 'x', type: 'text', x: 0, y: 0, w: 100, h: 20, text: 'a\nb\nc', bullets: 'check' } as El;
+    toggleChecked(e, 2); toggleChecked(e, 0);
+    expect(e.checked).toEqual([0, 2]);
+    expect(isChecked(e, 2)).toBe(true);
+    toggleChecked(e, 0); toggleChecked(e, 2);
+    expect(e.checked).toBeUndefined();
+  });
+  it('drops checked items past the end', () => {
+    const e = { id: 'x', type: 'sticky', x: 0, y: 0, w: 100, h: 20, text: 'a', bullets: 'check', checked: [0, 3] } as El;
+    expect(clampChecked(e).checked).toEqual([0]);
+  });
+  it('leaves room for the box before the text', () => {
+    expect(indentOf(0, 20, 'check').text).toBeGreaterThan(indentOf(0, 20, 'disc').text);
+  });
+  it('gives checklist lines their paragraph index for drawing', () => {
+    const e = { id: 'x', type: 'sticky', x: 0, y: 0, w: 200, h: 100, text: 'one\ntwo', bullets: 'check', size: 20 } as El;
+    expect(layoutText(e, 160).lines.map(l => [l.para, l.marker])).toEqual([[0, CHECK], [1, CHECK]]);
   });
 });

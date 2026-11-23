@@ -11,13 +11,13 @@ export const CTX_TEXT = ['sticky', 'text', 'rect', 'ellipse', 'diamond'];
 /** Text sizes the bar steps through. */
 export const CTX_SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 128];
 
-export interface CtxKinds { fill: boolean; text: boolean; note: boolean }
+export interface CtxKinds { fill: boolean; text: boolean; note: boolean; list: boolean }
 
 /** The control groups for a selection, or null when the bar has nothing to offer (or anything is locked). */
 export function ctxKinds(list: El[]): CtxKinds | null {
   if (!list.length || list.some(e => e.locked || e.boolIn || e.live)) return null;
   const every = (types: string[]) => list.every(e => types.includes(e.type));
-  const k = { fill: every(CTX_FILL), text: every(CTX_TEXT), note: every(['sticky']) };
+  const k = { fill: every(CTX_FILL), text: every(CTX_TEXT), note: every(['sticky']), list: every(['sticky', 'text']) };
   return k.fill || k.text ? k : null;
 }
 

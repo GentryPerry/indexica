@@ -911,14 +911,6 @@ function nextSticky(id) {
   for (let i = 0; i < 40 && hits(); i++) e.x += 20;
   board.els[e.id] = e; sel = new Set([e.id]); commit(); startEdit(e.id);
 }
-/** Enter on a task card: the next card goes right below it, empty and ready to type, like the next line of a to-do list. */
-function nextCard(id) {
-  const o = E(id); if (!o || o.type !== 'card') return;
-  const e = { ...clone(o), id: uid('e'), z: topZ() + 1, y: o.y + o.h + 12, text: '', status: 'todo', due: '', notes: '' }; delete e.g; delete e.locked; delete e.boolIn; delete e.slide;
-  const hits = () => all().some(x => x.type !== 'frame' && x.type !== 'conn' && x.x < e.x + e.w && x.x + x.w > e.x && x.y < e.y + e.h && x.y + x.h > e.y);
-  for (let i = 0; i < 60 && hits(); i++) e.y += 12;
-  board.els[e.id] = e; sel = new Set([e.id]); commit(); startEdit(e.id);
-}
 function addTask(status) {
   const cards = all().filter(e => e.type === 'card'), r = cvBox();
   const x = cards.length ? Math.min(...cards.map(c => c.x)) : Math.round((r.width / 2 - cam.x) / cam.z - 120), y = cards.length ? Math.max(...cards.map(c => c.y + c.h)) + 20 : Math.round((r.height / 2 - cam.y) / cam.z - 50);
@@ -1248,7 +1240,7 @@ function startEdit(id, cell, at) {
   if (e.type === 'table') { e.cells = normCells(e.cells); editCell = cell || [0, 0]; } else editCell = null;
   editing = id;
   if (richEd(e)) {
-    const red = $('#red'), [src, runs] = edSource(e); RE.fillRich(red, src, runs); placeEditor(); refresh(); red.focus();
+    const red = $('#red'), [src, runs] = edSource(e); RE.fillRich(red, src, runs, e.type === 'table' ? undefined : e.checked); placeEditor(); refresh(); red.focus();
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* older browsers write tags instead */ }
     // A double-click puts the caret where it landed (so dragging then picks words, as in Figma); Enter and new pieces select everything.
     const hit = at && document.caretRangeFromPoint ? document.caretRangeFromPoint(at.x, at.y) : null;
@@ -1284,6 +1276,7 @@ function readEditor(e, red, trim) {
   }
   e.text = text;
   if (runs.length) e.runs = runs; else delete e.runs;
+  if (e.bullets === 'check') { const ck = RE.readChecked(red); if (ck.length) e.checked = ck; else delete e.checked; }
 }
 /* ---------- Format bar: style for the selected words while typing ---------- */
 const FMT_SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 128];
@@ -1344,12 +1337,18 @@ document.addEventListener('selectionchange', () => { if (editing && $('#fmt') &&
 function richKey(ev) {
   ev.stopPropagation();
   const e = editing && E(editing), red = ev.currentTarget, mod = ev.ctrlKey || ev.metaKey;
-  if (ev.key === 'Tab' && e && e.type === 'sticky') { ev.preventDefault(); const id = e.id; red.blur(); nextSticky(id); return; }
+  const listy = e && (e.type === 'text' || e.type === 'sticky');
+  if (ev.key === 'Tab' && e && e.type === 'sticky' && !e.bullets && !/(^|\n)\t/.test(e.text || '')) { ev.preventDefault(); const id = e.id; red.blur(); nextSticky(id); return; }
+  if (ev.key === 'Enter' && !ev.shiftKey && !mod && listy && e.bullets) {
+    // In a list, Enter on an empty indented item steps it out a level, as in Notion and Google Docs.
+    const at = RE.selectedParas(red), p = at && red.children[at[0]];
+    if (p && at[0] === at[1] && !(p.textContent || '').trim() && Number(p.dataset.l) > 0) { ev.preventDefault(); if (RE.indentRich(red, -1)) richInput(); return; }
+  }
   if (e && e.type === 'table' && ev.key === 'Tab') { ev.preventDefault(); const id = e.id, at = editCell || [0, 0], next = stepCell(e, at[0], at[1], ev.shiftKey); red.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
   if (e && e.type === 'table' && ev.key === 'Enter' && !ev.shiftKey && !mod) { ev.preventDefault(); red.blur(); return; }
-  if (ev.key === 'Tab') { ev.preventDefault(); if (e && e.type === 'text' && RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
-  if (mod && ev.shiftKey && (ev.key === '*' || ev.key === '8' || ev.key === '&' || ev.key === '7') && e && e.type === 'text') {
-    ev.preventDefault(); const kind = ev.key === '8' || ev.key === '*' ? 'disc' : 'num';
+  if (ev.key === 'Tab') { ev.preventDefault(); if (listy && RE.indentRich(red, ev.shiftKey ? -1 : 1)) richInput(); return; }
+  if (mod && ev.shiftKey && ['*', '8', '&', '7', '(', '9'].includes(ev.key) && listy) {
+    ev.preventDefault(); const kind = ev.key === '8' || ev.key === '*' ? 'disc' : ev.key === '9' || ev.key === '(' ? 'check' : 'num';
     if (e.bullets === kind) delete e.bullets; else e.bullets = kind; richInput(); return;
   }
   if (ev.key === 'Escape' || (ev.key === 'Enter' && mod)) { ev.preventDefault(); red.blur(); }
@@ -1510,6 +1509,7 @@ function placeCtxBar() {
         btn('Larger text', icon('M5 10h10M10 5v10', 15, { 'stroke-width': 1.8 }), () => step(1)),
         btn('Bold', icon('M6.5 4h4.5a3 3 0 0 1 0 6H6.5zM6.5 10h5.5a3 3 0 0 1 0 6H6.5z', 15, { 'stroke-width': 1.8 }), () => set('weight', bold ? '' : 700), bold),
         opener(ink, 'Text color', 'color'));
+      if (k.list) { const on = list.every(e => e.bullets === 'check'); parts.push(btn(on ? 'Turn off checklist' : 'Checklist (Ctrl+Shift+9)', icon('M3 4.5h3v3H3zM3 12.5h3v3H3zM3.7 13.9l.8.8 1.5-1.8M8.5 6h7.5M8.5 14h7.5', 15, { 'stroke-width': 1.6 }), () => set('bullets', on ? '' : 'check'), on)); }
     }
     if (k.note) {
       const wide = list.every(e => e.w > e.h * 1.5);
@@ -1600,6 +1600,9 @@ function onDown(ev) {
   if (tool === 'select') {
     const act = ev.target.closest && ev.target.closest('[data-ph-act]');
     if (act && id) { phInsert(id, act.getAttribute('data-ph-act')); return; }
+    // A checklist box toggles with one click, without selecting or moving the piece.
+    const chk = ev.target.closest && ev.target.closest('[data-chk]');
+    if (chk && id && E(id) && !E(id).locked) { RT.toggleChecked(E(id), Number(chk.getAttribute('data-chk'))); lastDown = { t: 0, x: 0, y: 0 }; commit(); return; }
     if (cropId) {
       const ce = E(cropId), hd0 = ev.target.dataset && ev.target.dataset.h;
       if (ce && hd0 && hd0.length <= 2) { mode = { k: 'resize', hd: hd0, e: ce, o: clone(ce), p, others: [], crop: PIC.fullRect(ce) }; return; }
@@ -1938,17 +1941,11 @@ async function openBoard(id) {
       h('div', { class: 'kan', id: 'kan', hidden: true }),
       h('input', { type: 'file', id: 'img-file', accept: 'image/*', multiple: true, hidden: true, 'aria-label': 'Add pictures', onchange: async e => { const slot = imgSlot; imgSlot = null; e.target.multiple = true; for (const f of [...e.target.files]) await addImage(f, null, slot); e.target.value = ''; } }),
       h('div', { id: 'red', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Edit text', spellcheck: 'true', onblur: endEdit, oninput: richInput, onkeydown: richKey,
+        onmousedown: ev => { if (RE.toggleAt(ev.currentTarget, ev.target, ev.offsetX)) { ev.preventDefault(); richInput(); } },
         onpaste: ev => { ev.preventDefault(); ev.stopPropagation(); RE.pastePlain(document, ev.clipboardData ? ev.clipboardData.getData('text/plain') : ''); } }),
       h('textarea', { id: 'ed', 'aria-label': 'Edit text', onblur: endEdit,
         oninput: ev => { const e = editing && E(editing); if (e && (e.type === 'sticky' || e.ph)) { e.text = ev.target.value; const h0 = e.h; fitText(e); placeEditor(); if (e.h !== h0) draw(); } },
-        onkeydown: e => { e.stopPropagation();
-          // Task cards: Enter adds the next one below; Enter on an empty, otherwise blank card ends the list; Shift+Enter is a line break.
-          if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && editing && E(editing).type === 'card') {
-            e.preventDefault(); const id = editing, c = E(id);
-            if (!e.target.value.trim() && !c.notes && !c.due) { delete board.els[id]; sel = new Set(); e.target.blur(); return; }
-            e.target.blur(); nextCard(id); return;
-          }
-          if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
+        onkeydown: e => { e.stopPropagation(); if (e.key === 'Tab' && editing && E(editing).type === 'table') { e.preventDefault(); const id = editing, at = editCell, next = stepCell(E(id), at[0], at[1], e.shiftKey); e.target.blur(); if (next) { sel = new Set([id]); startEdit(id, next); } return; }
           if (e.key === 'Enter' && !e.shiftKey && editing && E(editing).type === 'table') { e.preventDefault(); e.target.blur(); return; }
           if (e.key === 'Tab' && editing && E(editing).type === 'sticky') { e.preventDefault(); const id = editing; e.target.blur(); nextSticky(id); return; } const one = editing && ['card', 'frame', 'conn'].includes(E(editing).type); if (e.key === 'Escape' || (e.key === 'Enter' && (one || e.ctrlKey || e.metaKey))) { e.preventDefault(); e.target.blur(); } } })),
     h('aside', { class: 'props', 'aria-label': 'Properties' },
@@ -2302,23 +2299,23 @@ function renderProps() {
           h('button', { class: 'fbtn', style: 'font-style:italic', 'aria-pressed': String(ital), onclick: () => setAll(texty, 'italic', !ital) }, 'Italic')),
         themeSw(texty, 'color'),
         h('div', { class: 'swatches', role: 'group', 'aria-label': 'Text color' }, TEXT_COLORS.map(([c, name]) => swatch(c, col === c || (c === '#1d2530' && texty.every(e => !e.color)), () => setAll(texty, 'color', c === '#1d2530' ? '' : c), name, true)))));
-      const paraEls = texty.filter(e => e.type === 'text');
-      if (paraEls.length) {
+      const paraEls = texty.filter(e => e.type === 'text' || e.type === 'sticky'), textOnly = paraEls.every(e => e.type === 'text');
+      if (paraEls.length && paraEls.length === texty.length) {
         const bl = same(paraEls, 'bullets') || (paraEls.every(e => !e.bullets) ? 'none' : '');
         const shift = by => { paraEls.forEach(e => { const old = e.text || ''; e.text = RT.indentParas(old, 0, Infinity, by); if (e.runs) e.runs = R.reindentRuns(e.runs, old, e.text); fitText(e); }); commit(); };
-        out.push(sec('Paragraph',
+        out.push(sec(textOnly ? 'Paragraph' : 'List',
           h('div', { class: 'row' },
-            h('div', { class: 'seg', role: 'group', 'aria-label': 'List style' }, [['none', 'No bullets', 'M4 6h12M4 10h12M4 14h12'], ['disc', 'Bullets (Ctrl+Shift+8)', 'M4 6h.01M4 10h.01M4 14h.01M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5'], ['num', 'Numbers (Ctrl+Shift+7)', 'M3.5 5h1v3M3.5 12h2l-2 2.5h2M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5']]
+            h('div', { class: 'seg', role: 'group', 'aria-label': 'List style' }, [['none', 'No bullets', 'M4 6h12M4 10h12M4 14h12'], ['disc', 'Bullets (Ctrl+Shift+8)', 'M4 6h.01M4 10h.01M4 14h.01M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5'], ['num', 'Numbers (Ctrl+Shift+7)', 'M3.5 5h1v3M3.5 12h2l-2 2.5h2M7.5 6h8.5M7.5 10h8.5M7.5 14h8.5'], ['check', 'Checklist (Ctrl+Shift+9)', 'M3 4.5h3v3H3zM3 12.5h3v3H3zM3.7 13.9l.8.8 1.5-1.8M8.5 6h7.5M8.5 14h7.5']]
               .map(([k, label, d]) => h('button', { title: label, 'aria-label': label, 'aria-pressed': String(bl === k), onclick: () => setAll(paraEls, 'bullets', k === 'none' ? '' : k) }, icon(d, 14, k === 'none' ? {} : { 'stroke-linecap': 'round' })))),
             h('div', { class: 'seg', role: 'group', 'aria-label': 'Indent' },
               h('button', { title: 'Decrease indent (Shift+Tab while typing)', 'aria-label': 'Decrease indent', disabled: paraEls.every(e => !/(^|\n)\t/.test(e.text || '')), onclick: () => shift(-1) }, icon('M9 6h7M9 10h7M9 14h7M6 8l-2.5 2L6 12', 14)),
               h('button', { title: 'Increase indent (Tab while typing)', 'aria-label': 'Increase indent', onclick: () => shift(1) }, icon('M9 6h7M9 10h7M9 14h7M3.5 8L6 10l-2.5 2', 14)))),
-          h('div', { class: 'grid2' },
+          !textOnly ? h('p', { class: 'hint' }, 'Enter adds the next item and Tab indents it while typing. Click a box to check it off.') : h('div', { class: 'grid2' },
             pick('line-sp', 'Line spacing', [[1, 'Single'], [1.15, '1.15'], [1.5, '1.5'], [2, 'Double']], same(paraEls, 'lsp') || 1, v => setAll(paraEls, 'lsp', Number(v) === 1 ? '' : Number(v))),
             pick('para-sp', 'Space between paragraphs', [['', 'Auto'], [0, 'None'], [6, '6 px'], [12, '12 px'], [18, '18 px'], [24, '24 px']], same(paraEls, 'psp') ?? '', v => { paraEls.forEach(e => { if (v === '') delete e.psp; else e.psp = Number(v); fitText(e); }); commit(); }))));
       }
     }
-    if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit), h('p', { class: 'hint' }, 'While typing a task, Enter adds the next one below. Enter on an empty task finishes.')));
+    if (one && one.type === 'card') out.push(sec('Task', ...taskFields(one, 'd-', holdCommit)));
     if (free.filter(e => e.type !== 'conn').length > 1) out.push(sec('Align', h('div', { class: 'grid4' }, ALIGN.map(([k, label, d]) => h('button', { class: 'ibtn', title: label, 'aria-label': label, onclick: () => align(k) }, icon(d, 16))))));
     const locked = list.every(e => e.locked);
     const act = (label, d, fn, cls = '', disabled = false) => h('button', { class: 'ibtn' + cls, title: label, 'aria-label': label, disabled, onclick: fn }, icon(d, 16));
