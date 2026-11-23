@@ -36,7 +36,16 @@ export function colFractions(e: El): number[] {
   const sum = f.reduce((a, b) => a + b, 0) || 1;
   return f.map(v => v / sum);
 }
+/** Each row's share of the table height, adding up to 1. */
+export function rowFractions(e: El): number[] {
+  const n = rowsOf(e), f = e.rowh && e.rowh.length === n ? e.rowh : null;
+  if (!f) return Array(n).fill(1 / n);
+  const sum = f.reduce((a, b) => a + b, 0) || 1;
+  return f.map(v => v / sum);
+}
 const startOf = (fr: number[], c: number) => fr.slice(0, c).reduce((a, b) => a + b, 0);
+/** Where each border falls, as shares from the start: 0, the inner borders, and 1. */
+export const edgesOf = (fr: number[]) => fr.reduce((acc, f) => [...acc, acc[acc.length - 1] + f], [0]);
 
 /** Move the border between column i and i + 1 by `delta` (a share of the table width), keeping both at least `min`. */
 export function resizeCols(fr: number[], i: number, delta: number, min = 0.06): number[] {
@@ -58,10 +67,10 @@ export function sharesWithoutCol(fr: number[], at: number): number[] {
   return rest.map(v => v / sum);
 }
 
-/** A cell's box in board coordinates, before the table's rotation. Rows share the height evenly. */
+/** A cell's box in board coordinates, before the table's rotation. */
 export function cellBox(e: El, r: number, c: number): Box {
-  const fr = colFractions(e), rh = e.h / rowsOf(e);
-  return { x: e.x + e.w * startOf(fr, c), y: e.y + r * rh, w: e.w * fr[c], h: rh };
+  const fr = colFractions(e), rf = rowFractions(e);
+  return { x: e.x + e.w * startOf(fr, c), y: e.y + e.h * startOf(rf, r), w: e.w * fr[c], h: e.h * (rf[r] ?? 0) };
 }
 
 /** Which cell a board point falls in, allowing for rotation; null when outside the table. */
@@ -69,10 +78,67 @@ export function cellAt(e: El, x: number, y: number): [number, number] | null {
   const cx = e.x + e.w / 2, cy = e.y + e.h / 2, r = -(e.rot || 0) * Math.PI / 180;
   const lx = cx + (x - cx) * Math.cos(r) - (y - cy) * Math.sin(r), ly = cy + (x - cx) * Math.sin(r) + (y - cy) * Math.cos(r);
   if (lx < e.x || lx > e.x + e.w || ly < e.y || ly > e.y + e.h) return null;
-  const fr = colFractions(e), share = (lx - e.x) / e.w;
-  let col = 0, acc = 0;
-  for (; col < fr.length - 1; col++) { acc += fr[col]; if (share < acc) break; }
-  return [Math.min(rowsOf(e) - 1, Math.floor((ly - e.y) / (e.h / rowsOf(e)))), col];
+  const pick = (fr: number[], share: number) => { let i = 0, acc = 0; for (; i < fr.length - 1; i++) { acc += fr[i]; if (share < acc) break; } return i; };
+  return [pick(rowFractions(e), (ly - e.y) / e.h), pick(colFractions(e), (lx - e.x) / e.w)];
+}
+
+/* ---------- Rows and columns as a whole (Figma-style table editing) ---------- */
+
+export type Line = 'row' | 'col';
+const N = (fr: number[]) => fr.map(v => Math.round(v * 10000) / 10000);
+const spliceRuns = (e: El, f: (rows: (unknown[] | null)[][]) => (unknown[] | null)[][]) => {
+  if (!e.cruns) return;
+  const rows = normCells(e.cells).map((r, i) => r.map((_, k) => (e.cruns?.[i]?.[k] as unknown[] | null) ?? null));
+  const out = f(rows);
+  if (out.some(r => r.some(x => x && x.length))) e.cruns = out as El['cruns']; else delete e.cruns;
+};
+
+/**
+ * Adds an empty row or column before index `at` (0 to the count). The new line takes an average share
+ * and the table grows by that much, so the other rows or columns keep their size, as in Figma.
+ */
+export function addLine(e: El, kind: Line, at: number): El {
+  const cells = normCells(e.cells), n = kind === 'row' ? cells.length : cells[0].length;
+  const i = Math.max(0, Math.min(at, n));
+  spliceRuns(e, rows => kind === 'row' ? [...rows.slice(0, i), Array(cells[0].length).fill(null), ...rows.slice(i)] : rows.map(r => [...r.slice(0, i), null, ...r.slice(i)]));
+  e.cells = kind === 'row' ? insertRow(cells, i) : insertCol(cells, i);
+  const fr = kind === 'row' ? rowFractions({ ...e, cells }) : colFractions({ ...e, cells }), size = kind === 'row' ? e.h : e.w;
+  const add = size / n, total = size + add;
+  const out = fr.map(v => v * size / total); out.splice(i, 0, add / total);
+  if (kind === 'row') { e.h = Math.round(total); if (e.rowh || fr.some(v => Math.abs(v - fr[0]) > 1e-6)) e.rowh = N(out); }
+  else { e.w = Math.round(total); if (e.colw || fr.some(v => Math.abs(v - fr[0]) > 1e-6)) e.colw = N(out); }
+  return e;
+}
+
+/** Removes row or column `at` and shrinks the table by its size. A table keeps at least one of each. */
+export function removeLine(e: El, kind: Line, at: number): El {
+  const cells = normCells(e.cells), n = kind === 'row' ? cells.length : cells[0].length;
+  if (n <= 1 || at < 0 || at >= n) return e;
+  const fr = kind === 'row' ? rowFractions(e) : colFractions(e), size = kind === 'row' ? e.h : e.w;
+  const gone = fr[at] * size, total = size - gone;
+  spliceRuns(e, rows => kind === 'row' ? rows.filter((_, k) => k !== at) : rows.map(r => r.filter((_, k) => k !== at)));
+  e.cells = kind === 'row' ? removeRow(cells, at) : removeCol(cells, at);
+  const out = fr.filter((_, k) => k !== at).map(v => v * size / total);
+  if (kind === 'row') { e.h = Math.max(1, Math.round(total)); if (e.rowh) e.rowh = N(out); }
+  else { e.w = Math.max(1, Math.round(total)); if (e.colw) e.colw = N(out); }
+  return e;
+}
+
+/** Moves row or column `from` to index `to`, taking its text, styled words, and size along. */
+export function moveLine(e: El, kind: Line, from: number, to: number): El {
+  const cells = normCells(e.cells), n = kind === 'row' ? cells.length : cells[0].length;
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return e;
+  const mv = <T>(a: T[]) => { const b = [...a], [x] = b.splice(from, 1); b.splice(to, 0, x); return b; };
+  e.cells = kind === 'row' ? mv(cells) : cells.map(r => mv(r));
+  spliceRuns(e, rows => kind === 'row' ? mv(rows) : rows.map(r => mv(r)));
+  if (kind === 'row' && e.rowh && e.rowh.length === n) e.rowh = mv(e.rowh);
+  if (kind === 'col' && e.colw && e.colw.length === n) e.colw = mv(e.colw);
+  return e;
+}
+
+/** The smallest share a row may shrink to when its border is dragged: room for one line of text. */
+export function minRowShare(e: El, size: number): number {
+  return Math.min(0.5, (size * 1.3 + 16) / Math.max(1, e.h));
 }
 
 /** The next cell when pressing Tab (or Shift+Tab), wrapping across rows; null past either end. */

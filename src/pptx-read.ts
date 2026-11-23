@@ -421,6 +421,8 @@ export async function readPptx(buf: ArrayBuffer | Uint8Array): Promise<ImportedD
             if (tp?.at.firstCol === '1') e.firstCol = true;
             if (tp?.at.lastRow === '1') e.lastRow = true;
             if (widths.length === Math.max(...cells.map(r => r.length))) e.colw = widths.map(w => w / widths.reduce((a, b) => a + b, 0));
+            const hs = rows.map(r => Number(r.at.h) || 0), hsum = hs.reduce((a, b) => a + b, 0);
+            if (hs.length > 1 && hs.every(v => v > 0) && hs.some(v => Math.abs(v - hs[0]) > hs[0] * 0.02)) e.rowh = hs.map(v => v / hsum);
             const sz = find(tbl, 'a:rPr').find(r => r.at.sz)?.at.sz; e.size = sz ? Math.round(Number(sz) / 75) : 18;
             els.push(e);
           } else if (uri.endsWith('/chart')) {

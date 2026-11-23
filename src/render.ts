@@ -5,7 +5,7 @@ import { isRich } from './richtext';
 import { phPrompt } from './deck';
 import { STICKERS, tapeOutline, tapePattern } from './stickers';
 import { FONTS, STATUS, type El, type Head, type Lookup } from './types';
-import { cellBox, cellLook, colFractions, rowsOf } from './table';
+import { cellBox, cellLook, colFractions, edgesOf, rowFractions, rowsOf } from './table';
 import { adjustments } from './picture';
 import { chartLayout } from './chart';
 import { presetDef, presetPaths, presetText } from './presetgeom';
@@ -398,11 +398,11 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
     }
     g.append(...lines);
   } else if (e.type === 'table') {
-    const rows = rowsOf(e), fr = colFractions(e), sf = SURFACE[c.theme], line = sf.grid, r8 = 8;
+    const fr = colFractions(e), re = edgesOf(rowFractions(e)), sf = SURFACE[c.theme], line = sf.grid, r8 = 8, h1 = h * re[1];
     g.append(s('rect', { x, y, width: w, height: h, rx: r8, fill: sf.card, stroke: sf.cardLine, filter: shadow }));
-    if (e.header) g.append(s('path', { d: `M${x + 0.5} ${y + h / rows}V${y + r8}Q${x + 0.5} ${y + 0.5} ${x + r8} ${y + 0.5}H${x + w - r8}Q${x + w - 0.5} ${y + 0.5} ${x + w - 0.5} ${y + r8}V${y + h / rows}Z`, fill: sf.head, 'pointer-events': 'none' }));
+    if (e.header) g.append(s('path', { d: `M${x + 0.5} ${y + h1}V${y + r8}Q${x + 0.5} ${y + 0.5} ${x + r8} ${y + 0.5}H${x + w - r8}Q${x + w - 0.5} ${y + 0.5} ${x + w - 0.5} ${y + r8}V${y + h1}Z`, fill: sf.head, 'pointer-events': 'none' }));
     let grid = '';
-    for (let r = 1; r < rows; r++) grid += `M${x} ${y + r * h / rows}H${x + w}`;
+    for (let r = 1; r < re.length - 1; r++) grid += `M${x} ${y + re[r] * h}H${x + w}`;
     for (let k = 1, acc = 0; k < fr.length; k++) { acc += fr[k - 1]; grid += `M${x + acc * w} ${y}V${y + h}`; }
     if (grid) g.append(s('path', { d: grid, stroke: line, 'stroke-width': 1, fill: 'none', 'pointer-events': 'none' }));
     (e.cells || []).forEach((row, r) => row.forEach((text, k) => {

@@ -1,5 +1,5 @@
 import { connGeom } from './connectors';
-import { colFractions } from './table';
+import { colFractions, rowFractions } from './table';
 import { indentOf, isRich, levelRatio, markers, parasOf, spaceBefore } from './richtext';
 import { FONTS, type Box, type El, type Lookup } from './types';
 import { spansOf, type Run, type RunStyle } from './runs';
@@ -278,11 +278,16 @@ export function fitText(e: El) {
   else if (e.type === 'rect' || e.type === 'ellipse' || e.type === 'diamond') e.h = Math.max(e.h, Math.ceil(boxTextHeight(e, e.w - 24) + 20));
   else if (e.type === 'table' && e.cells) {
     const st = textStyle(e), fr = colFractions(e);
-    // Each row is as tall as the tallest cell needs, styled words included.
-    const tall = Math.max(lh, ...e.cells.flatMap((row, r) => row.map((t, i) => {
+    // What each row needs: its tallest cell, styled words included.
+    const need = e.cells.map((row, r) => 16 + Math.max(lh, ...row.map((t, i) => {
       const runs = e.cruns?.[r]?.[i];
       return runs && runs.length ? layoutText({ ...e, text: t, runs, bullets: undefined }, e.w * (fr[i] || 0) - 16).height : wrap(t, e.w * (fr[i] || 0) - 16, st.size, st.weight, st.family, st.italic).length * lh;
     })));
-    e.h = Math.max(e.h, Math.ceil(e.cells.length * (tall + 16)));
+    if (!e.rowh || e.rowh.length !== e.cells.length) { delete e.rowh; e.h = Math.max(e.h, Math.ceil(e.cells.length * Math.max(...need))); }
+    else {
+      // Rows sized by hand keep their heights; a row only grows when its text needs more room.
+      const hs = rowFractions(e).map((f, r) => Math.max(f * e.h, need[r])), tot = hs.reduce((a, b) => a + b, 0);
+      e.h = Math.ceil(tot); e.rowh = hs.map(v => Math.round(v / tot * 10000) / 10000);
+    }
   }
 }

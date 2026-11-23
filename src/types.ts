@@ -135,6 +135,8 @@ export interface El {
   gray?: boolean;
   /** Table column widths as shares of the table width. Unset means equal columns. */
   colw?: number[];
+  /** Table row heights as shares of the table height. Unset means equal rows. */
+  rowh?: number[];
   /** Draw this piece with a rough, hand-drawn outline. */
   sketch?: boolean;
   /** Sticker shape key (STICKERS) or tape pattern key (TAPES). */

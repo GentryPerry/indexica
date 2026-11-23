@@ -7,6 +7,7 @@
  * when there are no SVG nodes to hit.
  */
 import { connGeom } from './connectors';
+import { rowFractions } from './table';
 import { presetDef, presetPaths } from './presetgeom';
 import { outlineFor, paintFill, type Theme } from './palette';
 import { pathD, worldPaths } from './vector';
@@ -121,7 +122,7 @@ export function drawFar(g: CanvasRenderingContext2D, list: El[], col: LodColors,
       case 'table': case 'chart': {
         g.fillStyle = col.card; g.fillRect(x, y, w, h); g.strokeStyle = col.frameLine; g.lineWidth = px; g.strokeRect(x, y, w, h);
         g.fillStyle = col.muted; g.globalAlpha = 0.25;
-        if (e.type === 'table') g.fillRect(x, y, w, Math.min(h, h / Math.max(1, (e.cells || [[]]).length)));
+        if (e.type === 'table') g.fillRect(x, y, w, Math.min(h, h * rowFractions(e)[0]));
         else for (let i = 0; i < 4; i++) { const bh = h * (0.3 + 0.15 * ((i * 7) % 4)); g.fillRect(x + w * (0.12 + i * 0.2), y + h * 0.85 - bh * 0.7, w * 0.12, bh * 0.7); }
         g.globalAlpha = 1; break;
       }

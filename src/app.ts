@@ -13,7 +13,7 @@ import { miniFit, miniToWorld, union } from './layout';
 import { outlineRows, TYPE_NAMES, LIVE_NAMES } from './outline';
 import { migrateBoard, clonePages, nextPageName, TEMPLATES } from './templates';
 import { groupTasks } from './tasks';
-import { TABLE_KINDS, cellLook, emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol } from './table';
+import { TABLE_KINDS, cellLook, emptyCells, normCells, cellAt, cellBox, stepCell, insertRow, insertCol, removeRow, removeCol, rowsOf, colsOf, colFractions, resizeCols, sharesWithCol, sharesWithoutCol, rowFractions, edgesOf } from './table';
 import { buildPdf } from './pdf';
 import * as G from './geometry';
 import { Store } from './store';
@@ -43,6 +43,7 @@ import * as VE from './vecerase';
 import * as TC from './touch';
 import * as R from './runs';
 import * as CB from './ctxbar';
+import * as TBL from './table';
 
 function statParts() {
   if (Store.err) return ['err', Store.err];
@@ -136,7 +137,7 @@ const icon = (d, size = 14, extra = {}) => s('svg', { width: size, height: size,
 const logo = () => h('span', { class: 'logo', 'aria-hidden': 'true' }, s('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', stroke: '#ffffff', 'stroke-width': 1.6, 'stroke-linecap': 'round' }, s('path', { d: 'M4 2v10M10 2v10M2 4h10M2 10h10' })));
 const fmtDate = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-function closeMenu() { const m = $('#menu'); if (m) m.remove(); }
+function closeMenu() { const m = $('#menu'); if (m) m.remove(); if (tblPick) { tblPick = null; if (board) drawOverlay(); } }
 /**
  * A menu of [label, action, class, icon] items at a screen point. '-' draws a divider, { head } a small
  * group label; null items are skipped. An icon is a path drawn in a small tile before the label.
@@ -787,8 +788,9 @@ function drawOverlay(extra) {
       s('rect', { x: e.x, y: e.y, width: e.w, height: e.h, fill: 'none', stroke: col, 'stroke-width': 1.25 * k, 'stroke-dasharray': e.locked ? `${4 * k} ${3 * k}` : null, 'pointer-events': 'none' }));
     if (solo && !e.locked) {
       const mx = e.x + e.w / 2, my = e.y + e.h / 2, x1 = e.x + e.w, y1 = e.y + e.h;
-      g.append(s('circle', { 'data-h': 'rot', cx: x1 + 12 * k, cy: e.y - 12 * k, r: 4 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.25 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
-      if (e.type === 'table') { const fr = colFractions(e); let acc = 0; fr.slice(0, -1).forEach((f, i) => { acc += f; g.append(s('rect', { 'data-h': 'col-' + i, class: 'colh', x: e.x + acc * e.w - 4 * k, y: e.y, width: 8 * k, height: e.h, fill: C.accent, 'fill-opacity': 0, style: 'cursor:col-resize' }, s('title', null, 'Drag to resize columns'))); }); }
+      const rk = e.type === 'table' ? 20 : 12; // tables keep their corner clear for the + buttons
+      g.append(s('circle', { 'data-h': 'rot', cx: x1 + rk * k, cy: e.y - rk * k, r: 4 * k, fill: '#ffffff', stroke: col, 'stroke-width': 1.25 * k, style: 'cursor:grab' }, s('title', null, 'Rotate (hold Shift for 15 degree steps)')));
+      if (e.type === 'table') g.append(...tableMarks(e, k));
       const gt = e.type === 'path' && !vedit ? gradTarget(e) : null;
       if (gt) g.append(...gradMarks(e, gt.g, k));
       if (BOXY.includes(e.type)) {
@@ -807,6 +809,7 @@ function drawOverlay(extra) {
     if (solo) out.push(sizeBadge(bbox(e), e.w, e.h, k, !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode && !e.rot));
     // Quick connect: drag a + handle to another piece, or click it to add a connected piece on that side.
     if (solo && !e.locked && e.type !== 'frame' && e.type !== 'tape' && !mode && e.id !== cropId) for (const sd of SIDES) {
+      if (e.type === 'table' && (sd === SIDES[0] || sd === SIDES[3])) continue; // tables use their top and left edges for row and column bars
       const at = sidePoint(e, sd, 20 * k), r = 6.5 * k;
       out.push(s('g', { 'data-h': 'qc-' + sd, class: 'qc', style: 'cursor:crosshair' },
         s('title', null, 'Drag to connect, or click to add a connected piece'),
@@ -1531,6 +1534,48 @@ function placeCtxBar() {
   bar.style.left = Math.max(8, Math.min(r.width - w - 8, cx - w / 2)) + 'px';
   bar.style.top = Math.max(8, Math.min(r.height - ht - 76, y0 >= 8 ? y0 : y1)) + 'px';
 }
+/* ---------- Tables, the Figma way: drag any border, bars above columns and beside rows, + between them ---------- */
+let tblPick = null;
+function tableMarks(e, k) {
+  const out = [], cE = edgesOf(colFractions(e)), rE = edgesOf(rowFractions(e)), x1 = e.x + e.w, y1 = e.y + e.h;
+  // Borders: a wide invisible grip with a line that lights up under the pointer.
+  cE.slice(1, -1).forEach((f, i) => { const x = e.x + f * e.w; out.push(s('g', { class: 'tgrip' }, s('rect', { 'data-h': 'col-' + i, x: x - 5 * k, y: e.y, width: 10 * k, height: e.h, fill: 'transparent', style: 'cursor:col-resize' }, s('title', null, 'Drag to resize the columns')), s('path', { d: `M${x} ${e.y}V${y1}`, stroke: C.accent, 'stroke-width': 2 * k, 'pointer-events': 'none' }))); });
+  rE.slice(1, -1).forEach((f, i) => { const y = e.y + f * e.h; out.push(s('g', { class: 'tgrip' }, s('rect', { 'data-h': 'row-' + i, x: e.x, y: y - 5 * k, width: e.w, height: 10 * k, fill: 'transparent', style: 'cursor:row-resize' }, s('title', null, 'Drag to resize the rows')), s('path', { d: `M${e.x} ${y}H${x1}`, stroke: C.accent, 'stroke-width': 2 * k, 'pointer-events': 'none' }))); });
+  // A highlighted row or column while its menu is open.
+  if (tblPick && tblPick.id === e.id) {
+    const ed = tblPick.kind === 'col' ? cE : rE, a = ed[tblPick.i], b = ed[tblPick.i + 1];
+    if (b != null) out.push(tblPick.kind === 'col' ? s('rect', { x: e.x + a * e.w, y: e.y, width: (b - a) * e.w, height: e.h, fill: C.accent, 'fill-opacity': 0.12, stroke: C.accent, 'stroke-width': 1.5 * k, 'pointer-events': 'none' })
+      : s('rect', { x: e.x, y: e.y + a * e.h, width: e.w, height: (b - a) * e.h, fill: C.accent, 'fill-opacity': 0.12, stroke: C.accent, 'stroke-width': 1.5 * k, 'pointer-events': 'none' }));
+  }
+  const plus = (id, cx, cy, title) => s('g', { class: 'tplus', style: 'cursor:pointer' }, s('title', null, title),
+    s('circle', { 'data-h': id, cx, cy, r: 7 * k, fill: C.frame, stroke: C.accent, 'stroke-width': 1.25 * k }),
+    s('path', { d: `M${cx - 3 * k} ${cy}H${cx + 3 * k}M${cx} ${cy - 3 * k}V${cy + 3 * k}`, stroke: C.accent, 'stroke-width': 1.4 * k, 'stroke-linecap': 'round', 'pointer-events': 'none' }));
+  // Column bars above the table and row bars to its left; hovering a strip shows its + buttons.
+  const top = s('g', { class: 'tstrip' }, s('rect', { x: e.x - 8 * k, y: e.y - 24 * k, width: e.w + 16 * k, height: 22 * k, fill: 'transparent' }));
+  cE.slice(0, -1).forEach((f, i) => { const a = e.x + f * e.w, wd = (cE[i + 1] - f) * e.w, inset = Math.min(10 * k, wd / 4);
+    top.append(s('rect', { 'data-h': 'tcol-' + i, class: 'tbar', x: a + inset, y: e.y - 16 * k, width: Math.max(2 * k, wd - 2 * inset), height: 7 * k, rx: 3.5 * k, style: 'cursor:pointer' }, s('title', null, 'Column options'))); });
+  cE.forEach((f, j) => top.append(plus('tadd-c-' + j, e.x + f * e.w, e.y - 12.5 * k, 'Add a column here')));
+  const left = s('g', { class: 'tstrip' }, s('rect', { x: e.x - 24 * k, y: e.y - 8 * k, width: 22 * k, height: e.h + 16 * k, fill: 'transparent' }));
+  rE.slice(0, -1).forEach((f, i) => { const a = e.y + f * e.h, ht = (rE[i + 1] - f) * e.h, inset = Math.min(10 * k, ht / 4);
+    left.append(s('rect', { 'data-h': 'trow-' + i, class: 'tbar', x: e.x - 16 * k, y: a + inset, width: 7 * k, height: Math.max(2 * k, ht - 2 * inset), rx: 3.5 * k, style: 'cursor:pointer' }, s('title', null, 'Row options'))); });
+  rE.forEach((f, j) => left.append(plus('tadd-r-' + j, e.x - 12.5 * k, e.y + f * e.h, 'Add a row here')));
+  out.push(top, left);
+  return out;
+}
+function tableEdit(e, fn) { fn(e); fitText(e); tblPick = null; commit(); }
+function tableLineMenu(e, kind, i, ev) {
+  const n = kind === 'col' ? colsOf(e) : rowsOf(e), col = kind === 'col';
+  popupAt(ev.clientX + 4, ev.clientY + 8, [{ head: col ? 'Column ' + (i + 1) : 'Row ' + (i + 1) },
+    [col ? 'Add column left' : 'Add row above', () => tableEdit(e, t => TBL.addLine(t, kind, i)), '', col ? 'M8 4v12M3 10h3M4.5 8.5v3M11 5h6v10h-6' : 'M4 8h12M10 3v3M8.5 4.5h3M5 11h10v6H5'],
+    [col ? 'Add column right' : 'Add row below', () => tableEdit(e, t => TBL.addLine(t, kind, i + 1)), '', col ? 'M12 4v12M14 10h3M15.5 8.5v3M3 5h6v10H3' : 'M4 12h12M10 14v3M8.5 15.5h3M5 3h10v6H5'],
+    i > 0 ? [col ? 'Move left' : 'Move up', () => tableEdit(e, t => TBL.moveLine(t, kind, i, i - 1)), '', col ? 'M12 5l-5 5 5 5' : 'M5 12l5-5 5 5'] : null,
+    i < n - 1 ? [col ? 'Move right' : 'Move down', () => tableEdit(e, t => TBL.moveLine(t, kind, i, i + 1)), '', col ? 'M8 5l5 5-5 5' : 'M5 8l5 5 5-5'] : null,
+    col && e.colw ? ['Even column widths', () => tableEdit(e, t => { delete t.colw; })] : null,
+    !col && e.rowh ? ['Even row heights', () => tableEdit(e, t => { delete t.rowh; })] : null,
+    '-',
+    n > 1 ? [col ? 'Delete column' : 'Delete row', () => tableEdit(e, t => TBL.removeLine(t, kind, i)), 'danger', MI.trash] : null]);
+  tblPick = { id: e.id, kind, i }; drawOverlay();
+}
 /** Small handles get an invisible ring of extra target so a fingertip can catch them. */
 function touchTargets() {
   if (!touchUI) return;
@@ -1570,7 +1615,10 @@ function onDown(ev) {
       if (hd === 'ca' || hd === 'cb') { mode = { k: 'connEnd', e, end: hd === 'ca' ? 'a' : 'b' }; return; }
       if (hd.startsWith('gr-')) { const gt = gradTarget(e); if (gt) { mode = { k: 'grad', e, which: hd.slice(3), lk: gt.k, li: gt.i }; return; } }
       if (hd.startsWith('adj-')) { mode = { k: 'adjh', e, i: Number(hd.slice(4)) }; return; }
-      if (hd.startsWith('col-')) { mode = { k: 'colsz', e, i: Number(hd.slice(4)), fr: colFractions(e), p }; return; }
+      if (hd.startsWith('col-')) { mode = { k: 'colsz', e, i: Number(hd.slice(4)), fr: colFractions(e), w0: e.w, p }; return; }
+      if (hd.startsWith('row-')) { mode = { k: 'colsz', row: true, e, i: Number(hd.slice(4)), fr: rowFractions(e), h0: e.h, p }; return; }
+      if (hd.startsWith('tcol-') || hd.startsWith('trow-')) { tableLineMenu(e, hd[1] === 'c' ? 'col' : 'row', Number(hd.slice(5)), ev); return; }
+      if (hd.startsWith('tadd-')) { const kind = hd[5] === 'c' ? 'col' : 'row', at = Number(hd.slice(7)); tableEdit(e, t => TBL.addLine(t, kind, at)); return; }
       if (hd.startsWith('qc-')) { const side = hd.slice(3); mode = { k: 'conn', quick: true, a: e.id, as: side, p: sidePoint(e, side), sx: ev.clientX, sy: ev.clientY, moved: false }; return; }
       if (hd === 'rot') {
         const one = sel.size === 1, b = one ? e : bounds(panelEls().filter(x => !x.locked)), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
@@ -1729,7 +1777,16 @@ function onMove(ev) {
     drawOverlay(s('path', { d: 'M' + mode.pts.map(q => q[0] + ' ' + q[1]).join('L'), fill: 'none', stroke: penColor || (hl ? HL_COLORS[0] : C.ink), 'stroke-opacity': hl ? 0.4 : null, 'stroke-width': sw, 'stroke-linecap': hl ? 'butt' : 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' }));
   } else if (mode.k === 'colsz') {
     const e = mode.e, r = (e.rot || 0) * Math.PI / 180, along = (p.x - mode.p.x) * Math.cos(r) + (p.y - mode.p.y) * Math.sin(r);
-    e.colw = resizeCols(mode.fr, mode.i, along / e.w).map(v => Math.round(v * 1000) / 1000); fitText(e); draw();
+    if (mode.row) {
+      // A row border moves only that border: the row above grows or shrinks and the table with it, as in Figma.
+      const down = -(p.x - mode.p.x) * Math.sin(r) + (p.y - mode.p.y) * Math.cos(r), hs = mode.fr.map(f => f * mode.h0), st = G.textStyle(e);
+      hs[mode.i] = Math.max(st.size * 1.3 + 16, hs[mode.i] + down);
+      const tot = hs.reduce((a, b) => a + b, 0); e.h = Math.round(tot); e.rowh = hs.map(v => Math.round(v / tot * 10000) / 10000); fitText(e); draw(); drawOverlay();
+    } else {
+      // A column border moves only that border: the column to its left changes and the table widens or narrows, as in Figma.
+      const ws = mode.fr.map(f => f * mode.w0); ws[mode.i] = Math.max(40, ws[mode.i] + along);
+      const tot = ws.reduce((a, b) => a + b, 0); e.w = Math.round(tot); e.colw = ws.map(v => Math.round(v / tot * 10000) / 10000); fitText(e); draw(); drawOverlay();
+    }
   } else if (mode.k === 'grad') {
     const e = mode.e, [fx, fy] = boxFrac(e, p);
     if (mode.lk === 'fill') { const list = [...PT.fillLayers(e)]; list[mode.li] = PT.moveHandle(list[mode.li], mode.which, fx, fy); e.fills = list; }
@@ -2199,13 +2256,12 @@ function renderProps() {
     if (vsec) out.push(vsec);
     if (one && one.type === 'table') {
       const tb = one;
-      const resize = (cells, dr, dc) => { const r0 = rowsOf(tb), c0 = colsOf(tb); if (dc && tb.colw) tb.colw = dc > 0 ? sharesWithCol(colFractions(tb), c0) : sharesWithoutCol(colFractions(tb), c0 - 1); tb.cells = cells; if (dr) tb.h = Math.round(tb.h / r0 * (r0 + dr)); if (dc) tb.w = Math.round(tb.w / c0 * (c0 + dc)); fitText(tb); commit(); };
       const r = rowsOf(tb), c = colsOf(tb);
       out.push(sec('Table',
-        h('div', { class: 'stepper' }, h('span', null, 'Rows'), h('button', { class: 'ibtn', 'aria-label': 'Remove last row', disabled: r <= 1, onclick: () => resize(removeRow(tb.cells, r - 1), -1, 0) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(r)), h('button', { class: 'ibtn', 'aria-label': 'Add a row', onclick: () => resize(insertRow(tb.cells, r), 1, 0) }, icon('M10 5v10M5 10h10', 14))),
-        h('div', { class: 'stepper' }, h('span', null, 'Columns'), h('button', { class: 'ibtn', 'aria-label': 'Remove last column', disabled: c <= 1, onclick: () => resize(removeCol(tb.cells, c - 1), 0, -1) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(c)), h('button', { class: 'ibtn', 'aria-label': 'Add a column', onclick: () => resize(insertCol(tb.cells, c), 0, 1) }, icon('M10 5v10M5 10h10', 14))),
+        h('div', { class: 'stepper' }, h('span', null, 'Rows'), h('button', { class: 'ibtn', 'aria-label': 'Remove last row', disabled: r <= 1, onclick: () => tableEdit(tb, t => TBL.removeLine(t, 'row', r - 1)) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(r)), h('button', { class: 'ibtn', 'aria-label': 'Add a row', onclick: () => tableEdit(tb, t => TBL.addLine(t, 'row', r)) }, icon('M10 5v10M5 10h10', 14))),
+        h('div', { class: 'stepper' }, h('span', null, 'Columns'), h('button', { class: 'ibtn', 'aria-label': 'Remove last column', disabled: c <= 1, onclick: () => tableEdit(tb, t => TBL.removeLine(t, 'col', c - 1)) }, icon('M5 10h10', 14)), h('span', { class: 'num' }, String(c)), h('button', { class: 'ibtn', 'aria-label': 'Add a column', onclick: () => tableEdit(tb, t => TBL.addLine(t, 'col', c)) }, icon('M10 5v10M5 10h10', 14))),
         tableStyleUI(tb),
-        h('p', { class: 'hint' }, 'Double-click a cell to type. Tab moves to the next cell.')));
+        h('p', { class: 'hint' }, 'Double-click a cell to type; Tab moves to the next cell. Drag any border to resize. Click the bar above a column or beside a row for more, or hover there for + buttons.')));
     }
     if (one && one.type === 'image') out.push(pictureSection(one, num, pick, swatch));
     if (one && one.type === 'chart' && one.chart) out.push(...chartSections(one));
