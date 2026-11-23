@@ -18,7 +18,7 @@ export const cardTitle = (e: El) => (e.text || '').split('\n')[0].trim();
 
 /** A card's tasks as a checklist piece, drawn and measured like a note's checklist. */
 export function cardList(e: El): El {
-  return { ...e, runs: undefined, bullets: 'check', weight: 400 };
+  return { ...e, runs: undefined, bullets: 'check', weight: 400, size: e.size || CARD.size, psp: CARD.row, lsp: undefined };
 }
 
 /** Checked-off and total tasks on a card (empty lines do not count). */
@@ -28,5 +28,8 @@ export function cardProgress(e: El): [number, number] {
   return [done, total];
 }
 
-/** Space a card keeps around its tasks: the side inset, the top, and the status row at the foot. */
-export const CARD = { pad: 14, top: 12, foot: 44, min: 100 };
+/**
+ * A card's look: the side inset, the space above the first task, the footer (a divider, the status chip,
+ * and progress), the smallest height, the task text size, and the extra space between tasks.
+ */
+export const CARD = { pad: 16, top: 14, foot: 52, min: 104, size: 14, row: 5 };

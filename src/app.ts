@@ -1240,7 +1240,7 @@ function startEdit(id, cell, at) {
   if (e.type === 'table') { e.cells = normCells(e.cells); editCell = cell || [0, 0]; } else editCell = null;
   editing = id;
   if (richEd(e)) {
-    const red = $('#red'), [src, runs] = edSource(e); RE.fillRich(red, src, runs, e.type === 'table' ? undefined : e.checked); placeEditor(); refresh(); red.focus();
+    const red = $('#red'), [src, runs] = edSource(e); red.classList.toggle('in-card', e.type === 'card'); RE.fillRich(red, src, runs, e.type === 'table' ? undefined : e.checked); placeEditor(); refresh(); red.focus();
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* older browsers write tags instead */ }
     // A double-click puts the caret where it landed (so dragging then picks words, as in Figma); Enter and new pieces select everything.
     const hit = at && document.caretRangeFromPoint ? document.caretRangeFromPoint(at.x, at.y) : null;
@@ -1341,12 +1341,13 @@ function richKey(ev) {
   const checklist = e && (e.type === 'card' || ((e.type === 'text' || e.type === 'sticky') && e.bullets === 'check'));
   if (checklist && ev.key === 'Enter' && !ev.shiftKey && !mod) {
     // A to-do list: Enter adds the next task (a subtask inside subtasks). Enter on an empty subtask moves it back
-    // out to a main task; on an empty main task it stays put. Escape finishes the list.
+    // out to a main task; Enter on an empty main task drops it and ends the list, as Escape does.
     const at = RE.selectedParas(red), p = at && red.children[at[0]];
     if (p && at[0] === at[1] && !(p.textContent || '').trim()) {
       ev.preventDefault();
-      if (Number(p.dataset.l) > 0 && RE.indentRich(red, -1)) richInput();
-      return;
+      if (Number(p.dataset.l) > 0) { if (RE.indentRich(red, -1)) richInput(); return; }
+      if (red.children.length > 1) p.remove();
+      red.blur(); return;
     }
     return;
   }

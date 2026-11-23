@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { cardList, cardProgress, cardTitle } from '../src/tasks';
+import { CARD, cardList, cardProgress, cardTitle } from '../src/tasks';
 import { fitText, layoutText, setMeasurer } from '../src/geometry';
 import { CHECK, isChecked } from '../src/richtext';
 import type { El } from '../src/types';
@@ -25,6 +25,6 @@ describe('task cards as to-do lists', () => {
     fitText(c);
     expect(c.h).toBeGreaterThan(150);
     c.text = 'One task'; fitText(c);
-    expect(c.h).toBe(100);
+    expect(c.h).toBe(CARD.min);
   });
 });

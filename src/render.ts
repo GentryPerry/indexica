@@ -79,11 +79,12 @@ function blockTop(e: El, height: number): number {
  * square carries `data-chk` so a click can toggle it.
  */
 function checkBox(e: El, i: number, x: number, base: number, size: number, ink: string, c?: RenderCtx): SVGElement {
-  const side = Math.max(6, size * 0.78), top = base - size * 0.72, on = isChecked(e, i), acc = (c && c.accent) || '#0b6bcb';
+  // Centered on the x-height so the box sits level with lowercase text; the editor's CSS box matches (top .2em, .86em).
+  const side = Math.max(7, size * 0.86), top = base - size * 0.8, on = isChecked(e, i), acc = (c && c.accent) || '#0b6bcb', sw = Math.max(1.1, side * 0.11);
   const g = s('g', { 'pointer-events': 'none' },
-    s('rect', { x, y: top, width: side, height: side, rx: side * 0.22, fill: on ? acc : 'none', stroke: on ? acc : ink, 'stroke-opacity': on ? 1 : 0.7, 'stroke-width': Math.max(1, side * 0.1) }));
-  if (on) g.append(s('path', { d: `M${x + side * 0.24} ${top + side * 0.52}L${x + side * 0.43} ${top + side * 0.7}L${x + side * 0.77} ${top + side * 0.3}`, fill: 'none', stroke: '#ffffff', 'stroke-width': Math.max(1.2, side * 0.14), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
-  if (c && !c.exp) g.append(s('rect', { 'data-chk': i, x: x - side * 0.3, y: top - side * 0.3, width: side * 1.6, height: side * 1.6, fill: 'transparent', 'pointer-events': 'all', style: 'cursor:pointer' }, s('title', null, on ? 'Mark as not done' : 'Mark as done')));
+    s('rect', { x: x + sw / 2, y: top + sw / 2, width: side - sw, height: side - sw, rx: side * 0.28, fill: on ? acc : 'none', stroke: on ? acc : ink, 'stroke-opacity': on ? 1 : 0.55, 'stroke-width': sw }));
+  if (on) g.append(s('path', { d: `M${x + side * 0.27} ${top + side * 0.52}L${x + side * 0.44} ${top + side * 0.68}L${x + side * 0.74} ${top + side * 0.34}`, fill: 'none', stroke: '#ffffff', 'stroke-width': Math.max(1.3, side * 0.13), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  if (c && !c.exp) g.append(s('rect', { 'data-chk': i, class: 'chkhit', x: x - side * 0.35, y: top - side * 0.35, width: side * 1.7, height: side * 1.7, rx: side * 0.4, fill: acc, 'fill-opacity': 0, 'pointer-events': 'all', style: 'cursor:pointer' }, s('title', null, on ? 'Mark as not done' : 'Mark as done')));
   return g;
 }
 /** A checked-off line: struck through and faded. */
@@ -324,17 +325,27 @@ export function renderEl(e: El, c: RenderCtx): SVGElement {
   } else if (e.type === 'card') {
     const status = e.status || 'todo', [label, col] = STATUS[status] || STATUS.todo, late = !!e.due && e.due < today() && status !== 'done';
     const sf = SURFACE[c.theme], ch = chip(col, c.theme), done = status === 'done';
-    g.append(s('rect', { x, y, width: w, height: h, rx: 10, fill: sf.card, stroke: sf.cardLine, filter: shadow }));
+    g.append(s('rect', { x, y, width: w, height: h, rx: 12, fill: sf.card, stroke: sf.cardLine, filter: shadow }));
+    // Index-card motif: a short tab of the status color along the top edge.
+    g.append(s('path', { d: `M${x + 16} ${y + 1.5}h${Math.min(40, w - 32)}`, stroke: col, 'stroke-width': 3, 'stroke-linecap': 'round', 'pointer-events': 'none' }));
     // The card's tasks: one box per line, drawn like a note's checklist.
     const ink = done && !e.color ? c.muted : inkOn(sf.card, e.color, c.theme);
     if (!hide) g.append(runBlock(cardList(e), x, y + CARD.top - CARD.pad, w, h, CARD.pad, 'top', 'left', ink, sf.card, c));
     const pill: TextStyle = { size: 11, weight: 600, family: textStyle({ ...e, font: undefined }).family, italic: false };
     const pw = measure(label, 11, 600) + 26, py = y + h - 32;
+    g.append(s('path', { d: `M${x + 1} ${py - 10}H${x + w - 1}`, stroke: sf.cardLine, 'stroke-width': 1, 'pointer-events': 'none' }));
     g.append(s('rect', { x: x + 12, y: py, width: pw, height: 20, rx: 10, fill: ch.bg, 'pointer-events': 'none' }),
       s('circle', { cx: x + 22, cy: py + 10, r: 3, fill: ch.dot, 'pointer-events': 'none' }),
       textBlock([label], x + 29, py + 14, pill, ch.text));
-    const [nDone, nAll] = cardProgress(e), extra = [nAll > 1 || nDone ? `${nDone}/${nAll}` : '', e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
+    const [nDone, nAll] = cardProgress(e), extra = [e.due && 'Due ' + e.due, e.notes && 'Notes'].filter(Boolean).join(' · ');
     if (extra) g.append(textBlock([extra], x + 20 + pw, py + 14, { ...pill, weight: late ? 600 : 500 }, late ? (c.theme === 'dark' ? '#ff9a9a' : '#c23434') : c.muted));
+    // Progress on the right: a count and a short bar that turns green when every task is checked off.
+    if (nAll > 1 || nDone) {
+      const bw = 40, bx = x + w - 16 - bw, by = py + 8, full = nDone === nAll, f = nAll ? nDone / nAll : 0, fill = full ? STATUS.done[1] : (c.accent || '#0b6bcb');
+      g.append(s('rect', { x: bx, y: by, width: bw, height: 4, rx: 2, fill: c.muted, 'fill-opacity': 0.22, 'pointer-events': 'none' }));
+      if (f > 0) g.append(s('rect', { x: bx, y: by, width: Math.max(4, bw * f), height: 4, rx: 2, fill, 'pointer-events': 'none' }));
+      g.append(textBlock([`${nDone}/${nAll}`], bx - 8, py + 14, { ...pill, weight: 500 }, full ? (c.theme === 'dark' ? '#6fd3a0' : STATUS.done[1]) : c.muted, 'end'));
+    }
   } else if (e.type === 'frame') {
     // A slide shows its real background in either theme; other frames follow the theme.
     g.append(s('rect', { x, y, width: w, height: h, rx: 12, fill: (e.slide ? e.fill : paintFill(e.fill, c.theme)) || c.frame, stroke: c.frameLine, 'stroke-width': 1, 'pointer-events': 'none' }));

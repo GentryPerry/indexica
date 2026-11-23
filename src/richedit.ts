@@ -7,6 +7,7 @@ import { textStyle } from './geometry';
 import { CHECK, indentOf, levelRatio, markers, MAX_LEVEL, parasOf, spaceBefore, type Para } from './richtext';
 import { normRuns, spansOf, type Run, type RunStyle } from './runs';
 import { FONTS, type El } from './types';
+import { cardList } from './tasks';
 
 const paras = (root: HTMLElement) => [...root.children] as HTMLElement[];
 const levelOf = (p: HTMLElement) => Math.max(0, Math.min(MAX_LEVEL, Number(p.dataset.l) || 0));
@@ -167,17 +168,18 @@ export function normalizeRich(root: HTMLElement): boolean {
  * paragraphs show their bullet while typing, as in PowerPoint.
  */
 export function styleRich(root: HTMLElement, e: El, z: number) {
-  const st = textStyle(e), list = paras(root);
+  // A task card's tasks are laid out as its checklist piece (size, weight, and row spacing from tasks.ts).
+  const src = e.type === 'card' ? cardList(e) : e, st = textStyle(src), list = paras(root);
   const ps: Para[] = list.map(p => ({ level: levelOf(p), text: p.textContent || 'x' }));
   // A task card is a to-do list: every paragraph is a task with a box, in regular weight (see tasks.ts).
-  const card = e.type === 'card', kind = card ? 'check' : e.bullets, marks = markers(ps, kind);
+  const card = e.type === 'card', kind = src.bullets, marks = markers(ps, kind);
   list.forEach((p, i) => {
-    const l = ps[i].level, size = st.size * levelRatio(e, l), ind = indentOf(l, st.size, kind);
+    const l = ps[i].level, size = st.size * levelRatio(src, l), ind = indentOf(l, st.size, kind);
     p.style.fontSize = size * z + 'px';
     p.style.paddingLeft = ind.text * z + 'px';
-    p.style.marginTop = (i ? spaceBefore(e, l, st.size) : 0) * z + 'px';
+    p.style.marginTop = (i ? spaceBefore(src, l, st.size) : 0) * z + 'px';
     p.style.fontWeight = card ? '400' : '';
-    p.style.lineHeight = String(1.3 * (e.lsp || 1));
+    p.style.lineHeight = String(1.3 * (src.lsp || 1));
     p.style.setProperty('--bx', ind.marker * z + 'px');
     // Checklist boxes are drawn by CSS from data-chk (and data-done when checked off), not as a character.
     if (marks[i] === CHECK) { p.dataset.chk = ''; delete p.dataset.b; } else { delete p.dataset.chk; if (marks[i]) p.dataset.b = marks[i]; else delete p.dataset.b; }
